@@ -41,6 +41,38 @@ docker compose -f docker-compose.local.yml build
 
 正式环境部署前，请自行准备数据库、反向代理、域名和安全配置。不要把 `.env`、数据库备份、证书、SSH 私钥或节点安装参数提交到仓库。
 
+## 一键安装
+
+以下命令会下载本仓库的脚本；面板端从源码构建 Docker 镜像，首次构建需要一些时间。请在你拥有授权的 Linux 服务器上以 root 或 sudo 执行。
+
+### 安装面板
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/panel_install.sh | sudo bash
+```
+
+默认使用前端端口 `6366`、后端端口 `6365`，数据库密码与 JWT 密钥在服务器本机的 `/opt/flux-panel-enhanced/.env` 自动生成，脚本不会把它们上传到 GitHub。需要自定义端口时：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/panel_install.sh | sudo env FRONTEND_PORT=8080 BACKEND_PORT=6365 bash
+```
+
+更新面板（保留数据库卷与 `.env`）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/panel_install.sh | sudo bash -s -- update
+```
+
+### 安装节点 Agent
+
+在面板的节点管理页面复制安装命令即可。手动安装格式如下，其中 `面板地址` 应是节点能够访问的地址，端口通常为后端端口 `6365`：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/install.sh | sudo bash -s -- --server '面板地址:6365' --secret '节点密钥'
+```
+
+脚本会根据服务器架构下载 `amd64` 或 `arm64` Agent，并在写入 `/etc/flux-panel-agent/gost` 前校验 SHA-256。它会创建 `flux-panel-agent.service` 并立即启动；重新安装 Agent 会短暂重启该节点进程，但不会修改面板数据库中的节点与转发记录。
+
 ## 节点硬件信息说明
 
 面板前端只能展示 Agent 上报的数据。旧版 Agent 只会上报 CPU/内存使用率和流量计数；要显示 CPU 核数、内存总量及硬盘容量，需要升级为包含硬件采集字段的 Agent。升级 Agent 会短暂重启节点侧进程，但不应修改面板数据库中的节点与转发记录。

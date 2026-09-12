@@ -362,19 +362,22 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
 
         StringBuilder command = new StringBuilder();
         
-        // 第一部分：下载安装脚本  
-        command.append("curl -L https://github.com/bqlpfy/flux-panel/releases/download/1.4.3/install.sh")
-               .append(" -o ./install.sh && chmod +x ./install.sh && ");
+        // 安装脚本始终从本增强版仓库获取，避免自动补号后重新装回上游旧 Agent。
+        command.append("curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/install.sh")
+               .append(" | bash -s -- ");
         
         // 处理服务器地址，如果是IPv6需要添加方括号
         String processedServerAddr = processServerAddress(viteConfig.getValue());
         
-        // 第二部分：执行安装脚本（去掉-u参数）
-        command.append("./install.sh")
-               .append(" -a ").append(processedServerAddr)  // 服务器地址
-               .append(" -s ").append(node.getSecret());    // 节点密钥
+        // 参数使用单引号转义，避免地址或密钥中的特殊字符破坏安装命令。
+        command.append("--server ").append(shellQuote(processedServerAddr))
+               .append(" --secret ").append(shellQuote(node.getSecret()));
         
         return R.ok(command.toString());
+    }
+
+    private String shellQuote(String value) {
+        return "'" + (value == null ? "" : value).replace("'", "'\"'\"'") + "'";
     }
 
     /**
