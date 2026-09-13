@@ -141,7 +141,9 @@ jobs:
 
       - name: Install frontend dependencies
         working-directory: ./vite-frontend
-        run: npm ci
+        # Match the frontend Dockerfile: the Node 20 npm resolver needs npm install
+        # for this lockfile's nested Redux dependencies.
+        run: npm install --no-audit --no-fund
 
       - name: Build frontend
         working-directory: ./vite-frontend
