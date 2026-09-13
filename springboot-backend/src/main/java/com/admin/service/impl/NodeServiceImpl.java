@@ -4,6 +4,7 @@ import cn.hutool.core.util.IdUtil;
 import cn.hutool.core.util.StrUtil;
 import com.admin.common.dto.GostDto;
 import com.admin.common.dto.NodeDto;
+import com.admin.common.dto.NodeInstallCommandDto;
 import com.admin.common.dto.NodeUpdateDto;
 import com.admin.common.lang.R;
 import com.admin.common.utils.WebSocketServer;
@@ -350,15 +351,15 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
      * @return 包含安装命令的响应对象
      */
     @Override
-    public R getInstallCommand(Long id) {
+    public R getInstallCommand(NodeInstallCommandDto commandDto) {
         // 1. 验证节点是否存在
-        Node node = this.getById(id);
+        Node node = this.getById(commandDto.getId());
         if (node == null) {
             return R.err(ERROR_NODE_NOT_FOUND);
         }
 
         // 2. 构建安装命令
-        return buildInstallCommand(node);
+        return buildInstallCommand(node, commandDto);
     }
 
     /**
@@ -367,7 +368,7 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
      * @param node 节点对象
      * @return 格式化的安装命令
      */
-    private R buildInstallCommand(Node node) {
+    private R buildInstallCommand(Node node, NodeInstallCommandDto commandDto) {
         ViteConfig viteConfig = viteConfigService.getOne(new QueryWrapper<ViteConfig>().eq("name", "ip"));
         if (viteConfig == null) return R.err("请先前往网站配置中设置ip");
 
@@ -383,7 +384,26 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
         // 参数使用单引号转义，避免地址或密钥中的特殊字符破坏安装命令。
         command.append("--server ").append(shellQuote(processedServerAddr))
                .append(" --secret ").append(shellQuote(node.getSecret()));
-        
+
+        if (Boolean.TRUE.equals(commandDto.getDdnsEnabled())) {
+            String token = commandDto.getCfApiToken();
+            String recordName = commandDto.getCfRecordName();
+            if (StrUtil.isBlank(token) || StrUtil.isBlank(recordName)) {
+                return R.err("启用 DDNS 时必须填写 Cloudflare API Token 和记录域名");
+            }
+            if (token.contains("\n") || token.contains("\r")) {
+                return R.err("Cloudflare API Token 格式无效");
+            }
+
+            String normalizedRecordName = recordName.trim().toLowerCase();
+            if (!normalizedRecordName.matches("(?i)^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}$")) {
+                return R.err("DDNS 记录域名格式无效，请填写完整域名，例如 node.example.com");
+            }
+            command.append(" --cf-api-token ").append(shellQuote(token))
+                   .append(" --cf-record ").append(shellQuote(normalizedRecordName));
+        } else if (Boolean.FALSE.equals(commandDto.getDdnsEnabled())) {
+            command.append(" --disable-ddns");
+        }
         return R.ok(command.toString());
     }
 

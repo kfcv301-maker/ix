@@ -87,6 +87,16 @@ curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/install.sh | 
 curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/install.sh | sudo bash -s -- --server '面板地址:6365' --secret '节点密钥' --skip-tcp-tuning
 ```
 
+### Cloudflare DDNS（可选）
+
+在节点管理中点击“安装”，开启 Cloudflare DDNS 后填写 API Token 和完整记录域名即可生成一条命令。安装完成会立刻更新记录，并由节点本机每 5 分钟同步一次公网 IPv4/IPv6；AWS 换机后重跑同一条命令即可恢复。Token 需要 Cloudflare 的 `Zone:Read` 与 `DNS:Edit` 权限，面板不保存 Token。
+
+手动命令格式：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/install.sh | sudo bash -s -- --server '面板地址:6365' --secret '节点密钥' --cf-api-token 'Cloudflare_API_Token' --cf-record 'node.example.com'
+```
+
 ## 节点硬件信息说明
 
 面板前端只能展示 Agent 上报的数据。旧版 Agent 只会上报 CPU/内存使用率和流量计数；要显示 CPU 核数、内存总量及硬盘容量，需要升级为包含硬件采集字段的 Agent。升级 Agent 会短暂重启节点侧进程，但不应修改面板数据库中的节点与转发记录。

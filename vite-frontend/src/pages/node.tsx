@@ -145,9 +145,15 @@ export default function NodePage() {
   const [errors, setErrors] = useState<Record<string, string>>({});
   
   // 安装命令相关状态
+  const [installSetupModal, setInstallSetupModal] = useState(false);
   const [installCommandModal, setInstallCommandModal] = useState(false);
   const [installCommand, setInstallCommand] = useState('');
   const [currentNodeName, setCurrentNodeName] = useState('');
+  const [installNode, setInstallNode] = useState<Node | null>(null);
+  const [installCommandLoading, setInstallCommandLoading] = useState(false);
+  const [ddnsEnabled, setDdnsEnabled] = useState(false);
+  const [cfApiToken, setCfApiToken] = useState('');
+  const [cfRecordName, setCfRecordName] = useState('');
   
   const websocketRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -610,33 +616,59 @@ export default function NodePage() {
     }
   };
 
-  // 复制安装命令
-  const handleCopyInstallCommand = async (node: Node) => {
-    setNodeList(prev => prev.map(n => 
-      n.id === node.id ? { ...n, copyLoading: true } : n
-    ));
-    
+  const openInstallSetup = (node: Node) => {
+    setInstallNode(node);
+    setCurrentNodeName(node.name);
+    setDdnsEnabled(false);
+    setCfApiToken('');
+    setCfRecordName('');
+    setInstallSetupModal(true);
+  };
+
+  const closeInstallSetup = () => {
+    if (installCommandLoading) return;
+    setInstallSetupModal(false);
+    setInstallNode(null);
+    setCfApiToken('');
+    setCfRecordName('');
+  };
+
+  // 生成安装命令。Cloudflare 凭据只参与本次命令生成，不会发送到节点数据库。
+  const handleGenerateInstallCommand = async () => {
+    if (!installNode) return;
+    if (ddnsEnabled && (!cfApiToken.trim() || !cfRecordName.trim())) {
+      toast.error('请填写 Cloudflare API Token 和 DDNS 记录域名');
+      return;
+    }
+
+    setInstallCommandLoading(true);
     try {
-      const res = await getNodeInstallCommand(node.id);
+      const res = await getNodeInstallCommand(installNode.id, {
+        ddnsEnabled,
+        ...(ddnsEnabled ? {
+          cfApiToken: cfApiToken.trim(),
+          cfRecordName: cfRecordName.trim(),
+        } : {}),
+      });
       if (res.code === 0 && res.data) {
+        setInstallCommand(res.data);
+        setInstallSetupModal(false);
+        setCfApiToken('');
+        setCfRecordName('');
         try {
           await navigator.clipboard.writeText(res.data);
-          toast.success('安装命令已复制到剪贴板');
+          toast.success('安装命令已生成并复制到剪贴板');
         } catch (copyError) {
-          // 复制失败，显示安装命令模态框
-          setInstallCommand(res.data);
-          setCurrentNodeName(node.name);
-          setInstallCommandModal(true);
+          toast('安装命令已生成，请手动复制');
         }
+        setInstallCommandModal(true);
       } else {
         toast.error(res.msg || '获取安装命令失败');
       }
     } catch (error) {
       toast.error('获取安装命令失败');
     } finally {
-      setNodeList(prev => prev.map(n => 
-        n.id === node.id ? { ...n, copyLoading: false } : n
-      ));
+      setInstallCommandLoading(false);
     }
   };
 
@@ -1026,8 +1058,7 @@ export default function NodePage() {
                         size="sm"
                         variant="flat"
                         color="success"
-                        onPress={() => handleCopyInstallCommand(node)}
-                        isLoading={node.copyLoading}
+                        onPress={() => openInstallSetup(node)}
                         className="flex-1 min-h-8"
                       >
                         安装
@@ -1389,6 +1420,75 @@ export default function NodePage() {
                 </ModalFooter>
               </>
             )}
+          </ModalContent>
+        </Modal>
+
+        {/* 节点安装选项 */}
+        <Modal
+          isOpen={installSetupModal}
+          onClose={closeInstallSetup}
+          size="lg"
+          backdrop="blur"
+          placement="center"
+          isDismissable={!installCommandLoading}
+        >
+          <ModalContent>
+            <ModalHeader>安装节点 - {currentNodeName}</ModalHeader>
+            <ModalBody>
+              <div className="space-y-4">
+                <p className="text-sm text-default-600">
+                  生成的命令可直接在节点执行；重装或 AWS 自动换机时重跑同一条命令即可恢复配置。
+                </p>
+                <div className="rounded-lg border border-default-200 bg-default-50 p-3">
+                  <Switch
+                    isSelected={ddnsEnabled}
+                    onValueChange={setDdnsEnabled}
+                    isDisabled={installCommandLoading}
+                  >
+                    <span className="font-medium">启用 Cloudflare DDNS</span>
+                  </Switch>
+                  <p className="mt-1 text-xs text-default-500">
+                    安装后立即同步，并每 5 分钟自动更新本机公网 IPv4/IPv6 的 A/AAAA 记录。
+                  </p>
+                </div>
+
+                {ddnsEnabled && (
+                  <div className="space-y-3">
+                    <Input
+                      label="Cloudflare API Token"
+                      type="password"
+                      autoComplete="off"
+                      value={cfApiToken}
+                      onValueChange={setCfApiToken}
+                      isDisabled={installCommandLoading}
+                      description="Token 需要 Zone:Read 和 DNS:Edit 权限；不会保存到面板数据库。"
+                    />
+                    <Input
+                      label="DDNS 记录域名"
+                      placeholder="node.example.com"
+                      value={cfRecordName}
+                      onValueChange={setCfRecordName}
+                      isDisabled={installCommandLoading}
+                      description="填写完整域名。已有 A/AAAA 记录会更新，不存在时自动创建。"
+                    />
+                    <Alert
+                      color="warning"
+                      variant="flat"
+                      title="令牌会写入安装命令"
+                      description="执行后仅保存到该节点的 root 专用配置文件（权限 600）。请不要把生成的命令发给无关人员。"
+                    />
+                  </div>
+                )}
+              </div>
+            </ModalBody>
+            <ModalFooter>
+              <Button variant="flat" onPress={closeInstallSetup} isDisabled={installCommandLoading}>
+                取消
+              </Button>
+              <Button color="primary" onPress={handleGenerateInstallCommand} isLoading={installCommandLoading}>
+                生成并复制命令
+              </Button>
+            </ModalFooter>
           </ModalContent>
         </Modal>
 

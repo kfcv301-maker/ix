@@ -28,7 +28,13 @@ export const createNode = (data: any) => Network.post("/node/create", data);
 export const getNodeList = () => Network.post("/node/list");
 export const updateNode = (data: any) => Network.post("/node/update", data);
 export const deleteNode = (id: number) => Network.post("/node/delete", { id });
-export const getNodeInstallCommand = (id: number) => Network.post("/node/install", { id });
+export interface NodeInstallOptions {
+  ddnsEnabled?: boolean;
+  cfApiToken?: string;
+  cfRecordName?: string;
+}
+
+export const getNodeInstallCommand = (id: number, options: NodeInstallOptions = {}) => Network.post("/node/install", { id, ...options });
 export const checkNodeStatus = (nodeId?: number) => {
   const params = nodeId ? { nodeId } : {};
   return Network.post("/node/check-status", params);
@@ -88,4 +94,4 @@ export const updateConfig = (name: string, value: string) => Network.post("/conf
 // 验证码相关接口
 export const checkCaptcha = () => Network.post("/captcha/check");
 export const generateCaptcha = () => Network.post(`/captcha/generate`);
-export const verifyCaptcha = (data: { captchaId: string; trackData: string }) => Network.post("/captcha/verify", data); 
+export const verifyCaptcha = (data: { captchaId: string; trackData: string }) => Network.post("/captcha/verify", data);

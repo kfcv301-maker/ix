@@ -1,6 +1,7 @@
 package com.admin.service;
 
 import com.admin.common.dto.NodeDto;
+import com.admin.common.dto.NodeInstallCommandDto;
 import com.admin.common.dto.NodeUpdateDto;
 import com.admin.common.lang.R;
 import com.admin.entity.Node;
@@ -26,6 +27,6 @@ public interface NodeService extends IService<Node> {
 
     Node getNodeById(Long id);
 
-    R getInstallCommand(Long id);
+    R getInstallCommand(NodeInstallCommandDto commandDto);
 
 }

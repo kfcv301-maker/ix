@@ -4,6 +4,7 @@ package com.admin.controller;
 import com.admin.common.annotation.RequireRole;
 import com.admin.common.aop.LogAnnotation;
 import com.admin.common.dto.NodeDto;
+import com.admin.common.dto.NodeInstallCommandDto;
 import com.admin.common.dto.NodeUpdateDto;
 import com.admin.common.lang.R;
 import org.springframework.validation.annotation.Validated;
@@ -54,12 +55,10 @@ public class NodeController extends BaseController {
         return nodeService.deleteNode(id);
     }
 
-    @LogAnnotation
     @RequireRole
     @PostMapping("/install")
-    public R getInstallCommand(@RequestBody Map<String, Object> params) {
-        Long id = Long.valueOf(params.get("id").toString());
-        return nodeService.getInstallCommand(id);
+    public R getInstallCommand(@Validated @RequestBody NodeInstallCommandDto commandDto) {
+        return nodeService.getInstallCommand(commandDto);
     }
 
 }

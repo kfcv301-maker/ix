@@ -5,10 +5,15 @@ set -Eeuo pipefail
 REPO_RAW_BASE="${REPO_RAW_BASE:-https://raw.githubusercontent.com/kfcv301-maker/ix/main}"
 INSTALL_DIR="${INSTALL_DIR:-/etc/flux-panel-agent}"
 SERVICE_NAME="flux-panel-agent"
+DDNS_SERVICE_NAME="flux-panel-ddns"
+DDNS_TIMER_NAME="flux-panel-ddns.timer"
 SYSCTL_FILE="/etc/sysctl.d/99-flux-panel-network.conf"
 SYSCTL_BACKUP="/etc/sysctl.d/99-flux-panel-network.conf.before-flux-panel"
 SERVER_ADDR=""
 NODE_SECRET=""
+DDNS_MODE="unchanged"
+CF_API_TOKEN=""
+CF_RECORD_NAME=""
 TUNE_TCP=1
 HOST_MEMORY_MB=0
 HOST_CPU_CORES=1
@@ -36,6 +41,8 @@ Flux Panel Enhanced 节点 Agent 安装脚本
 用法：
   install.sh --server 面板地址:6365 --secret 节点密钥
   install.sh --server 面板地址:6365 --secret 节点密钥 --skip-tcp-tuning
+  install.sh --server 面板地址:6365 --secret 节点密钥 --cf-api-token Cloudflare令牌 --cf-record node.example.com
+  install.sh --server 面板地址:6365 --secret 节点密钥 --disable-ddns
   install.sh --uninstall
 
 可选环境变量：
@@ -279,12 +286,157 @@ WantedBy=multi-user.target
 EOF
 }
 
+write_ddns_updater() {
+  cat > "$INSTALL_DIR/cloudflare-ddns.sh" <<'EOF'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+CONFIG_FILE="$(dirname "$0")/ddns.env"
+CLOUDFLARE_API="https://api.cloudflare.com/client/v4"
+
+[[ -r "$CONFIG_FILE" ]] || { echo "DDNS 配置不存在" >&2; exit 1; }
+# 配置文件由安装脚本以 root/600 权限生成，避免令牌被其他用户读取。
+source "$CONFIG_FILE"
+
+fail() { echo "[DDNS] $*" >&2; exit 1; }
+
+json_first_id() {
+  tr -d '\n' | sed -n 's/.*"result"[[:space:]]*:[[:space:]]*\[[[:space:]]*{[^}]*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
+}
+
+json_number() {
+  local key="$1"
+  tr -d '\n' | sed -n "s/.*\"${key}\"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p"
+}
+
+json_boolean() {
+  local key="$1"
+  tr -d '\n' | sed -n "s/.*\"${key}\"[[:space:]]*:[[:space:]]*\\(true\\|false\\).*/\\1/p"
+}
+
+cf_request() {
+  curl --fail --silent --show-error --retry 2 --connect-timeout 10 \
+    -H "Authorization: Bearer ${CF_API_TOKEN}" \
+    -H 'Content-Type: application/json' "$@"
+}
+
+find_zone_id() {
+  local candidate="$CF_RECORD_NAME" response zone_id
+  while [[ "$candidate" == *.* ]]; do
+    response="$(cf_request --get --data-urlencode "name=${candidate}" "${CLOUDFLARE_API}/zones")" || fail "无法查询 Cloudflare Zone"
+    zone_id="$(printf '%s' "$response" | json_first_id)"
+    if [[ -n "$zone_id" ]]; then
+      printf '%s' "$zone_id"
+      return 0
+    fi
+    candidate="${candidate#*.}"
+  done
+  fail "未找到 ${CF_RECORD_NAME} 对应的 Cloudflare Zone"
+}
+
+sync_record() {
+  local record_type="$1" address="$2" zone_id="$3" response record_id ttl proxied payload
+  response="$(cf_request --get \
+    --data-urlencode "type=${record_type}" \
+    --data-urlencode "name=${CF_RECORD_NAME}" \
+    "${CLOUDFLARE_API}/zones/${zone_id}/dns_records")" || fail "无法查询 ${record_type} 记录"
+  record_id="$(printf '%s' "$response" | json_first_id)"
+  ttl="$(printf '%s' "$response" | json_number ttl)"
+  proxied="$(printf '%s' "$response" | json_boolean proxied)"
+  ttl="${ttl:-1}"
+  proxied="${proxied:-false}"
+  payload="{\"type\":\"${record_type}\",\"name\":\"${CF_RECORD_NAME}\",\"content\":\"${address}\",\"ttl\":${ttl},\"proxied\":${proxied}}"
+
+  if [[ -n "$record_id" ]]; then
+    response="$(cf_request -X PATCH --data "$payload" "${CLOUDFLARE_API}/zones/${zone_id}/dns_records/${record_id}")" || fail "更新 ${record_type} 记录失败"
+  else
+    response="$(cf_request -X POST --data "$payload" "${CLOUDFLARE_API}/zones/${zone_id}/dns_records")" || fail "创建 ${record_type} 记录失败"
+  fi
+  grep -Eq '"success"[[:space:]]*:[[:space:]]*true' <<<"$response" || fail "Cloudflare 未接受 ${record_type} 记录更新"
+  echo "[DDNS] ${record_type} ${CF_RECORD_NAME} -> ${address}"
+}
+
+main() {
+  [[ -n "${CF_API_TOKEN:-}" && -n "${CF_RECORD_NAME:-}" ]] || fail "DDNS 配置不完整"
+  local zone_id ipv4 ipv6 updated=0
+  zone_id="$(find_zone_id)"
+  ipv4="$(curl -4 --fail --silent --show-error --connect-timeout 10 https://api.ipify.org 2>/dev/null || true)"
+  ipv6="$(curl -6 --fail --silent --show-error --connect-timeout 10 https://api64.ipify.org 2>/dev/null || true)"
+
+  if [[ "$ipv4" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+    sync_record A "$ipv4" "$zone_id"
+    updated=1
+  fi
+  if [[ "$ipv6" == *:* ]]; then
+    sync_record AAAA "$ipv6" "$zone_id"
+    updated=1
+  fi
+  (( updated == 1 )) || fail "未检测到可公开访问的 IPv4 或 IPv6 地址"
+}
+
+main "$@"
+EOF
+  chmod 700 "$INSTALL_DIR/cloudflare-ddns.sh"
+}
+
+configure_ddns() {
+  if [[ "$DDNS_MODE" == "disabled" ]]; then
+    systemctl disable --now "$DDNS_TIMER_NAME" 2>/dev/null || true
+    rm -f "/etc/systemd/system/${DDNS_SERVICE_NAME}.service" "/etc/systemd/system/${DDNS_TIMER_NAME}"
+    rm -f "$INSTALL_DIR/ddns.env" "$INSTALL_DIR/cloudflare-ddns.sh"
+    systemctl daemon-reload
+    info "已按安装命令关闭本机 Cloudflare DDNS"
+    return
+  fi
+
+  [[ "$DDNS_MODE" == "enabled" ]] || return
+  umask 077
+  printf 'CF_API_TOKEN=%q\nCF_RECORD_NAME=%q\n' "$CF_API_TOKEN" "$CF_RECORD_NAME" > "$INSTALL_DIR/ddns.env"
+  chmod 600 "$INSTALL_DIR/ddns.env"
+  write_ddns_updater
+
+  cat > "/etc/systemd/system/${DDNS_SERVICE_NAME}.service" <<EOF
+[Unit]
+Description=Flux Panel Cloudflare DDNS
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=$INSTALL_DIR/cloudflare-ddns.sh
+EOF
+
+  cat > "/etc/systemd/system/${DDNS_TIMER_NAME}" <<EOF
+[Unit]
+Description=Run Flux Panel Cloudflare DDNS every 5 minutes
+
+[Timer]
+OnBootSec=90s
+OnUnitActiveSec=5min
+AccuracySec=30s
+Persistent=true
+Unit=${DDNS_SERVICE_NAME}.service
+
+[Install]
+WantedBy=timers.target
+EOF
+
+  systemctl daemon-reload
+  systemctl enable --now "$DDNS_TIMER_NAME" >/dev/null
+  systemctl start "$DDNS_SERVICE_NAME"
+  ok "Cloudflare DDNS 已立即同步，并设为每 5 分钟自动更新"
+}
+
 install_agent() {
   require_root
   require_systemd
   [[ -n "$SERVER_ADDR" ]] || fail "缺少 --server 参数。"
   [[ -n "$NODE_SECRET" ]] || fail "缺少 --secret 参数。"
   [[ "$SERVER_ADDR" != *$'\n'* && "$NODE_SECRET" != *$'\n'* ]] || fail "参数不能包含换行符。"
+  if [[ "$DDNS_MODE" == "enabled" ]]; then
+    [[ -n "$CF_API_TOKEN" && -n "$CF_RECORD_NAME" ]] || fail "启用 DDNS 时必须同时提供 --cf-api-token 和 --cf-record。"
+    [[ "$CF_API_TOKEN" != *$'\n'* && "$CF_RECORD_NAME" != *$'\n'* ]] || fail "DDNS 参数不能包含换行符。"
+  fi
 
   apply_tcp_tuning
   mkdir -p "$INSTALL_DIR"
@@ -301,6 +453,7 @@ install_agent() {
     fail "Agent 启动失败，已保留配置以便排查。"
   }
   ok "节点 Agent 已启动并设为开机自启"
+  configure_ddns
   printf '状态查看：systemctl status %s\n' "$SERVICE_NAME"
 }
 
@@ -310,7 +463,9 @@ uninstall_agent() {
   read -r -p "卸载节点 Agent 并删除本机配置？(y/N): " confirm
   [[ "$confirm" =~ ^[Yy]$ ]] || { info "已取消"; return; }
   systemctl disable --now "$SERVICE_NAME.service" 2>/dev/null || true
+  systemctl disable --now "$DDNS_TIMER_NAME" 2>/dev/null || true
   rm -f "/etc/systemd/system/$SERVICE_NAME.service"
+  rm -f "/etc/systemd/system/${DDNS_SERVICE_NAME}.service" "/etc/systemd/system/${DDNS_TIMER_NAME}"
   rm -rf "$INSTALL_DIR"
   if [[ -f "$SYSCTL_BACKUP" ]]; then
     mv "$SYSCTL_BACKUP" "$SYSCTL_FILE"
@@ -328,6 +483,9 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --server|-a) SERVER_ADDR="${2:-}"; shift 2 ;;
     --secret|-s) NODE_SECRET="${2:-}"; shift 2 ;;
+    --cf-api-token) CF_API_TOKEN="${2:-}"; DDNS_MODE="enabled"; shift 2 ;;
+    --cf-record) CF_RECORD_NAME="${2:-}"; DDNS_MODE="enabled"; shift 2 ;;
+    --disable-ddns) DDNS_MODE="disabled"; shift ;;
     --skip-tcp-tuning) TUNE_TCP=0; shift ;;
     --uninstall) uninstall_agent; exit 0 ;;
     --help|-h) usage; exit 0 ;;
