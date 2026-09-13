@@ -432,7 +432,7 @@ EOF
 
   cat > "/etc/systemd/system/${DDNS_TIMER_NAME}" <<EOF
 [Unit]
-Description=Run Flux Panel Cloudflare DDNS every 5 minutes
+Description=Run Flux Panel Cloudflare DDNS every minute
 
 [Timer]
 OnBootSec=90s
