@@ -89,7 +89,7 @@ curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/install.sh | 
 
 ### Cloudflare DDNS（可选）
 
-在节点管理中点击“安装”，开启 Cloudflare DDNS 后填写 API Token 和完整记录域名即可生成一条命令。安装完成会立刻更新记录，并由节点本机每 5 分钟同步一次公网 IPv4/IPv6；AWS 换机后重跑同一条命令即可恢复。Token 需要 Cloudflare 的 `Zone:Read` 与 `DNS:Edit` 权限，面板不保存 Token。
+在节点管理中点击“安装”，开启 Cloudflare DDNS 后填写 API Token 和完整记录域名即可生成一条命令。安装完成会立刻更新记录，节点随后每 1 分钟检查公网 IPv4/IPv6，地址变化时才调用 Cloudflare 更新记录；AWS 换机后重跑同一条命令即可恢复。Token 需要 Cloudflare 的 `Zone:Read` 与 `DNS:Edit` 权限，面板不保存 Token。
 
 手动命令格式：
 

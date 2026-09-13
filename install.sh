@@ -292,11 +292,17 @@ write_ddns_updater() {
 set -Eeuo pipefail
 
 CONFIG_FILE="$(dirname "$0")/ddns.env"
+STATE_FILE="$(dirname "$0")/ddns.state"
 CLOUDFLARE_API="https://api.cloudflare.com/client/v4"
 
 [[ -r "$CONFIG_FILE" ]] || { echo "DDNS 配置不存在" >&2; exit 1; }
 # 配置文件由安装脚本以 root/600 权限生成，避免令牌被其他用户读取。
 source "$CONFIG_FILE"
+LAST_IPV4=""
+LAST_IPV6=""
+if [[ -r "$STATE_FILE" ]]; then
+  source "$STATE_FILE"
+fi
 
 fail() { echo "[DDNS] $*" >&2; exit 1; }
 
@@ -358,20 +364,36 @@ sync_record() {
 
 main() {
   [[ -n "${CF_API_TOKEN:-}" && -n "${CF_RECORD_NAME:-}" ]] || fail "DDNS 配置不完整"
-  local zone_id ipv4 ipv6 updated=0
-  zone_id="$(find_zone_id)"
+  local zone_id ipv4 ipv6 next_ipv4 next_ipv6 should_sync=0
   ipv4="$(curl -4 --fail --silent --show-error --connect-timeout 10 https://api.ipify.org 2>/dev/null || true)"
   ipv6="$(curl -6 --fail --silent --show-error --connect-timeout 10 https://api64.ipify.org 2>/dev/null || true)"
+  next_ipv4="$LAST_IPV4"
+  next_ipv6="$LAST_IPV6"
 
   if [[ "$ipv4" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
-    sync_record A "$ipv4" "$zone_id"
-    updated=1
+    [[ "$ipv4" != "$LAST_IPV4" ]] && should_sync=1
+    next_ipv4="$ipv4"
   fi
   if [[ "$ipv6" == *:* ]]; then
-    sync_record AAAA "$ipv6" "$zone_id"
-    updated=1
+    [[ "$ipv6" != "$LAST_IPV6" ]] && should_sync=1
+    next_ipv6="$ipv6"
   fi
-  (( updated == 1 )) || fail "未检测到可公开访问的 IPv4 或 IPv6 地址"
+  [[ -n "$next_ipv4" || -n "$next_ipv6" ]] || fail "未检测到可公开访问的 IPv4 或 IPv6 地址"
+  if (( should_sync == 0 )); then
+    echo "[DDNS] 公网地址未变化，无需请求 Cloudflare"
+    return
+  fi
+
+  zone_id="$(find_zone_id)"
+  if [[ -n "$ipv4" && "$ipv4" != "$LAST_IPV4" ]]; then
+    sync_record A "$ipv4" "$zone_id"
+  fi
+  if [[ -n "$ipv6" && "$ipv6" != "$LAST_IPV6" ]]; then
+    sync_record AAAA "$ipv6" "$zone_id"
+  fi
+  umask 077
+  printf 'LAST_IPV4=%q\nLAST_IPV6=%q\n' "$next_ipv4" "$next_ipv6" > "$STATE_FILE"
+  chmod 600 "$STATE_FILE"
 }
 
 main "$@"
@@ -383,7 +405,7 @@ configure_ddns() {
   if [[ "$DDNS_MODE" == "disabled" ]]; then
     systemctl disable --now "$DDNS_TIMER_NAME" 2>/dev/null || true
     rm -f "/etc/systemd/system/${DDNS_SERVICE_NAME}.service" "/etc/systemd/system/${DDNS_TIMER_NAME}"
-    rm -f "$INSTALL_DIR/ddns.env" "$INSTALL_DIR/cloudflare-ddns.sh"
+    rm -f "$INSTALL_DIR/ddns.env" "$INSTALL_DIR/ddns.state" "$INSTALL_DIR/cloudflare-ddns.sh"
     systemctl daemon-reload
     info "已按安装命令关闭本机 Cloudflare DDNS"
     return
@@ -391,6 +413,8 @@ configure_ddns() {
 
   [[ "$DDNS_MODE" == "enabled" ]] || return
   umask 077
+  # 重新执行安装命令可能代表换机或更换记录，强制首次任务立即同步。
+  rm -f "$INSTALL_DIR/ddns.state"
   printf 'CF_API_TOKEN=%q\nCF_RECORD_NAME=%q\n' "$CF_API_TOKEN" "$CF_RECORD_NAME" > "$INSTALL_DIR/ddns.env"
   chmod 600 "$INSTALL_DIR/ddns.env"
   write_ddns_updater
@@ -412,8 +436,8 @@ Description=Run Flux Panel Cloudflare DDNS every 5 minutes
 
 [Timer]
 OnBootSec=90s
-OnUnitActiveSec=5min
-AccuracySec=30s
+OnUnitActiveSec=1min
+AccuracySec=10s
 Persistent=true
 Unit=${DDNS_SERVICE_NAME}.service
 
@@ -424,7 +448,7 @@ EOF
   systemctl daemon-reload
   systemctl enable --now "$DDNS_TIMER_NAME" >/dev/null
   systemctl start "$DDNS_SERVICE_NAME"
-  ok "Cloudflare DDNS 已立即同步，并设为每 5 分钟自动更新"
+  ok "Cloudflare DDNS 已立即同步，并设为每 1 分钟自动更新"
 }
 
 install_agent() {
