@@ -10,6 +10,12 @@ SYSCTL_BACKUP="/etc/sysctl.d/99-flux-panel-network.conf.before-flux-panel"
 SERVER_ADDR=""
 NODE_SECRET=""
 TUNE_TCP=1
+HOST_MEMORY_MB=0
+HOST_CPU_CORES=1
+SELECTED_CONGESTION_CONTROL=""
+FQ_SUPPORTED=0
+TC_AVAILABLE=0
+APPLIED_SYSCTL_KEYS=()
 
 info() { printf '\033[1;34m[INFO]\033[0m %s\n' "$*"; }
 ok() { printf '\033[1;32m[ OK ]\033[0m %s\n' "$*"; }
@@ -46,21 +52,61 @@ require_systemd() {
   command -v systemctl >/dev/null 2>&1 || fail "当前系统不支持 systemd，暂不能自动安装服务。"
 }
 
-ensure_bbr_available() {
+detect_host_profile() {
+  HOST_CPU_CORES="$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || printf '1')"
+  HOST_MEMORY_MB="$(awk '/MemTotal:/ {print int($2 / 1024)}' /proc/meminfo 2>/dev/null || printf '0')"
+  info "节点检测：${HOST_CPU_CORES} 核 / ${HOST_MEMORY_MB} MB 内存 / $(uname -r)"
+  if (( HOST_MEMORY_MB > 0 && HOST_MEMORY_MB < 256 )); then
+    info "内存较小：仍保留 16 MB 的 TCP 缓存上限；该值是按连接可申请的上限，不会在启动时预分配。"
+  fi
+}
+
+select_tcp_capabilities() {
   command -v sysctl >/dev/null 2>&1 || fail "未找到 sysctl，无法应用 TCP 调优。"
-  local available
+  local available current
   available="$(sysctl -n net.ipv4.tcp_available_congestion_control 2>/dev/null || true)"
   if ! grep -qw bbr <<<"$available" && command -v modprobe >/dev/null 2>&1; then
     modprobe tcp_bbr 2>/dev/null || true
     available="$(sysctl -n net.ipv4.tcp_available_congestion_control 2>/dev/null || true)"
   fi
-  grep -qw bbr <<<"$available" || fail "当前内核不支持 BBR，未写入 TCP 调优配置。"
+  if grep -qw bbr <<<"$available"; then
+    SELECTED_CONGESTION_CONTROL="bbr"
+    ok "检测到 BBR，使用 BBR 拥塞控制"
+  else
+    # 旧内核无法凭脚本安装 BBR 模块，自动保留其现有算法，不能阻塞节点安装。
+    current="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || printf 'cubic')"
+    SELECTED_CONGESTION_CONTROL="${current:-cubic}"
+    info "内核未提供 BBR，自动保留 $SELECTED_CONGESTION_CONTROL；其余 TCP 参数仍会应用。"
+  fi
+
+  if [[ "$(sysctl -n net.core.default_qdisc 2>/dev/null || true)" == "fq" ]]; then
+    FQ_SUPPORTED=1
+  elif command -v modprobe >/dev/null 2>&1 && modprobe sch_fq 2>/dev/null; then
+    FQ_SUPPORTED=1
+  fi
+  if command -v tc >/dev/null 2>&1; then
+    TC_AVAILABLE=1
+    (( FQ_SUPPORTED == 1 )) && ok "检测到 FQ 与 tc，尝试对默认出口网卡立即应用 FQ"
+  else
+    info "未找到 tc；仅持久化默认 FQ 队列算法。"
+  fi
+  (( FQ_SUPPORTED == 1 )) || info "内核未提供 FQ，自动保留当前队列算法。"
+}
+
+append_sysctl_if_supported() {
+  local output_file="$1" key="$2" value="$3"
+  if sysctl -n "$key" >/dev/null 2>&1; then
+    printf '%s = %s\n' "$key" "$value" >> "$output_file"
+    APPLIED_SYSCTL_KEYS+=("$key")
+  else
+    info "内核不支持 $key，自动跳过该项。"
+  fi
 }
 
 apply_fq_to_default_interfaces() {
   command -v ip >/dev/null 2>&1 || return 0
-  command -v tc >/dev/null 2>&1 || {
-    info "未找到 tc；已设置默认队列算法 FQ，现有网卡将在下次网络初始化时应用。"
+  (( FQ_SUPPORTED == 1 && TC_AVAILABLE == 1 )) || {
+    info "现有网卡不做即时 qdisc 调整；默认队列算法会在网络初始化时应用。"
     return 0
   }
 
@@ -81,25 +127,30 @@ apply_tcp_tuning() {
     return
   }
 
-  ensure_bbr_available
+  detect_host_profile
+  select_tcp_capabilities
   local temporary_file
   temporary_file="$(mktemp)"
-  cat > "$temporary_file" <<'EOF'
+  APPLIED_SYSCTL_KEYS=()
+  cat > "$temporary_file" <<EOF
 # Flux Panel Enhanced 节点网络调优。
-net.core.default_qdisc = fq
-net.ipv4.tcp_congestion_control = bbr
-net.core.rmem_max = 16777216
-net.core.wmem_max = 16777216
-net.ipv4.tcp_rmem = 4096 131072 16777216
-net.ipv4.tcp_wmem = 4096 16384 16777216
-net.ipv4.tcp_moderate_rcvbuf = 1
-net.ipv4.tcp_mtu_probing = 1
-net.ipv4.tcp_fastopen = 3
-net.ipv4.tcp_slow_start_after_idle = 0
-net.core.somaxconn = 16384
-net.ipv4.tcp_max_syn_backlog = 8192
-net.core.netdev_max_backlog = 8192
 EOF
+
+  if (( FQ_SUPPORTED == 1 )); then
+    append_sysctl_if_supported "$temporary_file" net.core.default_qdisc fq
+  fi
+  append_sysctl_if_supported "$temporary_file" net.ipv4.tcp_congestion_control "$SELECTED_CONGESTION_CONTROL"
+  append_sysctl_if_supported "$temporary_file" net.core.rmem_max 16777216
+  append_sysctl_if_supported "$temporary_file" net.core.wmem_max 16777216
+  append_sysctl_if_supported "$temporary_file" net.ipv4.tcp_rmem "4096 131072 16777216"
+  append_sysctl_if_supported "$temporary_file" net.ipv4.tcp_wmem "4096 16384 16777216"
+  append_sysctl_if_supported "$temporary_file" net.ipv4.tcp_moderate_rcvbuf 1
+  append_sysctl_if_supported "$temporary_file" net.ipv4.tcp_mtu_probing 1
+  append_sysctl_if_supported "$temporary_file" net.ipv4.tcp_fastopen 3
+  append_sysctl_if_supported "$temporary_file" net.ipv4.tcp_slow_start_after_idle 0
+  append_sysctl_if_supported "$temporary_file" net.core.somaxconn 16384
+  append_sysctl_if_supported "$temporary_file" net.ipv4.tcp_max_syn_backlog 8192
+  append_sysctl_if_supported "$temporary_file" net.core.netdev_max_backlog 8192
 
   # 先应用临时文件；任一内核参数不被支持时，不覆盖原有持久化配置。
   if ! sysctl -p "$temporary_file"; then
@@ -114,7 +165,11 @@ EOF
   install -Dm644 "$temporary_file" "$SYSCTL_FILE"
   rm -f "$temporary_file"
   apply_fq_to_default_interfaces
-  ok "TCP BBR/FQ 调优已生效并持久化"
+  if [[ "$SELECTED_CONGESTION_CONTROL" == "bbr" ]]; then
+    ok "TCP BBR/FQ 调优已完成并持久化"
+  else
+    ok "兼容模式 TCP 调优已完成并持久化（当前内核不支持 BBR）"
+  fi
 }
 
 download_agent() {
@@ -182,8 +237,8 @@ install_agent() {
   [[ -n "$NODE_SECRET" ]] || fail "缺少 --secret 参数。"
   [[ "$SERVER_ADDR" != *$'\n'* && "$NODE_SECRET" != *$'\n'* ]] || fail "参数不能包含换行符。"
 
-  mkdir -p "$INSTALL_DIR"
   apply_tcp_tuning
+  mkdir -p "$INSTALL_DIR"
   download_agent
   write_config
   write_service

@@ -69,7 +69,7 @@ curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/install.sh | 
 
 脚本会根据服务器架构下载 `amd64` 或 `arm64` Agent，并在写入 `/etc/flux-panel-agent/gost` 前校验 SHA-256。它会创建 `flux-panel-agent.service` 并立即启动；重新安装 Agent 会短暂重启该节点进程，但不会修改面板数据库中的节点与转发记录。
 
-节点安装默认会先启用 TCP BBR/FQ 调优，并持久化到 `/etc/sysctl.d/99-flux-panel-network.conf`：接收/发送缓存上限为 16 MB、自动接收缓存、MTU 探测、TCP Fast Open、禁用空闲慢启动、`somaxconn=16384`、`tcp_max_syn_backlog=8192`、`netdev_max_backlog=8192`。脚本会先确认内核支持 BBR；不支持时不会写入配置。需要跳过调优可加 `--skip-tcp-tuning`：
+节点安装时会先检测内核版本、CPU、内存、默认出口网卡以及 BBR/FQ 支持，再做 TCP 调优，最后才下载和启动 Agent。调优写入 `/etc/sysctl.d/99-flux-panel-network.conf`：接收/发送缓存上限为 16 MB、自动接收缓存、MTU 探测、TCP Fast Open、禁用空闲慢启动、`somaxconn=16384`、`tcp_max_syn_backlog=8192`、`netdev_max_backlog=8192`。支持 BBR/FQ 的节点启用 BBR/FQ；旧内核缺少其中某项时脚本会自动保留可用算法、跳过不支持的参数，Agent 仍会继续安装。需要跳过调优可加 `--skip-tcp-tuning`：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/install.sh | sudo bash -s -- --server '面板地址:6365' --secret '节点密钥' --skip-tcp-tuning
