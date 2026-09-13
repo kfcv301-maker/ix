@@ -126,6 +126,20 @@ CREATE TABLE `tunnel` (
   `status` int(10) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+--
+-- 多入口隧道关联。旧隧道会在后端启动时自动以原 in_node_id 回填。
+--
+CREATE TABLE `tunnel_entry_node` (
+  `id` bigint(20) NOT NULL,
+  `tunnel_id` int(10) NOT NULL,
+  `node_id` int(10) NOT NULL,
+  `created_time` bigint(20) NOT NULL,
+  `updated_time` bigint(20) DEFAULT NULL,
+  `status` int(10) DEFAULT NULL,
+  UNIQUE KEY `uk_tunnel_entry_node` (`tunnel_id`,`node_id`),
+  KEY `idx_tunnel_entry_node_node` (`node_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- --------------------------------------------------------
 
 --
@@ -230,6 +244,12 @@ ALTER TABLE `tunnel`
   ADD PRIMARY KEY (`id`);
 
 --
+-- 表的索引 `tunnel_entry_node`
+--
+ALTER TABLE `tunnel_entry_node`
+  ADD PRIMARY KEY (`id`);
+
+--
 -- 表的索引 `user`
 --
 ALTER TABLE `user`
@@ -281,6 +301,12 @@ ALTER TABLE `statistics_flow`
 --
 ALTER TABLE `tunnel`
   MODIFY `id` int(10) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
+
+--
+-- 使用表AUTO_INCREMENT `tunnel_entry_node`
+--
+ALTER TABLE `tunnel_entry_node`
+  MODIFY `id` bigint(20) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
 
 --
 -- 使用表AUTO_INCREMENT `user`

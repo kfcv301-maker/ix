@@ -4,6 +4,7 @@ import com.admin.common.dto.*;
 import com.admin.common.lang.R;
 import com.admin.common.utils.GostUtil;
 import com.admin.entity.*;
+import com.admin.mapper.TunnelEntryNodeMapper;
 import com.admin.service.*;
 import com.alibaba.fastjson.JSONObject;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
@@ -41,6 +42,9 @@ public class CheckGostConfigAsync {
     @Resource
     @Lazy
     private UserTunnelService userTunnelService;
+
+    @Resource
+    private TunnelEntryNodeMapper tunnelEntryNodeMapper;
 
 
 
@@ -164,7 +168,7 @@ public class CheckGostConfigAsync {
      * 同步限流器
      */
     private void syncLimiters(GostConfigDto gostConfig, Node node) {
-        List<Tunnel> tunnelList = tunnelService.list(new QueryWrapper<Tunnel>().eq("in_node_id", node.getId()));
+        List<Tunnel> tunnelList = getIngressTunnels(node.getId());
         if (tunnelList == null || tunnelList.isEmpty()) return;
         safeExecute(() -> {
             List<Long> tunnelIds = new ArrayList<>();
@@ -223,7 +227,7 @@ public class CheckGostConfigAsync {
             Tunnel tunnel = tunnelService.getById(forward.getTunnelId());
             if (tunnel == null || !Objects.equals(tunnel.getStatus(), 1)) continue;
 
-            boolean isInNode = Objects.equals(tunnel.getInNodeId(), node.getId());
+            boolean isInNode = isIngressNode(tunnel.getId(), tunnel.getInNodeId(), node.getId());
             boolean isOutNode = Objects.equals(tunnel.getOutNodeId(), node.getId());
             if (!isInNode && !isOutNode) continue;
 
@@ -257,6 +261,25 @@ public class CheckGostConfigAsync {
             }
         }
         return names;
+    }
+
+    private List<Tunnel> getIngressTunnels(Long nodeId) {
+        Set<Long> tunnelIds = new HashSet<>();
+        tunnelEntryNodeMapper.selectList(new QueryWrapper<TunnelEntryNode>().eq("node_id", nodeId))
+                .forEach(entry -> tunnelIds.add(entry.getTunnelId()));
+        // Fallback preserves recovery for a legacy installation before its first
+        // migration transaction has completed.
+        tunnelService.list(new QueryWrapper<Tunnel>().eq("in_node_id", nodeId))
+                .forEach(tunnel -> tunnelIds.add(tunnel.getId()));
+        return tunnelIds.isEmpty() ? new ArrayList<>() : tunnelService.listByIds(tunnelIds);
+    }
+
+    private boolean isIngressNode(Long tunnelId, Long legacyInNodeId, Long nodeId) {
+        if (Objects.equals(legacyInNodeId, nodeId)) {
+            return true;
+        }
+        return tunnelEntryNodeMapper.selectCount(new QueryWrapper<TunnelEntryNode>()
+                .eq("tunnel_id", tunnelId).eq("node_id", nodeId)) > 0;
     }
 
     private void restoreMissingForward(Node node, Forward forward, Tunnel tunnel, UserTunnel userTunnel,

@@ -4,6 +4,8 @@ import java.io.Serializable;
 import java.math.BigDecimal;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
+import com.baomidou.mybatisplus.annotation.TableField;
+import java.util.List;
 
 /**
  * <p>
@@ -28,6 +30,10 @@ public class Tunnel extends BaseEntity {
      * 入口节点ID
      */
     private Long inNodeId;
+
+    /** Populated for API responses; persisted ingress nodes live in tunnel_entry_node. */
+    @TableField(exist = false)
+    private List<Long> entryNodeIds;
 
     /**
      * 入口IP (兼容字段)

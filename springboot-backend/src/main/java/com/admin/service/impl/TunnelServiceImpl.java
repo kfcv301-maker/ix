@@ -10,9 +10,11 @@ import com.admin.common.utils.WebSocketServer;
 import com.admin.entity.Forward;
 import com.admin.entity.Node;
 import com.admin.entity.Tunnel;
+import com.admin.entity.TunnelEntryNode;
 import com.admin.entity.User;
 import com.admin.entity.UserTunnel;
 import com.admin.mapper.TunnelMapper;
+import com.admin.mapper.TunnelEntryNodeMapper;
 import com.admin.mapper.UserTunnelMapper;
 import com.admin.service.ForwardService;
 import com.admin.service.NodeService;
@@ -25,6 +27,7 @@ import lombok.Data;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.BeanUtils;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import javax.annotation.Resource;
 import java.math.BigDecimal;
@@ -89,6 +92,9 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
     UserTunnelMapper userTunnelMapper;
 
     @Resource
+    private TunnelEntryNodeMapper tunnelEntryNodeMapper;
+
+    @Resource
     NodeService nodeService;
     
     @Resource
@@ -107,7 +113,16 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
      * @return 创建结果响应
      */
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public R createTunnel(TunnelDto tunnelDto) {
+        List<Long> entryNodeIds = normalizeEntryNodeIds(tunnelDto);
+        if (entryNodeIds.isEmpty()) {
+            return R.err("请至少选择一个入口节点");
+        }
+        // Keep the first entry in the legacy column. Existing integrations keep
+        // working while the relation table is the source of truth for fan-out.
+        tunnelDto.setEntryNodeIds(entryNodeIds);
+        tunnelDto.setInNodeId(entryNodeIds.get(0));
         // 1. 验证隧道名称唯一性
         R nameValidationResult = validateTunnelNameUniqueness(tunnelDto.getName());
         if (nameValidationResult.getCode() != 0) {
@@ -139,9 +154,14 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
 
         // 6. 设置默认属性并保存
         setDefaultTunnelProperties(tunnel);
-        boolean result = this.save(tunnel);
-        
-        return result ? R.ok(SUCCESS_CREATE_MSG) : R.err(ERROR_CREATE_MSG);
+        if (!this.save(tunnel)) {
+            return R.err(ERROR_CREATE_MSG);
+        }
+        if (!saveEntryNodes(tunnel.getId(), entryNodeIds)) {
+            throw new IllegalStateException("保存多入口节点关联失败");
+        }
+        tunnel.setEntryNodeIds(entryNodeIds);
+        return R.ok(SUCCESS_CREATE_MSG);
     }
 
     /**
@@ -152,6 +172,7 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
     @Override
     public R getAllTunnels() {
         List<Tunnel> tunnelList = this.list();
+        tunnelList.forEach(this::populateEntryNodeIds);
         return R.ok(tunnelList);
     }
 
@@ -229,6 +250,7 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
      * @return 删除结果响应
      */
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public R deleteTunnel(Long id) {
         // 1. 验证隧道是否存在
         if (!isTunnelExists(id)) {
@@ -243,6 +265,11 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
 
         // 3. 执行删除操作
         boolean result = this.removeById(id);
+        if (result) {
+            // Keep the relation table in step with the legacy tunnel row. This
+            // prevents a deleted tunnel from keeping a node falsely "in use".
+            tunnelEntryNodeMapper.delete(new QueryWrapper<TunnelEntryNode>().eq("tunnel_id", id));
+        }
         return result ? R.ok(SUCCESS_DELETE_MSG) : R.err(ERROR_DELETE_MSG);
     }
 
@@ -332,18 +359,22 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
      * @return 节点验证结果
      */
     private NodeValidationResult validateInNode(TunnelDto tunnelDto) {
-        // 验证入口节点是否存在
-        Node inNode = nodeService.getById(tunnelDto.getInNodeId());
-        if (inNode == null) {
-            return NodeValidationResult.error(ERROR_IN_NODE_NOT_FOUND);
+        Node primaryNode = null;
+        for (Long nodeId : tunnelDto.getEntryNodeIds()) {
+            Node node = nodeService.getById(nodeId);
+            if (node == null) {
+                return NodeValidationResult.error(ERROR_IN_NODE_NOT_FOUND + "：" + nodeId);
+            }
+            if (!Objects.equals(node.getStatus(), NODE_STATUS_ONLINE)) {
+                return NodeValidationResult.error(ERROR_IN_NODE_OFFLINE + "：" + node.getName());
+            }
+            if (primaryNode == null) {
+                primaryNode = node;
+            }
         }
-
-        // 验证入口节点是否在线
-        if (inNode.getStatus() != NODE_STATUS_ONLINE) {
-            return NodeValidationResult.error(ERROR_IN_NODE_OFFLINE);
-        }
-
-        return NodeValidationResult.success(inNode);
+        return primaryNode == null
+                ? NodeValidationResult.error(ERROR_IN_NODE_NOT_FOUND)
+                : NodeValidationResult.success(primaryNode);
     }
 
     /**
@@ -434,7 +465,7 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
         }
         
         // 验证入口和出口不能是同一个节点
-        if (tunnelDto.getInNodeId().equals(tunnelDto.getOutNodeId())) {
+        if (tunnelDto.getEntryNodeIds().contains(tunnelDto.getOutNodeId())) {
             return R.err(ERROR_SAME_NODE_NOT_ALLOWED);
         }
         
@@ -459,6 +490,48 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
         tunnel.setOutIp(outNode.getServerIp());
         
         return R.ok();
+    }
+
+    private List<Long> normalizeEntryNodeIds(TunnelDto tunnelDto) {
+        LinkedHashSet<Long> uniqueIds = new LinkedHashSet<>();
+        if (tunnelDto.getEntryNodeIds() != null) {
+            for (Long nodeId : tunnelDto.getEntryNodeIds()) {
+                if (nodeId != null) {
+                    uniqueIds.add(nodeId);
+                }
+            }
+        }
+        // Requests from older panels only contain inNodeId.
+        if (uniqueIds.isEmpty() && tunnelDto.getInNodeId() != null) {
+            uniqueIds.add(tunnelDto.getInNodeId());
+        }
+        return new ArrayList<>(uniqueIds);
+    }
+
+    private boolean saveEntryNodes(Long tunnelId, List<Long> nodeIds) {
+        long now = System.currentTimeMillis();
+        for (Long nodeId : nodeIds) {
+            TunnelEntryNode entryNode = new TunnelEntryNode();
+            entryNode.setTunnelId(tunnelId);
+            entryNode.setNodeId(nodeId);
+            entryNode.setCreatedTime(now);
+            entryNode.setUpdatedTime(now);
+            entryNode.setStatus(TUNNEL_STATUS_ACTIVE);
+            if (tunnelEntryNodeMapper.insert(entryNode) != 1) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private void populateEntryNodeIds(Tunnel tunnel) {
+        List<TunnelEntryNode> entries = tunnelEntryNodeMapper.selectList(
+                new QueryWrapper<TunnelEntryNode>().eq("tunnel_id", tunnel.getId()).orderByAsc("id"));
+        List<Long> nodeIds = entries.stream().map(TunnelEntryNode::getNodeId).collect(Collectors.toList());
+        if (nodeIds.isEmpty() && tunnel.getInNodeId() != null) {
+            nodeIds = Collections.singletonList(tunnel.getInNodeId());
+        }
+        tunnel.setEntryNodeIds(nodeIds);
     }
 
     /**

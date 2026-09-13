@@ -12,6 +12,7 @@ import com.admin.entity.Tunnel;
 import com.admin.entity.ViteConfig;
 import com.admin.mapper.NodeMapper;
 import com.admin.mapper.TunnelMapper;
+import com.admin.mapper.TunnelEntryNodeMapper;
 import com.admin.service.NodeService;
 import com.admin.service.TunnelService;
 import com.admin.service.ViteConfigService;
@@ -71,6 +72,9 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
     
     @Resource
     private TunnelMapper tunnelMapper;
+
+    @Resource
+    private TunnelEntryNodeMapper tunnelEntryNodeMapper;
 
     @Resource
     @Lazy
@@ -300,6 +304,13 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
      * @return 检查结果响应
      */
     private R checkInNodeUsage(Long nodeId) {
+        long multiIngressCount = tunnelEntryNodeMapper.selectCount(
+                new QueryWrapper<com.admin.entity.TunnelEntryNode>().eq("node_id", nodeId));
+        if (multiIngressCount > 0) {
+            String errorMsg = String.format(ERROR_IN_NODE_IN_USE, multiIngressCount);
+            return R.err(errorMsg);
+        }
+
         QueryWrapper<Tunnel> query = new QueryWrapper<>();
         query.eq("in_node_id", nodeId);
         
