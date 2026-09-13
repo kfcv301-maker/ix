@@ -73,12 +73,12 @@ curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/install.sh | 
 
 | 自动档位 | 选择条件 | 单连接收发缓存上限 | 接入 / SYN / 收包队列 |
 | --- | --- | --- | --- |
-| `lite` | 内存低于 1 GB，或单核 | 8 MB | 4096 / 2048 / 4096 |
-| `balanced` | 普通节点 | 16 MB | 16384 / 8192 / 8192 |
-| `performance` | 至少 4 核、4 GB 内存 | 32 MB | 32768 / 16384 / 16384 |
-| `throughput` | 至少 8 核、8 GB 内存 | 64 MB | 65535 / 32768 / 32768 |
+| `tiny` | 内存低于 512 MB | 4 MB | 2048 / 1024 / 2048 |
+| `small` | 512 MB 至 1 GB 内存 | 8 MB | 4096 / 2048 / 4096 |
+| `balanced` | 内存低于 2 GB、单核，或无法读到内存 | 12 MB | 8192 / 4096 / 4096 |
+| `standard` | 至少 2 GB 内存、至少双核 | 16 MB | 16384 / 8192 / 8192 |
 
-所有档位都会开启接收缓存自动调节、MTU 探测、TCP Fast Open，并关闭空闲慢启动。支持 BBR/FQ 的节点启用 BBR/FQ；旧内核缺少其中某项时脚本会自动保留可用算法、跳过不支持的参数，Agent 仍会继续安装。需要跳过调优可加 `--skip-tcp-tuning`：
+所有档位都会开启接收缓存自动调节、MTU 探测、TCP Fast Open，并关闭空闲慢启动。`standard` 正好使用你给出的最大参数，其余档位只会往下收缩，不会超出 16 MB、16384、8192 的上限。支持 BBR/FQ 的节点启用 BBR/FQ；旧内核缺少其中某项时脚本会自动保留可用算法、跳过不支持的参数，Agent 仍会继续安装。需要跳过调优可加 `--skip-tcp-tuning`：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/install.sh | sudo bash -s -- --server '面板地址:6365' --secret '节点密钥' --skip-tcp-tuning
