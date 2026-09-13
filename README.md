@@ -73,6 +73,12 @@ curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/install.sh | 
 
 脚本会根据服务器架构下载 `amd64` 或 `arm64` Agent，并在写入 `/etc/flux-panel-agent/gost` 前校验 SHA-256。它会创建 `flux-panel-agent.service` 并立即启动；重新安装 Agent 会短暂重启该节点进程，但不会修改面板数据库中的节点与转发记录。
 
+节点安装默认会先启用 TCP BBR/FQ 调优，并持久化到 `/etc/sysctl.d/99-flux-panel-network.conf`：接收/发送缓存上限为 16 MB、自动接收缓存、MTU 探测、TCP Fast Open、禁用空闲慢启动、`somaxconn=16384`、`tcp_max_syn_backlog=8192`、`netdev_max_backlog=8192`。脚本会先确认内核支持 BBR；不支持时不会写入配置。需要跳过调优可加 `--skip-tcp-tuning`：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/install.sh | sudo bash -s -- --server '面板地址:6365' --secret '节点密钥' --skip-tcp-tuning
+```
+
 ## 节点硬件信息说明
 
 面板前端只能展示 Agent 上报的数据。旧版 Agent 只会上报 CPU/内存使用率和流量计数；要显示 CPU 核数、内存总量及硬盘容量，需要升级为包含硬件采集字段的 Agent。升级 Agent 会短暂重启节点侧进程，但不应修改面板数据库中的节点与转发记录。
