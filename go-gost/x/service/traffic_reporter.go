@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -27,11 +28,19 @@ type TrafficReportItem struct {
 }
 
 func SetHTTPReportURL(addr string, secret string) {
-	httpReportURL = "http://" + addr + "/flow/upload?secret=" + secret
-	configReportURL = "http://" + addr + "/flow/config?secret=" + secret
+	var err error
+	httpReportURL, err = buildPanelHTTPURL(addr, "/flow/upload", secret)
+	if err != nil {
+		fmt.Printf("❌ 设置流量上报地址失败: %v\n", err)
+		httpReportURL = ""
+	}
+	configReportURL, err = buildPanelHTTPURL(addr, "/flow/config", secret)
+	if err != nil {
+		fmt.Printf("❌ 设置配置上报地址失败: %v\n", err)
+		configReportURL = ""
+	}
 
 	// 创建 AES 加密器
-	var err error
 	httpAESCrypto, err = crypto.NewAESCrypto(secret)
 	if err != nil {
 		fmt.Printf("❌ 创建 HTTP AES 加密器失败: %v\n", err)
@@ -283,4 +292,41 @@ func getConfigData() ([]byte, error) {
 	// 避免服务、链和限速器在恢复流程中被错误解析为空。
 	config.Global().Write(buf, "json")
 	return buf.Bytes(), nil
+}
+
+// buildPanelHTTPURL 将面板地址转换为流量/配置上报地址。
+// https:// 与 wss:// 地址会走 HTTPS，避免节点在 HTTPS 面板上回退成明文 HTTP。
+func buildPanelHTTPURL(addr, endpoint, secret string) (string, error) {
+	rawAddr := strings.TrimSpace(addr)
+	if rawAddr == "" {
+		return "", fmt.Errorf("面板地址为空")
+	}
+	if !strings.Contains(rawAddr, "://") {
+		rawAddr = "http://" + rawAddr
+	}
+
+	u, err := url.Parse(rawAddr)
+	if err != nil {
+		return "", fmt.Errorf("解析面板地址失败: %w", err)
+	}
+	if u.Host == "" {
+		return "", fmt.Errorf("无效的面板地址: %s", addr)
+	}
+
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https":
+		// 保持 HTTP/HTTPS。
+	case "ws":
+		u.Scheme = "http"
+	case "wss":
+		u.Scheme = "https"
+	default:
+		return "", fmt.Errorf("不支持的面板协议: %s", u.Scheme)
+	}
+
+	u.Path = strings.TrimRight(u.Path, "/") + endpoint
+	query := u.Query()
+	query.Set("secret", secret)
+	u.RawQuery = query.Encode()
+	return u.String(), nil
 }

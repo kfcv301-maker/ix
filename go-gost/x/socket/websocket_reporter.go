@@ -224,13 +224,16 @@ func (w *WebSocketReporter) connect() error {
 		json.Unmarshal(b, &cfg)
 	}
 
-	// 使用最新的配置重新构建 URL
-	currentURL := "ws://" + w.addr + "/system-info?type=1&secret=" + w.secret + "&version=" + w.version +
-		"&http=" + strconv.Itoa(cfg.Http) + "&tls=" + strconv.Itoa(cfg.Tls) + "&socks=" + strconv.Itoa(cfg.Socks)
+	// 使用最新配置重新构建 URL。面板地址是 https:// 时必须改用 wss://，
+	// 不能再像旧版一样无条件拼接 ws://。
+	currentURL, err := buildSystemInfoWebSocketURL(w.addr, w.secret, w.version, cfg.Http, cfg.Tls, cfg.Socks)
+	if err != nil {
+		return err
+	}
 
 	u, err := url.Parse(currentURL)
 	if err != nil {
-		return fmt.Errorf("解析URL失败: %v", err)
+		return fmt.Errorf("解析 WebSocket URL 失败: %w", err)
 	}
 
 	dialer := websocket.DefaultDialer
@@ -260,6 +263,48 @@ func (w *WebSocketReporter) connect() error {
 
 	fmt.Printf("✅ WebSocket连接建立成功 (http=%d, tls=%d, socks=%d)\n", cfg.Http, cfg.Tls, cfg.Socks)
 	return nil
+}
+
+// buildSystemInfoWebSocketURL 同时支持以下面板地址：
+// host:port（默认 ws）、http://（ws）、https://（wss）、ws://、wss://。
+func buildSystemInfoWebSocketURL(addr, secret, version string, http, tls, socks int) (string, error) {
+	rawAddr := strings.TrimSpace(addr)
+	if rawAddr == "" {
+		return "", fmt.Errorf("面板地址为空")
+	}
+	if !strings.Contains(rawAddr, "://") {
+		rawAddr = "ws://" + rawAddr
+	}
+
+	u, err := url.Parse(rawAddr)
+	if err != nil {
+		return "", fmt.Errorf("解析面板地址失败: %w", err)
+	}
+	if u.Host == "" {
+		return "", fmt.Errorf("无效的面板地址: %s", addr)
+	}
+
+	switch strings.ToLower(u.Scheme) {
+	case "http":
+		u.Scheme = "ws"
+	case "https":
+		u.Scheme = "wss"
+	case "ws", "wss":
+		// 已经是 WebSocket 协议，保持不变。
+	default:
+		return "", fmt.Errorf("不支持的面板协议: %s", u.Scheme)
+	}
+
+	u.Path = strings.TrimRight(u.Path, "/") + "/system-info"
+	query := u.Query()
+	query.Set("type", "1")
+	query.Set("secret", secret)
+	query.Set("version", version)
+	query.Set("http", strconv.Itoa(http))
+	query.Set("tls", strconv.Itoa(tls))
+	query.Set("socks", strconv.Itoa(socks))
+	u.RawQuery = query.Encode()
+	return u.String(), nil
 }
 
 // handleConnection 处理WebSocket连接
@@ -1078,10 +1123,15 @@ func getHardwareInfo() HardwareInfo {
 // StartWebSocketReporterWithConfig 使用配置字段启动WebSocket报告器
 func StartWebSocketReporterWithConfig(addr string, secret string, http int, tls int, socks int, version string) *WebSocketReporter {
 
-	// 构建初始 WebSocket URL
-	fullURL := "ws://" + addr + "/system-info?type=1&secret=" + secret + "&version=" + version + "&http=" + strconv.Itoa(http) + "&tls=" + strconv.Itoa(tls) + "&socks=" + strconv.Itoa(socks)
-
-	fmt.Printf("🔗 WebSocket连接URL: %s\n", fullURL)
+	// 预先校验地址。后续重连仍会从 config.json 读取最新协议开关。
+	fullURL, err := buildSystemInfoWebSocketURL(addr, secret, version, http, tls, socks)
+	if err != nil {
+		fmt.Printf("❌ WebSocket地址无效: %v\n", err)
+		fullURL = ""
+	} else if parsedURL, parseErr := url.Parse(fullURL); parseErr == nil {
+		// 不在日志输出 query，避免泄露节点密钥。
+		fmt.Printf("🔗 WebSocket连接目标: %s://%s%s\n", parsedURL.Scheme, parsedURL.Host, parsedURL.Path)
+	}
 
 	reporter := NewWebSocketReporter(fullURL, secret)
 	// 保存 addr, secret, version 供重连时使用

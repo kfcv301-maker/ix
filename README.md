@@ -69,6 +69,8 @@ curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/install.sh | 
 
 脚本会根据服务器架构下载 `amd64` 或 `arm64` Agent，并在写入 `/etc/flux-panel-agent/gost` 前校验 SHA-256。它会创建 `flux-panel-agent.service` 并立即启动；重新安装 Agent 会短暂重启该节点进程，但不会修改面板数据库中的节点与转发记录。
 
+节点对接支持 HTTP 和 HTTPS。网站配置中填写 `http://面板地址` 时，Agent 使用 `ws://` 和 HTTP；填写 `https://面板域名` 时，Agent 自动使用 `wss://` 和 HTTPS 上报。HTTPS 必须使用有效证书和域名，不会关闭证书校验。没有写协议的纯 `域名:端口` 会按 HTTP/WS 兼容模式处理。
+
 节点安装时会先检测内核版本、CPU、内存、默认出口网卡以及 BBR/FQ 支持，再做 TCP 调优，最后才下载和启动 Agent。调优写入 `/etc/sysctl.d/99-flux-panel-network.conf`，不需要额外确认。
 
 | 自动档位 | 选择条件 | 单连接收发缓存上限 | 接入 / SYN / 收包队列 |
