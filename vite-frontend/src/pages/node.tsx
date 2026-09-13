@@ -51,6 +51,19 @@ interface NodeSystemInfo {
     cpuCores: number;
     memoryTotal: number;
     diskTotal: number;
+    memoryUsed?: number;
+    memoryAvailable?: number;
+    memoryCached?: number;
+    swapUsed?: number;
+    swapTotal?: number;
+    agentRss?: number;
+    agentHeapAlloc?: number;
+    goroutines?: number;
+    diskUsed?: number;
+    diskUsedPercent?: number;
+    load1?: number;
+    tcpConnections?: number;
+    udpConnections?: number;
 }
 
 interface MetricSample {
@@ -59,6 +72,10 @@ interface MetricSample {
   memoryUsage: number;
   uploadSpeed: number;
   downloadSpeed: number;
+  tcpConnections?: number;
+  udpConnections?: number;
+  memoryAvailable?: number;
+  agentRss?: number;
 }
 
 function MetricSparkline({
@@ -68,7 +85,7 @@ function MetricSparkline({
   ariaLabel,
 }: {
   data: MetricSample[];
-  dataKey: keyof Pick<MetricSample, 'cpuUsage' | 'memoryUsage' | 'uploadSpeed' | 'downloadSpeed'>;
+  dataKey: keyof Pick<MetricSample, 'cpuUsage' | 'memoryUsage' | 'uploadSpeed' | 'downloadSpeed' | 'tcpConnections' | 'udpConnections' | 'memoryAvailable' | 'agentRss'>;
   stroke: string;
   ariaLabel: string;
 }) {
@@ -253,6 +270,13 @@ export default function NodePage() {
               const numberValue = Number(value);
               return Number.isFinite(numberValue) && numberValue >= 0 ? numberValue : 0;
             };
+            // 新增指标必须区分“真实的 0”和“旧 Agent 未上报”，否则旧节点会被
+            // 错误显示为 0 个连接、0 B 可用内存。
+            const toOptionalNumber = (value: unknown): number | undefined => {
+              if (value === undefined || value === null || value === '') return undefined;
+              const numberValue = Number(value);
+              return Number.isFinite(numberValue) && numberValue >= 0 ? numberValue : undefined;
+            };
             const toPercentage = (value: unknown): number => Math.min(100, toFiniteNumber(value));
             const currentUpload = toFiniteNumber(systemInfo.bytes_transmitted);
             const currentDownload = toFiniteNumber(systemInfo.bytes_received);
@@ -302,6 +326,19 @@ export default function NodePage() {
               cpuCores,
               memoryTotal,
               diskTotal,
+              memoryUsed: toOptionalNumber(systemInfo.memory_used),
+              memoryAvailable: toOptionalNumber(systemInfo.memory_available),
+              memoryCached: toOptionalNumber(systemInfo.memory_cached),
+              swapUsed: toOptionalNumber(systemInfo.swap_used),
+              swapTotal: toOptionalNumber(systemInfo.swap_total),
+              agentRss: toOptionalNumber(systemInfo.agent_rss),
+              agentHeapAlloc: toOptionalNumber(systemInfo.agent_heap_alloc),
+              goroutines: toOptionalNumber(systemInfo.goroutines),
+              diskUsed: toOptionalNumber(systemInfo.disk_used),
+              diskUsedPercent: toOptionalNumber(systemInfo.disk_used_percent),
+              load1: toOptionalNumber(systemInfo.load_1),
+              tcpConnections: toOptionalNumber(systemInfo.tcp_connections),
+              udpConnections: toOptionalNumber(systemInfo.udp_connections),
             };
 
             appendMetricSample(node.id, {
@@ -310,6 +347,10 @@ export default function NodePage() {
               memoryUsage: nextSystemInfo.memoryUsage,
               uploadSpeed: nextSystemInfo.uploadSpeed,
               downloadSpeed: nextSystemInfo.downloadSpeed,
+              tcpConnections: nextSystemInfo.tcpConnections,
+              udpConnections: nextSystemInfo.udpConnections,
+              memoryAvailable: nextSystemInfo.memoryAvailable,
+              agentRss: nextSystemInfo.agentRss,
             });
 
             return {
@@ -411,6 +452,17 @@ export default function NodePage() {
   const formatCapacity = (bytes: number): string => {
     if (!bytes) return '--';
     return formatTraffic(bytes);
+  };
+
+  const formatOptionalCapacity = (bytes?: number): string =>
+    bytes === undefined ? '--' : formatTraffic(bytes);
+
+  const formatOptionalNumber = (value?: number, digits = 0): string =>
+    value === undefined ? '--' : value.toFixed(digits);
+
+  const formatOptionalRatio = (used?: number, total?: number): string => {
+    if (used === undefined || !total) return '--';
+    return `${formatTraffic(used)} / ${formatTraffic(total)}`;
   };
 
   const formatChartTime = (timestamp: number): string =>
@@ -805,7 +857,11 @@ export default function NodePage() {
                       </div>
                       <div className="rounded bg-default-50 px-1.5 py-1.5 dark:bg-default-100">
                         <div className="text-default-500">硬盘</div>
-                        <div className="mt-0.5 font-mono text-foreground">{formatCapacity(node.systemInfo?.diskTotal || 0)}</div>
+                        <div className="mt-0.5 font-mono text-foreground">
+                          {node.systemInfo?.diskUsed === undefined
+                            ? formatCapacity(node.systemInfo?.diskTotal || 0)
+                            : formatOptionalRatio(node.systemInfo.diskUsed, node.systemInfo.diskTotal)}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -898,6 +954,36 @@ export default function NodePage() {
                       </div>
                     </div>
 
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div className="rounded bg-default-50 p-2 text-center dark:bg-default-100">
+                        <div className="text-default-600">TCP 已建立</div>
+                        <div className="mt-0.5 font-mono text-foreground">
+                          {node.connectionStatus === 'online' ? formatOptionalNumber(node.systemInfo?.tcpConnections) : '-'}
+                        </div>
+                      </div>
+                      <div className="rounded bg-default-50 p-2 text-center dark:bg-default-100">
+                        <div className="text-default-600">UDP 活动套接字</div>
+                        <div className="mt-0.5 font-mono text-foreground">
+                          {node.connectionStatus === 'online' ? formatOptionalNumber(node.systemInfo?.udpConnections) : '-'}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div className="rounded bg-default-50 p-2 dark:bg-default-100">
+                        <div className="text-default-600">内存已用 / 总量</div>
+                        <div className="mt-0.5 font-mono text-foreground">
+                          {formatOptionalRatio(node.systemInfo?.memoryUsed, node.systemInfo?.memoryTotal)}
+                        </div>
+                      </div>
+                      <div className="rounded bg-default-50 p-2 dark:bg-default-100">
+                        <div className="text-default-600">可用 / 缓存</div>
+                        <div className="mt-0.5 font-mono text-foreground">
+                          {formatOptionalCapacity(node.systemInfo?.memoryAvailable)} / {formatOptionalCapacity(node.systemInfo?.memoryCached)}
+                        </div>
+                      </div>
+                    </div>
+
                     {/* 小型实时曲线。完整曲线在“查看曲线”中展开。 */}
                     <div className="rounded-md border border-divider p-2.5">
                       <div className="mb-2 flex items-center justify-between text-xs">
@@ -984,11 +1070,23 @@ export default function NodePage() {
             <ModalHeader>{monitorNode ? `${monitorNode.name} · 实时监控` : '实时监控'}</ModalHeader>
             <ModalBody>
               {monitorNode?.systemInfo && (
-                <div className="grid grid-cols-3 gap-3 rounded-lg bg-default-50 p-3 text-center text-sm dark:bg-default-100">
-                  <div><div className="text-default-500">CPU</div><div className="mt-1 font-mono">{monitorNode.systemInfo.cpuCores ? `${monitorNode.systemInfo.cpuCores} 核` : '--'}</div></div>
-                  <div><div className="text-default-500">内存</div><div className="mt-1 font-mono">{formatCapacity(monitorNode.systemInfo.memoryTotal)}</div></div>
-                  <div><div className="text-default-500">硬盘</div><div className="mt-1 font-mono">{formatCapacity(monitorNode.systemInfo.diskTotal)}</div></div>
-                </div>
+                <>
+                  <div className="grid grid-cols-3 gap-3 rounded-lg bg-default-50 p-3 text-center text-sm dark:bg-default-100">
+                    <div><div className="text-default-500">CPU</div><div className="mt-1 font-mono">{monitorNode.systemInfo.cpuCores ? `${monitorNode.systemInfo.cpuCores} 核` : '--'}</div></div>
+                    <div><div className="text-default-500">内存</div><div className="mt-1 font-mono">{formatCapacity(monitorNode.systemInfo.memoryTotal)}</div></div>
+                    <div><div className="text-default-500">硬盘</div><div className="mt-1 font-mono">{monitorNode.systemInfo.diskUsed === undefined ? formatCapacity(monitorNode.systemInfo.diskTotal) : formatOptionalRatio(monitorNode.systemInfo.diskUsed, monitorNode.systemInfo.diskTotal)}</div></div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3 rounded-lg border border-divider p-3 text-center text-sm md:grid-cols-4">
+                    <div><div className="text-default-500">TCP 已建立</div><div className="mt-1 font-mono">{formatOptionalNumber(monitorNode.systemInfo.tcpConnections)}</div></div>
+                    <div><div className="text-default-500">UDP 活动套接字</div><div className="mt-1 font-mono">{formatOptionalNumber(monitorNode.systemInfo.udpConnections)}</div></div>
+                    <div><div className="text-default-500">内存可用</div><div className="mt-1 font-mono">{formatOptionalCapacity(monitorNode.systemInfo.memoryAvailable)}</div></div>
+                    <div><div className="text-default-500">缓存</div><div className="mt-1 font-mono">{formatOptionalCapacity(monitorNode.systemInfo.memoryCached)}</div></div>
+                    <div><div className="text-default-500">Swap 已用</div><div className="mt-1 font-mono">{formatOptionalRatio(monitorNode.systemInfo.swapUsed, monitorNode.systemInfo.swapTotal)}</div></div>
+                    <div><div className="text-default-500">Agent RSS</div><div className="mt-1 font-mono">{formatOptionalCapacity(monitorNode.systemInfo.agentRss)}</div></div>
+                    <div><div className="text-default-500">Go 堆</div><div className="mt-1 font-mono">{formatOptionalCapacity(monitorNode.systemInfo.agentHeapAlloc)}</div></div>
+                    <div><div className="text-default-500">goroutine / 负载</div><div className="mt-1 font-mono">{formatOptionalNumber(monitorNode.systemInfo.goroutines)} / {formatOptionalNumber(monitorNode.systemInfo.load1, 2)}</div></div>
+                  </div>
+                </>
               )}
 
               {monitorSamples.length < 2 ? (
@@ -1032,9 +1130,47 @@ export default function NodePage() {
                       </ResponsiveContainer>
                     </div>
                   </div>
+
+                  <div>
+                    <div className="mb-2 text-sm font-medium text-foreground">Agent 连接数</div>
+                    <div className="h-56 w-full">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={monitorSamples} margin={{ top: 8, right: 18, bottom: 4, left: 0 }}>
+                          <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
+                          <XAxis dataKey="timestamp" tickFormatter={formatChartTime} minTickGap={48} tick={{ fontSize: 11 }} />
+                          <YAxis allowDecimals={false} tick={{ fontSize: 11 }} width={42} />
+                          <Tooltip
+                            labelFormatter={(value) => `时间：${formatChartTime(Number(value))}`}
+                            formatter={(value, name) => [Number(value).toFixed(0), name]}
+                          />
+                          <Line connectNulls type="monotone" dataKey="tcpConnections" name="TCP 已建立" stroke="#f97316" strokeWidth={2} dot={false} isAnimationActive={false} />
+                          <Line connectNulls type="monotone" dataKey="udpConnections" name="UDP 活动套接字" stroke="#06b6d4" strokeWidth={2} dot={false} isAnimationActive={false} />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="mb-2 text-sm font-medium text-foreground">内存可用量与 Agent RSS</div>
+                    <div className="h-56 w-full">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={monitorSamples} margin={{ top: 8, right: 18, bottom: 4, left: 0 }}>
+                          <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
+                          <XAxis dataKey="timestamp" tickFormatter={formatChartTime} minTickGap={48} tick={{ fontSize: 11 }} />
+                          <YAxis tickFormatter={(value) => formatTraffic(Number(value))} tick={{ fontSize: 11 }} width={68} />
+                          <Tooltip
+                            labelFormatter={(value) => `时间：${formatChartTime(Number(value))}`}
+                            formatter={(value, name) => [formatTraffic(Number(value)), name]}
+                          />
+                          <Line connectNulls type="monotone" dataKey="memoryAvailable" name="可用内存" stroke="#22c55e" strokeWidth={2} dot={false} isAnimationActive={false} />
+                          <Line connectNulls type="monotone" dataKey="agentRss" name="Agent RSS" stroke="#ec4899" strokeWidth={2} dot={false} isAnimationActive={false} />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
                 </div>
               )}
-              <p className="text-xs text-default-400">曲线保留当前页面最近约 3 分钟的实时样本；刷新页面后重新开始采集。</p>
+              <p className="text-xs text-default-400">曲线保留当前页面最近约 3 分钟的实时样本；刷新页面后重新开始采集。TCP/UDP 统计为 Agent/GOST 进程套接字，不等同于账号在线人数。</p>
             </ModalBody>
             <ModalFooter>
               <Button variant="flat" onPress={() => setMonitorNodeId(null)}>关闭</Button>

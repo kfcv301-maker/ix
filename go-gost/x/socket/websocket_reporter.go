@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"os"
+	"runtime"
 	"strconv"
 	"strings"
-	"sync" // 新增：用于管理连接状态的互斥锁
+	"sync"
 	"time"
 
 	"github.com/go-gost/x/config"
@@ -20,21 +22,35 @@ import (
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/disk"
 	"github.com/shirou/gopsutil/v3/host"
+	"github.com/shirou/gopsutil/v3/load"
 	"github.com/shirou/gopsutil/v3/mem"
 	psnet "github.com/shirou/gopsutil/v3/net"
-	"os"
+	"github.com/shirou/gopsutil/v3/process"
 )
 
 // SystemInfo 系统信息结构体
 type SystemInfo struct {
-	Uptime           uint64  `json:"uptime"`            // 开机时间	（秒）
-	BytesReceived    uint64  `json:"bytes_received"`    // 接收字节数
-	BytesTransmitted uint64  `json:"bytes_transmitted"` // 发送字节数
-	CPUUsage         float64 `json:"cpu_usage"`         // CPU使用率（百分比）
-	MemoryUsage      float64 `json:"memory_usage"`      // 内存使用率（百分比）
-	CPUCores         int     `json:"cpu_cores"`         // CPU逻辑核心数
-	MemoryTotal      uint64  `json:"memory_total"`      // 内存总量（字节）
-	DiskTotal        uint64  `json:"disk_total"`        // 根分区总量（字节）
+	Uptime           uint64   `json:"uptime"`            // 开机时间	（秒）
+	BytesReceived    uint64   `json:"bytes_received"`    // 接收字节数
+	BytesTransmitted uint64   `json:"bytes_transmitted"` // 发送字节数
+	CPUUsage         float64  `json:"cpu_usage"`         // CPU使用率（百分比）
+	MemoryUsage      float64  `json:"memory_usage"`      // 内存使用率（百分比）
+	CPUCores         int      `json:"cpu_cores"`         // CPU逻辑核心数
+	MemoryTotal      uint64   `json:"memory_total"`      // 内存总量（字节）
+	DiskTotal        uint64   `json:"disk_total"`        // 根分区总量（字节）
+	MemoryUsed       *uint64  `json:"memory_used,omitempty"`
+	MemoryAvailable  *uint64  `json:"memory_available,omitempty"`
+	MemoryCached     *uint64  `json:"memory_cached,omitempty"`
+	SwapUsed         *uint64  `json:"swap_used,omitempty"`
+	SwapTotal        *uint64  `json:"swap_total,omitempty"`
+	AgentRSS         *uint64  `json:"agent_rss,omitempty"`
+	AgentHeapAlloc   *uint64  `json:"agent_heap_alloc,omitempty"`
+	Goroutines       *uint64  `json:"goroutines,omitempty"`
+	DiskUsed         *uint64  `json:"disk_used,omitempty"`
+	DiskUsedPercent  *float64 `json:"disk_used_percent,omitempty"`
+	Load1            *float64 `json:"load_1,omitempty"`
+	TCPConnections   *uint64  `json:"tcp_connections,omitempty"`
+	UDPConnections   *uint64  `json:"udp_connections,omitempty"`
 }
 
 // NetworkStats 网络统计信息
@@ -53,13 +69,35 @@ type MemoryInfo struct {
 	Usage float64 `json:"usage"` // 内存使用率（百分比）
 }
 
-// HardwareInfo 是节点的静态硬件容量。它只读取本机系统信息，不涉及
-// GOST 服务、转发规则或网络配置。
-type HardwareInfo struct {
-	CPUCores    int
-	MemoryTotal uint64
-	DiskTotal   uint64
+// ExtendedSystemInfo contains metrics that are more expensive to obtain than
+// CPU and traffic counters. It is cached for a short period so a busy node is
+// not forced to rescan sockets and process data on every heartbeat.
+type ExtendedSystemInfo struct {
+	MemoryTotal     uint64
+	MemoryUsed      *uint64
+	MemoryAvailable *uint64
+	MemoryCached    *uint64
+	SwapUsed        *uint64
+	SwapTotal       *uint64
+	CPUCores        int
+	DiskTotal       uint64
+	DiskUsed        *uint64
+	DiskUsedPercent *float64
+	Load1           *float64
+	AgentRSS        *uint64
+	AgentHeapAlloc  *uint64
+	Goroutines      *uint64
+	TCPConnections  *uint64
+	UDPConnections  *uint64
 }
+
+var extendedSystemInfoCache struct {
+	sync.Mutex
+	value       ExtendedSystemInfo
+	collectedAt time.Time
+}
+
+const extendedMetricInterval = 5 * time.Second
 
 // CommandMessage 命令消息结构体
 type CommandMessage struct {
@@ -356,7 +394,7 @@ func (w *WebSocketReporter) collectSystemInfo() SystemInfo {
 	networkStats := getNetworkStats()
 	cpuInfo := getCPUInfo()
 	memoryInfo := getMemoryInfo()
-	hardwareInfo := getHardwareInfo()
+	extendedInfo := getExtendedSystemInfo()
 
 	return SystemInfo{
 		Uptime:           getUptime(),
@@ -364,9 +402,22 @@ func (w *WebSocketReporter) collectSystemInfo() SystemInfo {
 		BytesTransmitted: networkStats.BytesTransmitted,
 		CPUUsage:         cpuInfo.Usage,
 		MemoryUsage:      memoryInfo.Usage,
-		CPUCores:         hardwareInfo.CPUCores,
-		MemoryTotal:      hardwareInfo.MemoryTotal,
-		DiskTotal:        hardwareInfo.DiskTotal,
+		CPUCores:         extendedInfo.CPUCores,
+		MemoryTotal:      extendedInfo.MemoryTotal,
+		DiskTotal:        extendedInfo.DiskTotal,
+		MemoryUsed:       extendedInfo.MemoryUsed,
+		MemoryAvailable:  extendedInfo.MemoryAvailable,
+		MemoryCached:     extendedInfo.MemoryCached,
+		SwapUsed:         extendedInfo.SwapUsed,
+		SwapTotal:        extendedInfo.SwapTotal,
+		AgentRSS:         extendedInfo.AgentRSS,
+		AgentHeapAlloc:   extendedInfo.AgentHeapAlloc,
+		Goroutines:       extendedInfo.Goroutines,
+		DiskUsed:         extendedInfo.DiskUsed,
+		DiskUsedPercent:  extendedInfo.DiskUsedPercent,
+		Load1:            extendedInfo.Load1,
+		TCPConnections:   extendedInfo.TCPConnections,
+		UDPConnections:   extendedInfo.UDPConnections,
 	}
 }
 
@@ -1100,24 +1151,92 @@ func getMemoryInfo() MemoryInfo {
 	return memInfo
 }
 
-// getHardwareInfo 获取节点硬件容量。所有调用均为只读；任一项不可用时
-// 保留为 0，让面板显示为未知而不是伪造数据。
-func getHardwareInfo() HardwareInfo {
-	var hardwareInfo HardwareInfo
+// getExtendedSystemInfo collects node metrics without touching GOST services,
+// forwarding rules or network configuration. Failed probes remain nil so the
+// panel can distinguish unavailable data from a real zero value.
+func getExtendedSystemInfo() ExtendedSystemInfo {
+	extendedSystemInfoCache.Lock()
+	defer extendedSystemInfoCache.Unlock()
 
-	if cores, err := cpu.Counts(true); err == nil && cores > 0 {
-		hardwareInfo.CPUCores = cores
+	if !extendedSystemInfoCache.collectedAt.IsZero() &&
+		time.Since(extendedSystemInfoCache.collectedAt) < extendedMetricInterval {
+		return extendedSystemInfoCache.value
 	}
 
+	info := ExtendedSystemInfo{}
 	if vmStat, err := mem.VirtualMemory(); err == nil {
-		hardwareInfo.MemoryTotal = vmStat.Total
+		info.MemoryTotal = vmStat.Total
+		info.MemoryUsed = uint64Ptr(vmStat.Used)
+		info.MemoryAvailable = uint64Ptr(vmStat.Available)
+		info.MemoryCached = uint64Ptr(vmStat.Cached)
 	}
-
+	if swapStat, err := mem.SwapMemory(); err == nil {
+		info.SwapUsed = uint64Ptr(swapStat.Used)
+		info.SwapTotal = uint64Ptr(swapStat.Total)
+	}
+	if cores, err := cpu.Counts(true); err == nil && cores > 0 {
+		info.CPUCores = cores
+	}
 	if diskUsage, err := disk.Usage("/"); err == nil {
-		hardwareInfo.DiskTotal = diskUsage.Total
+		info.DiskTotal = diskUsage.Total
+		info.DiskUsed = uint64Ptr(diskUsage.Used)
+		info.DiskUsedPercent = float64Ptr(diskUsage.UsedPercent)
+	}
+	if avg, err := load.Avg(); err == nil {
+		info.Load1 = float64Ptr(avg.Load1)
 	}
 
-	return hardwareInfo
+	var memStats runtime.MemStats
+	runtime.ReadMemStats(&memStats)
+	info.AgentHeapAlloc = uint64Ptr(memStats.HeapAlloc)
+	info.Goroutines = uint64Ptr(uint64(runtime.NumGoroutine()))
+	if currentProcess, err := process.NewProcess(int32(os.Getpid())); err == nil {
+		if memoryInfo, err := currentProcess.MemoryInfo(); err == nil && memoryInfo != nil {
+			info.AgentRSS = uint64Ptr(memoryInfo.RSS)
+		}
+	}
+	info.TCPConnections, info.UDPConnections = getAgentConnectionCounts()
+
+	extendedSystemInfoCache.value = info
+	extendedSystemInfoCache.collectedAt = time.Now()
+	return info
+}
+
+// getAgentConnectionCounts intentionally looks only at this process. A GOST
+// agent embeds the forwarding services, so this avoids mixing SSH, web panels,
+// databases and other programs running on the node into the displayed count.
+func getAgentConnectionCounts() (*uint64, *uint64) {
+	pid := int32(os.Getpid())
+	var tcpCount uint64
+	if connections, err := psnet.ConnectionsPid("tcp", pid); err == nil {
+		for _, connection := range connections {
+			if strings.EqualFold(connection.Status, "ESTABLISHED") {
+				tcpCount++
+			}
+		}
+	} else {
+		return nil, nil
+	}
+
+	var udpCount uint64
+	if connections, err := psnet.ConnectionsPid("udp", pid); err == nil {
+		for _, connection := range connections {
+			if connection.Laddr.Port != 0 {
+				udpCount++
+			}
+		}
+	} else {
+		return uint64Ptr(tcpCount), nil
+	}
+	return uint64Ptr(tcpCount), uint64Ptr(udpCount)
+}
+
+func uint64Ptr(value uint64) *uint64 {
+	return &value
+}
+
+func float64Ptr(value float64) *float64 {
+	return &value
 }
 
 // StartWebSocketReporterWithConfig 使用配置字段启动WebSocket报告器
