@@ -69,7 +69,16 @@ curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/install.sh | 
 
 脚本会根据服务器架构下载 `amd64` 或 `arm64` Agent，并在写入 `/etc/flux-panel-agent/gost` 前校验 SHA-256。它会创建 `flux-panel-agent.service` 并立即启动；重新安装 Agent 会短暂重启该节点进程，但不会修改面板数据库中的节点与转发记录。
 
-节点安装时会先检测内核版本、CPU、内存、默认出口网卡以及 BBR/FQ 支持，再做 TCP 调优，最后才下载和启动 Agent。调优写入 `/etc/sysctl.d/99-flux-panel-network.conf`：接收/发送缓存上限为 16 MB、自动接收缓存、MTU 探测、TCP Fast Open、禁用空闲慢启动、`somaxconn=16384`、`tcp_max_syn_backlog=8192`、`netdev_max_backlog=8192`。支持 BBR/FQ 的节点启用 BBR/FQ；旧内核缺少其中某项时脚本会自动保留可用算法、跳过不支持的参数，Agent 仍会继续安装。需要跳过调优可加 `--skip-tcp-tuning`：
+节点安装时会先检测内核版本、CPU、内存、默认出口网卡以及 BBR/FQ 支持，再做 TCP 调优，最后才下载和启动 Agent。调优写入 `/etc/sysctl.d/99-flux-panel-network.conf`，不需要额外确认。
+
+| 自动档位 | 选择条件 | 单连接收发缓存上限 | 接入 / SYN / 收包队列 |
+| --- | --- | --- | --- |
+| `lite` | 内存低于 1 GB，或单核 | 8 MB | 4096 / 2048 / 4096 |
+| `balanced` | 普通节点 | 16 MB | 16384 / 8192 / 8192 |
+| `performance` | 至少 4 核、4 GB 内存 | 32 MB | 32768 / 16384 / 16384 |
+| `throughput` | 至少 8 核、8 GB 内存 | 64 MB | 65535 / 32768 / 32768 |
+
+所有档位都会开启接收缓存自动调节、MTU 探测、TCP Fast Open，并关闭空闲慢启动。支持 BBR/FQ 的节点启用 BBR/FQ；旧内核缺少其中某项时脚本会自动保留可用算法、跳过不支持的参数，Agent 仍会继续安装。需要跳过调优可加 `--skip-tcp-tuning`：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/install.sh | sudo bash -s -- --server '面板地址:6365' --secret '节点密钥' --skip-tcp-tuning

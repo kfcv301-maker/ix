@@ -16,6 +16,14 @@ SELECTED_CONGESTION_CONTROL=""
 FQ_SUPPORTED=0
 TC_AVAILABLE=0
 APPLIED_SYSCTL_KEYS=()
+TUNING_PROFILE="balanced"
+R_MEM_MAX=16777216
+W_MEM_MAX=16777216
+TCP_RMEM="4096 131072 16777216"
+TCP_WMEM="4096 16384 16777216"
+SOMAXCONN=16384
+TCP_MAX_SYN_BACKLOG=8192
+NETDEV_MAX_BACKLOG=8192
 
 info() { printf '\033[1;34m[INFO]\033[0m %s\n' "$*"; }
 ok() { printf '\033[1;32m[ OK ]\033[0m %s\n' "$*"; }
@@ -56,9 +64,50 @@ detect_host_profile() {
   HOST_CPU_CORES="$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || printf '1')"
   HOST_MEMORY_MB="$(awk '/MemTotal:/ {print int($2 / 1024)}' /proc/meminfo 2>/dev/null || printf '0')"
   info "节点检测：${HOST_CPU_CORES} 核 / ${HOST_MEMORY_MB} MB 内存 / $(uname -r)"
-  if (( HOST_MEMORY_MB > 0 && HOST_MEMORY_MB < 256 )); then
-    info "内存较小：仍保留 16 MB 的 TCP 缓存上限；该值是按连接可申请的上限，不会在启动时预分配。"
+}
+
+select_tuning_profile() {
+  # 缓存上限是“单连接可以申请的最大值”，不会在启动时一次性占满内存。
+  # 仍按机器资源分档，避免小鸡使用过大的队列，高配置机器又被过低队列限制。
+  if (( HOST_MEMORY_MB > 0 && HOST_MEMORY_MB < 1024 )) || (( HOST_CPU_CORES <= 1 )); then
+    TUNING_PROFILE="lite"
+    R_MEM_MAX=8388608
+    W_MEM_MAX=8388608
+    TCP_RMEM="4096 65536 8388608"
+    TCP_WMEM="4096 16384 8388608"
+    SOMAXCONN=4096
+    TCP_MAX_SYN_BACKLOG=2048
+    NETDEV_MAX_BACKLOG=4096
+  elif (( HOST_MEMORY_MB >= 8192 && HOST_CPU_CORES >= 8 )); then
+    TUNING_PROFILE="throughput"
+    R_MEM_MAX=67108864
+    W_MEM_MAX=67108864
+    TCP_RMEM="4096 524288 67108864"
+    TCP_WMEM="4096 131072 67108864"
+    SOMAXCONN=65535
+    TCP_MAX_SYN_BACKLOG=32768
+    NETDEV_MAX_BACKLOG=32768
+  elif (( HOST_MEMORY_MB >= 4096 && HOST_CPU_CORES >= 4 )); then
+    TUNING_PROFILE="performance"
+    R_MEM_MAX=33554432
+    W_MEM_MAX=33554432
+    TCP_RMEM="4096 262144 33554432"
+    TCP_WMEM="4096 65536 33554432"
+    SOMAXCONN=32768
+    TCP_MAX_SYN_BACKLOG=16384
+    NETDEV_MAX_BACKLOG=16384
+  else
+    # 标准档保留你指定的 16 MB / 16384 / 8192 参数。
+    TUNING_PROFILE="balanced"
+    R_MEM_MAX=16777216
+    W_MEM_MAX=16777216
+    TCP_RMEM="4096 131072 16777216"
+    TCP_WMEM="4096 16384 16777216"
+    SOMAXCONN=16384
+    TCP_MAX_SYN_BACKLOG=8192
+    NETDEV_MAX_BACKLOG=8192
   fi
+  info "自动选择 TCP 档位：$TUNING_PROFILE（收发缓存上限 $((R_MEM_MAX / 1024 / 1024)) MB，接入队列 $SOMAXCONN）"
 }
 
 select_tcp_capabilities() {
@@ -128,6 +177,7 @@ apply_tcp_tuning() {
   }
 
   detect_host_profile
+  select_tuning_profile
   select_tcp_capabilities
   local temporary_file
   temporary_file="$(mktemp)"
@@ -140,17 +190,17 @@ EOF
     append_sysctl_if_supported "$temporary_file" net.core.default_qdisc fq
   fi
   append_sysctl_if_supported "$temporary_file" net.ipv4.tcp_congestion_control "$SELECTED_CONGESTION_CONTROL"
-  append_sysctl_if_supported "$temporary_file" net.core.rmem_max 16777216
-  append_sysctl_if_supported "$temporary_file" net.core.wmem_max 16777216
-  append_sysctl_if_supported "$temporary_file" net.ipv4.tcp_rmem "4096 131072 16777216"
-  append_sysctl_if_supported "$temporary_file" net.ipv4.tcp_wmem "4096 16384 16777216"
+  append_sysctl_if_supported "$temporary_file" net.core.rmem_max "$R_MEM_MAX"
+  append_sysctl_if_supported "$temporary_file" net.core.wmem_max "$W_MEM_MAX"
+  append_sysctl_if_supported "$temporary_file" net.ipv4.tcp_rmem "$TCP_RMEM"
+  append_sysctl_if_supported "$temporary_file" net.ipv4.tcp_wmem "$TCP_WMEM"
   append_sysctl_if_supported "$temporary_file" net.ipv4.tcp_moderate_rcvbuf 1
   append_sysctl_if_supported "$temporary_file" net.ipv4.tcp_mtu_probing 1
   append_sysctl_if_supported "$temporary_file" net.ipv4.tcp_fastopen 3
   append_sysctl_if_supported "$temporary_file" net.ipv4.tcp_slow_start_after_idle 0
-  append_sysctl_if_supported "$temporary_file" net.core.somaxconn 16384
-  append_sysctl_if_supported "$temporary_file" net.ipv4.tcp_max_syn_backlog 8192
-  append_sysctl_if_supported "$temporary_file" net.core.netdev_max_backlog 8192
+  append_sysctl_if_supported "$temporary_file" net.core.somaxconn "$SOMAXCONN"
+  append_sysctl_if_supported "$temporary_file" net.ipv4.tcp_max_syn_backlog "$TCP_MAX_SYN_BACKLOG"
+  append_sysctl_if_supported "$temporary_file" net.core.netdev_max_backlog "$NETDEV_MAX_BACKLOG"
 
   # 先应用临时文件；任一内核参数不被支持时，不覆盖原有持久化配置。
   if ! sysctl -p "$temporary_file"; then
