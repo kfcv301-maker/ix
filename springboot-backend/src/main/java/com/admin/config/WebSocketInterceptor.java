@@ -15,6 +15,7 @@ import org.springframework.web.socket.WebSocketHandler;
 import org.springframework.web.socket.server.support.HttpSessionHandshakeInterceptor;
 
 import javax.annotation.Resource;
+import javax.servlet.http.HttpServletRequest;
 import java.net.InetSocketAddress;
 import java.util.Map;
 import java.util.Objects;
@@ -35,14 +36,15 @@ public class WebSocketInterceptor extends HttpSessionHandshakeInterceptor {
     @Override
     public boolean beforeHandshake(ServerHttpRequest request, ServerHttpResponse response, WebSocketHandler wsHandler, Map<String, Object> attributes) throws Exception {
         ServletServerHttpRequest serverHttpRequest = (ServletServerHttpRequest) request;
-        String secret = serverHttpRequest.getServletRequest().getParameter("secret");
+        HttpServletRequest servletRequest = serverHttpRequest.getServletRequest();
+        String secret = servletRequest.getParameter("secret");
         String type = serverHttpRequest.getServletRequest().getParameter("type");
         String version = serverHttpRequest.getServletRequest().getParameter("version");
         String http = serverHttpRequest.getServletRequest().getParameter("http");
         String tls = serverHttpRequest.getServletRequest().getParameter("tls");
         String socks = serverHttpRequest.getServletRequest().getParameter("socks");
         if (Objects.equals(type, "1")) {
-            System.out.println("type: " + type + " - version: " + version + " - secret: " + secret + " - IP: " + getClientIp(request));
+            secret = getNodeToken(servletRequest, secret);
             Node node = nodeService.getOne(new QueryWrapper<Node>().eq("secret", secret));
             if (node == null) {
                 log.info("节点验证失败：未找到匹配的secret");
@@ -71,6 +73,17 @@ public class WebSocketInterceptor extends HttpSessionHandshakeInterceptor {
             return remoteAddress.getAddress().getHostAddress();
         }
         return null;
+    }
+
+    private String getNodeToken(HttpServletRequest request, String legacySecret) {
+        String authorization = request.getHeader("Authorization");
+        if (authorization != null && authorization.regionMatches(true, 0, "Bearer ", 0, 7)) {
+            String token = authorization.substring(7).trim();
+            if (!token.isEmpty()) {
+                return token;
+            }
+        }
+        return legacySecret;
     }
 
 

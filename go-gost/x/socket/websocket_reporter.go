@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"runtime"
@@ -264,7 +265,7 @@ func (w *WebSocketReporter) connect() error {
 
 	// 使用最新配置重新构建 URL。面板地址是 https:// 时必须改用 wss://，
 	// 不能再像旧版一样无条件拼接 ws://。
-	currentURL, err := buildSystemInfoWebSocketURL(w.addr, w.secret, w.version, cfg.Http, cfg.Tls, cfg.Socks)
+	currentURL, err := buildSystemInfoWebSocketURL(w.addr, w.version, cfg.Http, cfg.Tls, cfg.Socks)
 	if err != nil {
 		return err
 	}
@@ -277,7 +278,9 @@ func (w *WebSocketReporter) connect() error {
 	dialer := websocket.DefaultDialer
 	dialer.HandshakeTimeout = 10 * time.Second
 
-	conn, _, err := dialer.Dial(u.String(), nil)
+	headers := http.Header{}
+	headers.Set("Authorization", "Bearer "+w.secret)
+	conn, _, err := dialer.Dial(u.String(), headers)
 	if err != nil {
 		return fmt.Errorf("连接WebSocket失败: %v", err)
 	}
@@ -305,7 +308,7 @@ func (w *WebSocketReporter) connect() error {
 
 // buildSystemInfoWebSocketURL 同时支持以下面板地址：
 // host:port（默认 ws）、http://（ws）、https://（wss）、ws://、wss://。
-func buildSystemInfoWebSocketURL(addr, secret, version string, http, tls, socks int) (string, error) {
+func buildSystemInfoWebSocketURL(addr, version string, http, tls, socks int) (string, error) {
 	rawAddr := strings.TrimSpace(addr)
 	if rawAddr == "" {
 		return "", fmt.Errorf("面板地址为空")
@@ -336,7 +339,6 @@ func buildSystemInfoWebSocketURL(addr, secret, version string, http, tls, socks 
 	u.Path = strings.TrimRight(u.Path, "/") + "/system-info"
 	query := u.Query()
 	query.Set("type", "1")
-	query.Set("secret", secret)
 	query.Set("version", version)
 	query.Set("http", strconv.Itoa(http))
 	query.Set("tls", strconv.Itoa(tls))
@@ -1243,7 +1245,7 @@ func float64Ptr(value float64) *float64 {
 func StartWebSocketReporterWithConfig(addr string, secret string, http int, tls int, socks int, version string) *WebSocketReporter {
 
 	// 预先校验地址。后续重连仍会从 config.json 读取最新协议开关。
-	fullURL, err := buildSystemInfoWebSocketURL(addr, secret, version, http, tls, socks)
+	fullURL, err := buildSystemInfoWebSocketURL(addr, version, http, tls, socks)
 	if err != nil {
 		fmt.Printf("❌ WebSocket地址无效: %v\n", err)
 		fullURL = ""

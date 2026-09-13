@@ -16,6 +16,7 @@ import org.springframework.web.bind.annotation.*;
 import lombok.extern.slf4j.Slf4j;
 
 import javax.annotation.Resource;
+import javax.servlet.http.HttpServletRequest;
 import java.math.BigDecimal;
 import java.util.Date;
 import java.util.List;
@@ -100,8 +101,10 @@ public class FlowController extends BaseController {
     }
 
     @PostMapping("/config")
-    @LogAnnotation
-    public String config(@RequestBody String rawData, String secret) {
+    public String config(@RequestBody String rawData,
+                         @RequestParam(value = "secret", required = false) String legacySecret,
+                         HttpServletRequest request) {
+        String secret = getNodeToken(request, legacySecret);
         Node node = nodeService.getOne(new QueryWrapper<Node>().eq("secret", secret));
         if (node == null) return SUCCESS_RESPONSE;
 
@@ -143,8 +146,10 @@ public class FlowController extends BaseController {
      * @return 处理结果
      */
     @RequestMapping("/upload")
-    @LogAnnotation
-    public String uploadFlowData(@RequestBody String rawData, String secret) {
+    public String uploadFlowData(@RequestBody String rawData,
+                                 @RequestParam(value = "secret", required = false) String legacySecret,
+                                 HttpServletRequest request) {
+        String secret = getNodeToken(request, legacySecret);
         // 1. 验证节点权限
         if (!isValidNode(secret)) {
             return SUCCESS_RESPONSE;
@@ -407,6 +412,17 @@ public class FlowController extends BaseController {
     private boolean isValidNode(String secret) {
         int nodeCount = nodeService.count(new QueryWrapper<Node>().eq("secret", secret));
         return nodeCount > 0;
+    }
+
+    private String getNodeToken(HttpServletRequest request, String legacySecret) {
+        String authorization = request.getHeader("Authorization");
+        if (authorization != null && authorization.regionMatches(true, 0, "Bearer ", 0, 7)) {
+            String token = authorization.substring(7).trim();
+            if (!token.isEmpty()) {
+                return token;
+            }
+        }
+        return legacySecret;
     }
 
     private String[] parseServiceName(String serviceName) {

@@ -18,6 +18,7 @@ import (
 
 var httpReportURL string
 var configReportURL string
+var httpReportToken string
 var httpAESCrypto *crypto.AESCrypto // 新增：HTTP上报加密器
 
 // TrafficReportItem 流量报告项（压缩格式）
@@ -29,16 +30,17 @@ type TrafficReportItem struct {
 
 func SetHTTPReportURL(addr string, secret string) {
 	var err error
-	httpReportURL, err = buildPanelHTTPURL(addr, "/flow/upload", secret)
+	httpReportURL, err = buildPanelHTTPURL(addr, "/flow/upload")
 	if err != nil {
 		fmt.Printf("❌ 设置流量上报地址失败: %v\n", err)
 		httpReportURL = ""
 	}
-	configReportURL, err = buildPanelHTTPURL(addr, "/flow/config", secret)
+	configReportURL, err = buildPanelHTTPURL(addr, "/flow/config")
 	if err != nil {
 		fmt.Printf("❌ 设置配置上报地址失败: %v\n", err)
 		configReportURL = ""
 	}
+	httpReportToken = secret
 
 	// 创建 AES 加密器
 	httpAESCrypto, err = crypto.NewAESCrypto(secret)
@@ -89,6 +91,7 @@ func sendTrafficReport(ctx context.Context, reportItems TrafficReportItem) (bool
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "GOST-Traffic-Reporter/1.0")
+	req.Header.Set("Authorization", "Bearer "+httpReportToken)
 
 	client := &http.Client{
 		Timeout: 5 * time.Second,
@@ -165,6 +168,7 @@ func sendConfigReport(ctx context.Context) (bool, error) {
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "Config-Reporter/1.0")
+	req.Header.Set("Authorization", "Bearer "+httpReportToken)
 
 	client := &http.Client{
 		Timeout: 10 * time.Second, // 配置上报可以稍长一些
@@ -296,7 +300,7 @@ func getConfigData() ([]byte, error) {
 
 // buildPanelHTTPURL 将面板地址转换为流量/配置上报地址。
 // https:// 与 wss:// 地址会走 HTTPS，避免节点在 HTTPS 面板上回退成明文 HTTP。
-func buildPanelHTTPURL(addr, endpoint, secret string) (string, error) {
+func buildPanelHTTPURL(addr, endpoint string) (string, error) {
 	rawAddr := strings.TrimSpace(addr)
 	if rawAddr == "" {
 		return "", fmt.Errorf("面板地址为空")
@@ -325,8 +329,5 @@ func buildPanelHTTPURL(addr, endpoint, secret string) (string, error) {
 	}
 
 	u.Path = strings.TrimRight(u.Path, "/") + endpoint
-	query := u.Query()
-	query.Set("secret", secret)
-	u.RawQuery = query.Encode()
 	return u.String(), nil
 }

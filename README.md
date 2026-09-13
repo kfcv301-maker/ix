@@ -62,7 +62,7 @@ curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/panel_install
 
 ### 安装节点 Agent
 
-在面板的节点管理页面复制安装命令即可。手动安装格式如下，其中 `面板地址` 应是节点能够访问的地址，端口通常为后端端口 `6365`：
+在面板的节点管理页面复制安装命令即可。每个节点都有独立密钥；新装 Agent 会用它作为请求 Token。传统直连可填写节点能够访问的 `面板地址:6365`：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/install.sh | sudo bash -s -- --server '面板地址:6365' --secret '节点密钥'
@@ -70,7 +70,7 @@ curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/install.sh | 
 
 脚本会根据服务器架构下载 `amd64` 或 `arm64` Agent，并在写入 `/etc/flux-panel-agent/gost` 前校验 SHA-256。它会创建 `flux-panel-agent.service` 并立即启动；重新安装 Agent 会短暂重启该节点进程，但不会修改面板数据库中的节点与转发记录。
 
-节点对接支持 HTTP 和 HTTPS。网站配置中填写 `http://面板地址` 时，Agent 使用 `ws://` 和 HTTP；填写 `https://面板域名` 时，Agent 自动使用 `wss://` 和 HTTPS 上报。HTTPS 必须使用有效证书和域名，不会关闭证书校验。没有写协议的纯 `域名:端口` 会按 HTTP/WS 兼容模式处理。
+推荐在网站配置中填写 `https://panel.example.com`。这样 Agent 使用 `wss://panel.example.com/system-info` 保持通信，并通过 `https://panel.example.com/flow/*` 上报数据，外部不需要暴露或填写固定后端端口。新 Agent 将独立节点密钥放在 `Authorization: Bearer` 请求头中；后端仍接受旧 Agent 的 URL 密钥参数，已有节点无需重装。域名的反向代理须把 `/system-info`（WebSocket）、`/flow/upload` 与 `/flow/config` 转到后端，并使用有效 HTTPS 证书。填写 `http://面板地址` 时使用 `ws://` 和 HTTP；未写协议的纯 `域名:端口` 仍按 HTTP/WS 兼容模式处理。
 
 节点安装时会先检测内核版本、CPU、内存、默认出口网卡以及 BBR/FQ 支持，再做 TCP 调优，最后才下载和启动 Agent。调优写入 `/etc/sysctl.d/99-flux-panel-network.conf`，不需要额外确认。
 
@@ -89,7 +89,7 @@ curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/install.sh | 
 
 ### Cloudflare DDNS（可选）
 
-在节点管理中点击“安装”，开启 Cloudflare DDNS 后填写 API Token 和完整记录域名即可生成一条命令。安装完成会立刻更新记录，节点随后每 1 分钟检查公网 IPv4/IPv6，地址变化时才调用 Cloudflare 更新记录；AWS 换机后重跑同一条命令即可恢复。Token 需要 Cloudflare 的 `Zone:Read` 与 `DNS:Edit` 权限，面板不保存 Token。
+在节点管理中点击“安装”，开启 Cloudflare DDNS 后填写 API Token 和完整记录域名即可生成一条命令。安装完成会立刻更新记录，节点随后每 1 分钟检查公网 IPv4/IPv6，地址变化时才调用 Cloudflare 更新记录；AWS 换机后重跑同一条命令即可恢复。检测到 IPv6 时会创建或更新同名 AAAA 记录；没有可用 IPv6 时不会创建、修改或删除 AAAA 记录。Token 需要 Cloudflare 的 `Zone:Read` 与 `DNS:Edit` 权限，面板不保存 Token。
 
 手动命令格式：
 
