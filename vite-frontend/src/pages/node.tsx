@@ -644,6 +644,7 @@ export default function NodePage() {
     setInstallCommandLoading(true);
     try {
       const res = await getNodeInstallCommand(installNode.id, {
+        panelUrl: window.location.origin,
         ddnsEnabled,
         ...(ddnsEnabled ? {
           cfApiToken: cfApiToken.trim(),

@@ -10,13 +10,11 @@ import com.admin.common.lang.R;
 import com.admin.common.utils.WebSocketServer;
 import com.admin.entity.Node;
 import com.admin.entity.Tunnel;
-import com.admin.entity.ViteConfig;
 import com.admin.mapper.NodeMapper;
 import com.admin.mapper.TunnelMapper;
 import com.admin.mapper.TunnelEntryNodeMapper;
 import com.admin.service.NodeService;
 import com.admin.service.TunnelService;
-import com.admin.service.ViteConfigService;
 import com.alibaba.fastjson.JSONObject;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
@@ -26,6 +24,8 @@ import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 
 import javax.annotation.Resource;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.util.List;
 import java.util.Objects;
 
@@ -80,10 +80,6 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
     @Resource
     @Lazy
     private TunnelService tunnelService;
-
-    @Resource
-    ViteConfigService viteConfigService;
-
 
     // ========== 公共接口实现 ==========
 
@@ -369,8 +365,10 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
      * @return 格式化的安装命令
      */
     private R buildInstallCommand(Node node, NodeInstallCommandDto commandDto) {
-        ViteConfig viteConfig = viteConfigService.getOne(new QueryWrapper<ViteConfig>().eq("name", "ip"));
-        if (viteConfig == null) return R.err("请先前往网站配置中设置ip");
+        String panelUrl = normalizePanelUrl(commandDto.getPanelUrl());
+        if (panelUrl == null) {
+            return R.err("无法识别当前面板域名，请通过 HTTPS 域名访问面板后重试");
+        }
 
         StringBuilder command = new StringBuilder();
         
@@ -378,12 +376,10 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
         command.append("curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/install.sh")
                .append(" | bash -s -- ");
         
-        // 处理服务器地址，如果是IPv6需要添加方括号
-        String processedServerAddr = processServerAddress(viteConfig.getValue());
-        
+        // 前端自动传入当前 HTTPS 域名；节点通过 WSS/HTTPS 访问它，不再依赖公网后端端口。
         // 参数使用单引号转义，避免地址或密钥中的特殊字符破坏安装命令。
-        command.append("--server ").append(shellQuote(processedServerAddr))
-               .append(" --secret ").append(shellQuote(node.getSecret()));
+        command.append("--panel ").append(shellQuote(panelUrl))
+               .append(" --token ").append(shellQuote(node.getSecret()));
 
         if (Boolean.TRUE.equals(commandDto.getDdnsEnabled())) {
             String token = commandDto.getCfApiToken();
@@ -412,54 +408,27 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
     }
 
     /**
-     * 处理服务器地址，确保IPv6地址被方括号包裹
-     * 
-     * @param serverAddr 原始服务器地址，格式可能为 host:port
-     * @return 处理后的服务器地址
+     * 只接受浏览器 origin 形式的面板地址。这样节点始终使用已公开的 HTTPS 域名，
+     * 不会把内部 IP、查询参数或路径写进节点安装命令。
      */
-    private String processServerAddress(String serverAddr) {
-        if (StrUtil.isBlank(serverAddr)) {
-            return serverAddr;
+    private String normalizePanelUrl(String panelUrl) {
+        if (StrUtil.isBlank(panelUrl) || panelUrl.contains("\n") || panelUrl.contains("\r")) {
+            return null;
         }
-        
-        // 如果已经被方括号包裹，直接返回
-        if (serverAddr.startsWith("[")) {
-            return serverAddr;
+        try {
+            URI uri = new URI(panelUrl.trim());
+            String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase();
+            if (!("https".equals(scheme) || "http".equals(scheme))
+                    || StrUtil.isBlank(uri.getHost())
+                    || uri.getUserInfo() != null
+                    || uri.getQuery() != null
+                    || uri.getFragment() != null) {
+                return null;
+            }
+            return new URI(scheme, null, uri.getHost(), uri.getPort(), null, null, null).toString();
+        } catch (URISyntaxException e) {
+            return null;
         }
-        
-        // 查找最后一个冒号，分离主机和端口
-        int lastColonIndex = serverAddr.lastIndexOf(':');
-        if (lastColonIndex == -1) {
-            // 没有端口号，直接检查是否需要包裹
-            return isIPv6Address(serverAddr) ? "[" + serverAddr + "]" : serverAddr;
-        }
-        
-        String host = serverAddr.substring(0, lastColonIndex);
-        String port = serverAddr.substring(lastColonIndex);
-        
-        // 检查主机部分是否为IPv6地址
-        if (isIPv6Address(host)) {
-            return "[" + host + "]" + port;
-        }
-        
-        return serverAddr;
-    }
-
-    /**
-     * 判断是否为IPv6地址
-     * 
-     * @param address 地址字符串（不包含端口号）
-     * @return 是否为IPv6地址
-     */
-    private boolean isIPv6Address(String address) {
-        // IPv6地址包含多个冒号，至少2个
-        if (!address.contains(":")) {
-            return false;
-        }
-        
-        // 计算冒号数量，IPv6地址至少有2个冒号
-        long colonCount = address.chars().filter(ch -> ch == ':').count();
-        return colonCount >= 2;
     }
 
     /**

@@ -39,10 +39,10 @@ usage() {
 Flux Panel Enhanced 节点 Agent 安装脚本
 
 用法：
-  install.sh --server 面板地址:6365 --secret 节点密钥
-  install.sh --server 面板地址:6365 --secret 节点密钥 --skip-tcp-tuning
-  install.sh --server 面板地址:6365 --secret 节点密钥 --cf-api-token Cloudflare令牌 --cf-record node.example.com
-  install.sh --server 面板地址:6365 --secret 节点密钥 --disable-ddns
+  install.sh --panel https://panel.example.com --token 节点独立密钥
+  install.sh --panel https://panel.example.com --token 节点独立密钥 --skip-tcp-tuning
+  install.sh --panel https://panel.example.com --token 节点独立密钥 --cf-api-token Cloudflare令牌 --cf-record node.example.com
+  install.sh --panel https://panel.example.com --token 节点独立密钥 --disable-ddns
   install.sh --uninstall
 
 可选环境变量：
@@ -454,8 +454,8 @@ EOF
 install_agent() {
   require_root
   require_systemd
-  [[ -n "$SERVER_ADDR" ]] || fail "缺少 --server 参数。"
-  [[ -n "$NODE_SECRET" ]] || fail "缺少 --secret 参数。"
+  [[ -n "$SERVER_ADDR" ]] || fail "缺少 --panel 参数。"
+  [[ -n "$NODE_SECRET" ]] || fail "缺少 --token 参数。"
   [[ "$SERVER_ADDR" != *$'\n'* && "$NODE_SECRET" != *$'\n'* ]] || fail "参数不能包含换行符。"
   if [[ "$DDNS_MODE" == "enabled" ]]; then
     [[ -n "$CF_API_TOKEN" && -n "$CF_RECORD_NAME" ]] || fail "启用 DDNS 时必须同时提供 --cf-api-token 和 --cf-record。"
@@ -505,8 +505,8 @@ uninstall_agent() {
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --server|-a) SERVER_ADDR="${2:-}"; shift 2 ;;
-    --secret|-s) NODE_SECRET="${2:-}"; shift 2 ;;
+    --panel|-p|--server|-a) SERVER_ADDR="${2:-}"; shift 2 ;;
+    --token|-t|--secret|-s) NODE_SECRET="${2:-}"; shift 2 ;;
     --cf-api-token) CF_API_TOKEN="${2:-}"; DDNS_MODE="enabled"; shift 2 ;;
     --cf-record) CF_RECORD_NAME="${2:-}"; DDNS_MODE="enabled"; shift 2 ;;
     --disable-ddns) DDNS_MODE="disabled"; shift ;;

@@ -18,4 +18,9 @@ public class NodeInstallCommandDto {
     private String cfApiToken;
 
     private String cfRecordName;
+
+    /**
+     * 管理员当前访问面板的公网 URL。前端自动填写，不要求用户手动配置 IP 或端口。
+     */
+    private String panelUrl;
 }

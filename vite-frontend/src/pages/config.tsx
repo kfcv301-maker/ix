@@ -45,13 +45,6 @@ interface ConfigItem {
 // 网站配置项定义
 const CONFIG_ITEMS: ConfigItem[] = [
   {
-    key: 'ip',
-    label: '面板后端地址',
-    placeholder: '请输入面板后端IP:PORT',
-    description: '格式“ip:port”,用于对接节点时使用,ip是你安装面板服务器的公网ip,端口是安装脚本内输入的后端端口。不要套CDN,不支持https,通讯数据有加密',
-    type: 'input'
-  },
-  {
     key: 'app_name',
     label: '应用名称',
     placeholder: '请输入应用名称',
@@ -105,7 +98,7 @@ const CONFIG_ITEMS: ConfigItem[] = [
 const getInitialConfigs = (): Record<string, string> => {
   if (typeof window === 'undefined') return {};
   
-  const configKeys = ['app_name', 'captcha_enabled', 'captcha_type', 'ip'];
+  const configKeys = ['app_name', 'captcha_enabled', 'captcha_type'];
   const initialConfigs: Record<string, string> = {};
   
   try {
@@ -426,4 +419,4 @@ export default function ConfigPage() {
       </div>
     
   );
-} 
+}

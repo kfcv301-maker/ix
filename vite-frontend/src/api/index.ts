@@ -32,6 +32,8 @@ export interface NodeInstallOptions {
   ddnsEnabled?: boolean;
   cfApiToken?: string;
   cfRecordName?: string;
+  /** The public origin shown in the administrator's browser, used for Agent callbacks. */
+  panelUrl?: string;
 }
 
 export const getNodeInstallCommand = (id: number, options: NodeInstallOptions = {}) => Network.post("/node/install", { id, ...options });
