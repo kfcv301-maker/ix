@@ -297,11 +297,17 @@ EOF
     return
   fi
 
+  cat > "$INSTALL_DIR/run-agent.sh" <<EOF
+#!/bin/sh
+cd "$INSTALL_DIR"
+exec "$INSTALL_DIR/gost"
+EOF
+  chmod 700 "$INSTALL_DIR/run-agent.sh"
+
   cat > "/etc/init.d/$SERVICE_NAME" <<EOF
 #!/sbin/openrc-run
 description="Flux Panel Enhanced Node Agent"
-command="$INSTALL_DIR/gost"
-command_chdir="$INSTALL_DIR"
+command="$INSTALL_DIR/run-agent.sh"
 command_user="root"
 supervisor="supervise-daemon"
 respawn_delay=3
