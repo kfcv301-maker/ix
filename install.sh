@@ -29,6 +29,7 @@ TCP_WMEM="4096 16384 12582912"
 SOMAXCONN=8192
 TCP_MAX_SYN_BACKLOG=4096
 NETDEV_MAX_BACKLOG=4096
+INIT_SYSTEM=""
 
 info() { printf '\033[1;34m[INFO]\033[0m %s\n' "$*"; }
 ok() { printf '\033[1;32m[ OK ]\033[0m %s\n' "$*"; }
@@ -63,8 +64,15 @@ architecture() {
   esac
 }
 
-require_systemd() {
-  command -v systemctl >/dev/null 2>&1 || fail "当前系统不支持 systemd，暂不能自动安装服务。"
+detect_init_system() {
+  if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+    INIT_SYSTEM="systemd"
+  elif command -v rc-service >/dev/null 2>&1 && command -v rc-update >/dev/null 2>&1; then
+    INIT_SYSTEM="openrc"
+  else
+    fail "未检测到 systemd 或 OpenRC，暂不能创建开机自启服务。"
+  fi
+  info "检测到服务管理器：$INIT_SYSTEM"
 }
 
 detect_host_profile() {
@@ -268,7 +276,8 @@ EOF
 }
 
 write_service() {
-  cat > "/etc/systemd/system/$SERVICE_NAME.service" <<EOF
+  if [[ "$INIT_SYSTEM" == "systemd" ]]; then
+    cat > "/etc/systemd/system/$SERVICE_NAME.service" <<EOF
 [Unit]
 Description=Flux Panel Enhanced Node Agent
 After=network-online.target
@@ -285,6 +294,45 @@ LimitNOFILE=1048576
 [Install]
 WantedBy=multi-user.target
 EOF
+    return
+  fi
+
+  cat > "/etc/init.d/$SERVICE_NAME" <<EOF
+#!/sbin/openrc-run
+description="Flux Panel Enhanced Node Agent"
+command="$INSTALL_DIR/gost"
+command_chdir="$INSTALL_DIR"
+command_user="root"
+supervisor="supervise-daemon"
+respawn_delay=3
+respawn_max=0
+EOF
+  chmod 755 "/etc/init.d/$SERVICE_NAME"
+}
+
+start_agent_service() {
+  if [[ "$INIT_SYSTEM" == "systemd" ]]; then
+    systemctl daemon-reload
+    systemctl enable "$SERVICE_NAME.service" >/dev/null
+    systemctl restart "$SERVICE_NAME.service"
+    systemctl is-active --quiet "$SERVICE_NAME.service"
+  else
+    rc-update add "$SERVICE_NAME" default >/dev/null
+    rc-service "$SERVICE_NAME" restart >/dev/null 2>&1 || rc-service "$SERVICE_NAME" start >/dev/null
+    rc-service "$SERVICE_NAME" status >/dev/null
+  fi
+}
+
+stop_agent_service() {
+  if [[ "$INIT_SYSTEM" == "systemd" ]]; then
+    systemctl disable --now "$SERVICE_NAME.service" 2>/dev/null || true
+    rm -f "/etc/systemd/system/$SERVICE_NAME.service"
+    systemctl daemon-reload
+  else
+    rc-service "$SERVICE_NAME" stop 2>/dev/null || true
+    rc-update del "$SERVICE_NAME" default 2>/dev/null || true
+    rm -f "/etc/init.d/$SERVICE_NAME"
+  fi
 }
 
 write_ddns_updater() {
@@ -404,15 +452,18 @@ EOF
 
 configure_ddns() {
   if [[ "$DDNS_MODE" == "disabled" ]]; then
-    systemctl disable --now "$DDNS_TIMER_NAME" 2>/dev/null || true
-    rm -f "/etc/systemd/system/${DDNS_SERVICE_NAME}.service" "/etc/systemd/system/${DDNS_TIMER_NAME}"
+    if [[ "$INIT_SYSTEM" == "systemd" ]]; then
+      systemctl disable --now "$DDNS_TIMER_NAME" 2>/dev/null || true
+      rm -f "/etc/systemd/system/${DDNS_SERVICE_NAME}.service" "/etc/systemd/system/${DDNS_TIMER_NAME}"
+      systemctl daemon-reload
+    fi
     rm -f "$INSTALL_DIR/ddns.env" "$INSTALL_DIR/ddns.state" "$INSTALL_DIR/cloudflare-ddns.sh"
-    systemctl daemon-reload
     info "已按安装命令关闭本机 Cloudflare DDNS"
     return
   fi
 
   [[ "$DDNS_MODE" == "enabled" ]] || return
+  [[ "$INIT_SYSTEM" == "systemd" ]] || fail "Cloudflare DDNS 定时任务目前需要 systemd；可使用 --disable-ddns 安装 Agent。"
   umask 077
   # 重新执行安装命令可能代表换机或更换记录，强制首次任务立即同步。
   rm -f "$INSTALL_DIR/ddns.state"
@@ -454,7 +505,7 @@ EOF
 
 install_agent() {
   require_root
-  require_systemd
+  detect_init_system
   [[ -n "$SERVER_ADDR" ]] || fail "缺少 --panel 参数。"
   [[ -n "$NODE_SECRET" ]] || fail "缺少 --token 参数。"
   [[ "$SERVER_ADDR" != *$'\n'* && "$NODE_SECRET" != *$'\n'* ]] || fail "参数不能包含换行符。"
@@ -469,28 +520,34 @@ install_agent() {
   write_config
   write_service
 
-  systemctl daemon-reload
-  systemctl enable "$SERVICE_NAME.service" >/dev/null
-  systemctl restart "$SERVICE_NAME.service"
   sleep 1
-  systemctl is-active --quiet "$SERVICE_NAME.service" || {
-    journalctl -u "$SERVICE_NAME.service" --no-pager -n 50 >&2 || true
+  start_agent_service || {
+    if [[ "$INIT_SYSTEM" == "systemd" ]]; then
+      journalctl -u "$SERVICE_NAME.service" --no-pager -n 50 >&2 || true
+    else
+      rc-service "$SERVICE_NAME" status >&2 || true
+    fi
     fail "Agent 启动失败，已保留配置以便排查。"
   }
   ok "节点 Agent 已启动并设为开机自启"
   configure_ddns
-  printf '状态查看：systemctl status %s\n' "$SERVICE_NAME"
+  if [[ "$INIT_SYSTEM" == "systemd" ]]; then
+    printf '状态查看：systemctl status %s\n' "$SERVICE_NAME"
+  else
+    printf '状态查看：rc-service %s status\n' "$SERVICE_NAME"
+  fi
 }
 
 uninstall_agent() {
   require_root
-  require_systemd
+  detect_init_system
   read -r -p "卸载节点 Agent 并删除本机配置？(y/N): " confirm
   [[ "$confirm" =~ ^[Yy]$ ]] || { info "已取消"; return; }
-  systemctl disable --now "$SERVICE_NAME.service" 2>/dev/null || true
-  systemctl disable --now "$DDNS_TIMER_NAME" 2>/dev/null || true
-  rm -f "/etc/systemd/system/$SERVICE_NAME.service"
-  rm -f "/etc/systemd/system/${DDNS_SERVICE_NAME}.service" "/etc/systemd/system/${DDNS_TIMER_NAME}"
+  stop_agent_service
+  if [[ "$INIT_SYSTEM" == "systemd" ]]; then
+    systemctl disable --now "$DDNS_TIMER_NAME" 2>/dev/null || true
+    rm -f "/etc/systemd/system/${DDNS_SERVICE_NAME}.service" "/etc/systemd/system/${DDNS_TIMER_NAME}"
+  fi
   rm -rf "$INSTALL_DIR"
   if [[ -f "$SYSCTL_BACKUP" ]]; then
     mv "$SYSCTL_BACKUP" "$SYSCTL_FILE"
@@ -500,7 +557,7 @@ uninstall_agent() {
     rm -f "$SYSCTL_FILE"
     info "已移除 Flux Panel 的持久化 TCP 配置；当前内核运行参数可在重启后恢复为系统配置。"
   fi
-  systemctl daemon-reload
+  [[ "$INIT_SYSTEM" != "systemd" ]] || systemctl daemon-reload
   ok "节点 Agent 已卸载"
 }
 
