@@ -3,5 +3,9 @@
  * 清除登录相关数据，但保留用户偏好设置（如主题）
  */
 export const safeLogout = () => {
+  const panelTheme = localStorage.getItem('flux-panel-theme');
   localStorage.clear();
-}; 
+  if (panelTheme) {
+    localStorage.setItem('flux-panel-theme', panelTheme);
+  }
+};

@@ -1,5 +1,6 @@
 import React, { useEffect } from 'react';
 import { useTheme } from '@heroui/use-theme';
+import { applyPanelTheme, getPanelTheme } from '@/utils/panel-theme';
 
 interface ThemeProviderProps {
   children: React.ReactNode;
@@ -9,6 +10,8 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
   const { theme, setTheme } = useTheme();
 
   useEffect(() => {
+    applyPanelTheme(getPanelTheme());
+
     // 确保主题与HTML class同步
     const updateThemeClass = (currentTheme: string) => {
       if (currentTheme === 'dark') {
@@ -41,4 +44,4 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
   }, [theme, setTheme]);
 
   return <>{children}</>;
-}; 
+};

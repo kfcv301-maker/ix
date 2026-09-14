@@ -54,6 +54,197 @@ html, body {
   padding-bottom: var(--safe-area-bottom);
 }
 
+/* 面板主题：保留全部页面组件，仅替换颜色、层次与边框语言。 */
+:root[data-panel-theme] {
+  --panel-bg: #eef7ff;
+  --panel-surface: rgba(255, 255, 255, 0.92);
+  --panel-surface-soft: rgba(255, 255, 255, 0.72);
+  --panel-sidebar: #108bd0;
+  --panel-sidebar-ink: #ffffff;
+  --panel-text: #12314a;
+  --panel-muted: #64809a;
+  --panel-border: rgba(22, 119, 177, 0.16);
+  --panel-accent: #1599e6;
+  --panel-accent-soft: rgba(21, 153, 230, 0.13);
+  --panel-shadow: 0 16px 36px rgba(32, 122, 175, 0.12);
+  --toaster-bg: var(--panel-surface);
+  --toaster-color: var(--panel-text);
+  --toaster-border: var(--panel-border);
+}
+
+:root[data-panel-theme='neon-console'] {
+  --panel-bg: #050910;
+  --panel-surface: rgba(10, 18, 31, 0.94);
+  --panel-surface-soft: rgba(10, 18, 31, 0.72);
+  --panel-sidebar: #060a12;
+  --panel-sidebar-ink: #d8f7ff;
+  --panel-text: #d9f7ff;
+  --panel-muted: #6f98a8;
+  --panel-border: rgba(0, 229, 255, 0.19);
+  --panel-accent: #00e5ff;
+  --panel-accent-soft: rgba(0, 229, 255, 0.11);
+  --panel-shadow: 0 16px 36px rgba(0, 0, 0, 0.35);
+}
+
+:root[data-panel-theme='sakura-glass'] {
+  --panel-bg: #fff4f8;
+  --panel-surface: rgba(255, 255, 255, 0.72);
+  --panel-surface-soft: rgba(255, 255, 255, 0.48);
+  --panel-sidebar: rgba(255, 246, 250, 0.82);
+  --panel-sidebar-ink: #7b3552;
+  --panel-text: #563041;
+  --panel-muted: #9f7183;
+  --panel-border: rgba(246, 113, 155, 0.2);
+  --panel-accent: #f46f9d;
+  --panel-accent-soft: rgba(244, 111, 157, 0.12);
+  --panel-shadow: 0 16px 38px rgba(202, 111, 147, 0.13);
+}
+
+:root[data-panel-theme] body,
+:root[data-panel-theme] #root,
+:root[data-panel-theme] .panel-shell,
+:root[data-panel-theme] .panel-main {
+  background: var(--panel-bg) !important;
+  color: var(--panel-text);
+}
+
+:root[data-panel-theme='neon-console'] .panel-main {
+  background-color: #050910 !important;
+  background-image:
+    linear-gradient(rgba(0, 229, 255, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 229, 255, 0.045) 1px, transparent 1px);
+  background-size: 48px 48px;
+}
+
+:root[data-panel-theme='sakura-glass'] .panel-main {
+  background-image:
+    radial-gradient(circle at 15% 8%, rgba(255, 177, 204, 0.32), transparent 22rem),
+    radial-gradient(circle at 85% 92%, rgba(255, 208, 174, 0.3), transparent 24rem);
+}
+
+:root[data-panel-theme] .panel-sidebar {
+  background: var(--panel-sidebar) !important;
+  border-color: var(--panel-border) !important;
+  box-shadow: var(--panel-shadow);
+}
+
+:root[data-panel-theme] .panel-sidebar .text-foreground,
+:root[data-panel-theme] .panel-sidebar .text-gray-700,
+:root[data-panel-theme] .panel-sidebar .text-gray-200,
+:root[data-panel-theme] .panel-sidebar .text-default-500,
+:root[data-panel-theme] .panel-sidebar .text-gray-400,
+:root[data-panel-theme] .panel-sidebar .text-gray-500 {
+  color: var(--panel-sidebar-ink) !important;
+}
+
+:root[data-panel-theme] .panel-nav-item {
+  color: color-mix(in srgb, var(--panel-sidebar-ink) 88%, transparent) !important;
+}
+
+:root[data-panel-theme] .panel-nav-item:hover,
+:root[data-panel-theme] .panel-nav-item.bg-primary-100 {
+  background: var(--panel-accent-soft) !important;
+  color: var(--panel-accent) !important;
+}
+
+:root[data-panel-theme='dora-sky'] .panel-nav-item.bg-primary-100,
+:root[data-panel-theme='dora-sky'] .panel-nav-item:hover {
+  background: rgba(255, 255, 255, 0.96) !important;
+  color: #087bc7 !important;
+}
+
+:root[data-panel-theme] .panel-header {
+  background: var(--panel-surface) !important;
+  border-color: var(--panel-border) !important;
+  box-shadow: 0 4px 16px rgba(20, 30, 50, 0.05);
+}
+
+:root[data-panel-theme] .panel-header .text-foreground,
+:root[data-panel-theme] .panel-main .text-foreground,
+:root[data-panel-theme] .panel-main .text-gray-900,
+:root[data-panel-theme] .panel-main .text-gray-800,
+:root[data-panel-theme] .panel-main .text-gray-700 {
+  color: var(--panel-text) !important;
+}
+
+:root[data-panel-theme] .panel-main .text-gray-600,
+:root[data-panel-theme] .panel-main .text-gray-500,
+:root[data-panel-theme] .panel-main .text-default-500,
+:root[data-panel-theme] .panel-main .text-default-600 {
+  color: var(--panel-muted) !important;
+}
+
+:root[data-panel-theme] .panel-main .bg-white,
+:root[data-panel-theme] .panel-main .bg-gray-50,
+:root[data-panel-theme] .panel-main .bg-gray-100,
+:root[data-panel-theme] .panel-main .bg-default-50,
+:root[data-panel-theme] .panel-main .bg-default-100,
+:root[data-panel-theme] .panel-main [class*='bg-white/'],
+:root[data-panel-theme] .panel-main [class*='bg-gray-50/'],
+:root[data-panel-theme] .panel-main [class*='bg-default-50/'] {
+  background-color: var(--panel-surface) !important;
+}
+
+:root[data-panel-theme] .panel-main [class*='border-gray-'],
+:root[data-panel-theme] .panel-main [class*='border-default-'] {
+  border-color: var(--panel-border) !important;
+}
+
+:root[data-panel-theme] .panel-main [data-slot='base'][class*='shadow'],
+:root[data-panel-theme] [role='dialog'] [data-slot='base'] {
+  background: var(--panel-surface) !important;
+  border-color: var(--panel-border) !important;
+  box-shadow: var(--panel-shadow);
+}
+
+:root[data-panel-theme='sakura-glass'] .panel-main [data-slot='base'][class*='shadow'],
+:root[data-panel-theme='sakura-glass'] [role='dialog'] [data-slot='base'] {
+  backdrop-filter: blur(18px);
+}
+
+.panel-theme-choice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 92px;
+  width: 100%;
+  padding: 12px;
+  border: 1px solid hsl(var(--heroui-default-200));
+  border-radius: 12px;
+  background: hsl(var(--heroui-content1));
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+.panel-theme-choice:hover,
+.panel-theme-choice.is-selected {
+  border-color: hsl(var(--heroui-primary));
+  box-shadow: 0 8px 22px rgba(42, 110, 160, 0.12);
+  transform: translateY(-1px);
+}
+
+.panel-theme-swatch {
+  display: flex;
+  flex: 0 0 70px;
+  width: 70px;
+  height: 58px;
+  padding: 8px;
+  gap: 4px;
+  align-items: end;
+  border-radius: 9px;
+  overflow: hidden;
+  background: #f4f4f5;
+}
+
+.panel-theme-swatch i { display: block; flex: 1; height: 60%; border-radius: 3px; background: #d4d4d8; }
+.panel-theme-swatch i:nth-child(2) { height: 82%; background: #a1a1aa; }
+.panel-theme-swatch i:nth-child(3) { height: 42%; background: #71717a; }
+.panel-theme-choice-dora-sky .panel-theme-swatch { background: linear-gradient(135deg, #087bc7, #6fd0ff); }
+.panel-theme-choice-dora-sky .panel-theme-swatch i { background: rgba(255,255,255,.72); }
+.panel-theme-choice-neon-console .panel-theme-swatch { background: #060a12; background-image: linear-gradient(rgba(0,229,255,.13) 1px, transparent 1px), linear-gradient(90deg, rgba(0,229,255,.13) 1px, transparent 1px); background-size: 10px 10px; }
+.panel-theme-choice-neon-console .panel-theme-swatch i { background: #00e5ff; }
+.panel-theme-choice-sakura-glass .panel-theme-swatch { background: linear-gradient(135deg, #ffd4e2, #fff5fa); }
+.panel-theme-choice-sakura-glass .panel-theme-swatch i { background: #f68daf; }
+
 
 /* 验证码弹层动画 */
 .captcha-modal-enter {

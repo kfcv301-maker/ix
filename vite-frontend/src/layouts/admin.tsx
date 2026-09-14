@@ -10,6 +10,7 @@ import { Logo } from '@/components/icons';
 import { updatePassword } from '@/api';
 import { safeLogout } from '@/utils/logout';
 import { siteConfig } from '@/config/site';
+import { getPanelTheme, panelThemes, savePanelTheme, type PanelTheme } from '@/utils/panel-theme';
 
 interface MenuItem {
   path: string;
@@ -39,6 +40,8 @@ export default function AdminLayout({
   const [username, setUsername] = useState('');
   const [isAdmin, setIsAdmin] = useState(false);
   const [passwordLoading, setPasswordLoading] = useState(false);
+  const [isThemePickerOpen, setIsThemePickerOpen] = useState(false);
+  const [panelTheme, setPanelTheme] = useState<PanelTheme>(() => getPanelTheme());
   const [passwordForm, setPasswordForm] = useState<PasswordForm>({
     newUsername: '',
     currentPassword: '',
@@ -175,6 +178,12 @@ export default function AdminLayout({
     }
   };
 
+  const handleThemeSelect = (theme: PanelTheme) => {
+    savePanelTheme(theme);
+    setPanelTheme(theme);
+    setIsThemePickerOpen(false);
+  };
+
   // 密码表单验证
   const validatePasswordForm = (): boolean => {
     if (!passwordForm.newUsername.trim()) {
@@ -242,7 +251,7 @@ export default function AdminLayout({
   );
 
   return (
-          <div className={`flex ${isMobile ? 'min-h-screen' : 'h-screen'} bg-gray-100 dark:bg-black`}>
+          <div className={`panel-shell flex ${isMobile ? 'min-h-screen' : 'h-screen'} bg-gray-100 dark:bg-black`}>
       {/* 移动端遮罩层 */}
       {isMobile && mobileMenuVisible && (
         <div 
@@ -252,7 +261,7 @@ export default function AdminLayout({
       )}
 
       {/* 左侧菜单栏 */}
-      <aside className={`
+      <aside className={`panel-sidebar
         ${isMobile ? 'fixed' : 'relative'} 
         ${isMobile && !mobileMenuVisible ? '-translate-x-full' : 'translate-x-0'}
         ${isMobile ? 'w-64' : 'w-72'} 
@@ -277,7 +286,7 @@ export default function AdminLayout({
          </div>
 
                  {/* 菜单导航 */}
-         <nav className="flex-1 px-4 py-6 overflow-y-auto">
+         <nav className="panel-navigation flex-1 px-4 py-6 overflow-y-auto">
            <ul className="space-y-1">
             {filteredMenuItems.map((item) => {
               const isActive = location.pathname === item.path;
@@ -285,7 +294,7 @@ export default function AdminLayout({
                 <li key={item.path}>
                                      <button
                      onClick={() => handleMenuClick(item.path)}
-                     className={`
+                     className={`panel-nav-item
                        w-full flex items-center gap-3 px-4 py-3 rounded-lg text-left
                        transition-colors duration-200 min-h-[44px]
                        ${isActive 
@@ -302,6 +311,20 @@ export default function AdminLayout({
                 </li>
               );
             })}
+            <li>
+              <button
+                type="button"
+                onClick={() => setIsThemePickerOpen(true)}
+                className="panel-nav-item w-full flex items-center gap-3 px-4 py-3 rounded-lg text-left transition-colors duration-200 min-h-[44px] text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-900"
+              >
+                <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="1.8" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 3a9 9 0 1 0 9 9c0-1.2-.24-2.34-.68-3.38a.75.75 0 0 0-.86-.43 3.2 3.2 0 0 1-3.83-3.83.75.75 0 0 0-.43-.86A8.96 8.96 0 0 0 12 3Z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 10.5h.01M9 6.75h.01M14.5 7.5h.01M6.75 14.25h.01" />
+                </svg>
+                <span className="font-medium text-sm flex-1">主题切换</span>
+                <span className="text-[10px] text-default-400 truncate max-w-16">{panelThemes.find((theme) => theme.id === panelTheme)?.name}</span>
+              </button>
+            </li>
           </ul>
         </nav>
 
@@ -326,7 +349,7 @@ export default function AdminLayout({
       {/* 主内容区域 */}
       <div className={`flex flex-col flex-1 ${isMobile ? 'min-h-0' : 'h-full overflow-hidden'}`}>
                  {/* 顶部导航栏 */}
-         <header className="bg-white dark:bg-black shadow-md border-b border-gray-200 dark:border-gray-600 h-14 flex items-center justify-between px-4 lg:px-6 relative z-10">
+         <header className="panel-header bg-white dark:bg-black shadow-md border-b border-gray-200 dark:border-gray-600 h-14 flex items-center justify-between px-4 lg:px-6 relative z-10">
           <div className="flex items-center gap-4">
             {/* 移动端菜单按钮 */}
             {isMobile && (
@@ -385,7 +408,7 @@ export default function AdminLayout({
         </header>
 
         {/* 主内容 */}
-        <main className={`flex-1 bg-gray-100 dark:bg-black ${isMobile ? '' : 'overflow-y-auto'}`}>
+        <main className={`panel-main flex-1 bg-gray-100 dark:bg-black ${isMobile ? '' : 'overflow-y-auto'}`}>
           {children}
         </main>
       </div>
@@ -457,6 +480,44 @@ export default function AdminLayout({
           )}
         </ModalContent>
       </Modal>
+
+      <Modal
+        isOpen={isThemePickerOpen}
+        onOpenChange={setIsThemePickerOpen}
+        size="2xl"
+        placement="center"
+        backdrop="blur"
+      >
+        <ModalContent>
+          <>
+            <ModalHeader className="flex flex-col gap-1">主题切换</ModalHeader>
+            <ModalBody>
+              <p className="text-sm text-default-500">只改变界面外观，不会修改节点、转发、账户或任何面板数据。</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pb-2">
+                {panelThemes.map((theme) => (
+                  <button
+                    key={theme.id}
+                    type="button"
+                    onClick={() => handleThemeSelect(theme.id)}
+                    className={`panel-theme-choice panel-theme-choice-${theme.id} ${panelTheme === theme.id ? 'is-selected' : ''}`}
+                    aria-pressed={panelTheme === theme.id}
+                  >
+                    <span className="panel-theme-swatch" aria-hidden="true"><i /><i /><i /></span>
+                    <span className="text-left flex-1">
+                      <span className="block font-semibold text-sm">{theme.name}</span>
+                      <span className="block text-xs text-default-500 mt-1 leading-5">{theme.description}</span>
+                    </span>
+                    {panelTheme === theme.id && <span className="text-primary text-xs font-semibold">当前</span>}
+                  </button>
+                ))}
+              </div>
+            </ModalBody>
+            <ModalFooter>
+              <Button variant="light" onPress={() => setIsThemePickerOpen(false)}>关闭</Button>
+            </ModalFooter>
+          </>
+        </ModalContent>
+      </Modal>
     </div>
   );
-} 
+}
