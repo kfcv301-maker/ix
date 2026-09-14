@@ -235,7 +235,8 @@ download_agent() {
   checksum_url="$url.sha256"
   temp_bin="$(mktemp)"
   temp_checksum="$(mktemp)"
-  trap 'rm -f "$temp_bin" "$temp_checksum"' RETURN
+  # RETURN trap 会在局部变量销毁后执行；在注册时展开临时路径，避免 set -u 触发未绑定变量。
+  trap "rm -f -- \"${temp_bin}\" \"${temp_checksum}\"" RETURN
 
   command -v curl >/dev/null 2>&1 || fail "请先安装 curl。"
   info "下载 Linux/$arch 节点 Agent"
