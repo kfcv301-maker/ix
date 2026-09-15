@@ -1,9 +1,10 @@
 import { Card, CardBody, CardHeader } from "@heroui/card";
 import { Button } from "@heroui/button";
 import { Modal, ModalContent, ModalHeader, ModalBody } from "@heroui/modal";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import toast from 'react-hot-toast';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import axios from 'axios';
 
 
 import { getUserPackageInfo } from "@/api";
@@ -57,6 +58,21 @@ interface StatisticsFlow {
   time: string;
 }
 
+interface RealtimeNodeTraffic {
+  uploadTraffic: number;
+  downloadTraffic: number;
+  uploadSpeed: number;
+  downloadSpeed: number;
+  reportedAt: number;
+}
+
+interface RealtimeTrafficSummary {
+  uploadSpeed: number;
+  downloadSpeed: number;
+  reportingNodes: number;
+  updatedAt?: number;
+}
+
 export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [userInfo, setUserInfo] = useState<UserInfo>({} as UserInfo);
@@ -64,6 +80,14 @@ export default function DashboardPage() {
   const [forwardList, setForwardList] = useState<Forward[]>([]);
   const [statisticsFlows, setStatisticsFlows] = useState<StatisticsFlow[]>([]);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [realtimeTraffic, setRealtimeTraffic] = useState<RealtimeTrafficSummary>({
+    uploadSpeed: 0,
+    downloadSpeed: 0,
+    reportingNodes: 0
+  });
+  const realtimeSocketRef = useRef<WebSocket | null>(null);
+  const realtimeReconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const realtimeTrafficByNodeRef = useRef<Map<number, RealtimeNodeTraffic>>(new Map());
   
   const [addressModalOpen, setAddressModalOpen] = useState(false);
   const [addressModalTitle, setAddressModalTitle] = useState('');
@@ -174,6 +198,108 @@ export default function DashboardPage() {
     loadPackageData();
     localStorage.setItem('e', '/dashboard');
   }, []);
+
+  // 管理员仪表盘直接复用节点监控的只读实时上报。每个节点独立计算差值，
+  // 这样不同节点的上报时间略有偏差也不会把累计流量误当作瞬时速度。
+  useEffect(() => {
+    if (!isAdmin) {
+      return;
+    }
+
+    let disposed = false;
+    const closeSocket = () => {
+      if (realtimeSocketRef.current) {
+        realtimeSocketRef.current.onclose = null;
+        realtimeSocketRef.current.close();
+        realtimeSocketRef.current = null;
+      }
+    };
+    const publishSummary = () => {
+      const now = Date.now();
+      const freshNodes = Array.from(realtimeTrafficByNodeRef.current.values())
+        .filter(node => now - node.reportedAt <= 15_000);
+      setRealtimeTraffic({
+        uploadSpeed: freshNodes.reduce((total, node) => total + node.uploadSpeed, 0),
+        downloadSpeed: freshNodes.reduce((total, node) => total + node.downloadSpeed, 0),
+        reportingNodes: freshNodes.length,
+        updatedAt: freshNodes.length ? now : undefined
+      });
+    };
+    const scheduleReconnect = () => {
+      if (disposed || realtimeReconnectTimerRef.current) return;
+      realtimeReconnectTimerRef.current = setTimeout(() => {
+        realtimeReconnectTimerRef.current = null;
+        connect();
+      }, 3_000);
+    };
+    const connect = () => {
+      if (disposed || realtimeSocketRef.current) return;
+      const baseUrl = axios.defaults.baseURL || (import.meta.env.VITE_API_BASE ? `${import.meta.env.VITE_API_BASE}/api/v1/` : '/api/v1/');
+      const wsUrl = baseUrl.replace(/^http/, 'ws').replace(/\/api\/v1\/$/, '')
+        + `/system-info?type=0&secret=${localStorage.getItem('token')}`;
+      const socket = new WebSocket(wsUrl);
+      realtimeSocketRef.current = socket;
+
+      socket.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          if (message.type !== 'info') return;
+          const systemInfo = typeof message.data === 'string' ? JSON.parse(message.data) : message.data;
+          const uploadTraffic = Number(systemInfo?.bytes_transmitted);
+          const downloadTraffic = Number(systemInfo?.bytes_received);
+          const nodeId = Number(message.id);
+          if (!Number.isFinite(nodeId) || nodeId <= 0 || !Number.isFinite(uploadTraffic) || !Number.isFinite(downloadTraffic)
+              || uploadTraffic < 0 || downloadTraffic < 0) {
+            return;
+          }
+
+          const now = Date.now();
+          const previous = realtimeTrafficByNodeRef.current.get(nodeId);
+          let uploadSpeed = 0;
+          let downloadSpeed = 0;
+          if (previous) {
+            const elapsed = (now - previous.reportedAt) / 1_000;
+            if (elapsed > 0 && elapsed <= 30) {
+              const uploadDelta = uploadTraffic - previous.uploadTraffic;
+              const downloadDelta = downloadTraffic - previous.downloadTraffic;
+              uploadSpeed = uploadDelta >= 0 ? uploadDelta / elapsed : 0;
+              downloadSpeed = downloadDelta >= 0 ? downloadDelta / elapsed : 0;
+            }
+          }
+          realtimeTrafficByNodeRef.current.set(nodeId, {
+            uploadTraffic,
+            downloadTraffic,
+            uploadSpeed,
+            downloadSpeed,
+            reportedAt: now
+          });
+          publishSummary();
+        } catch {
+          // Ignore a malformed monitoring packet and wait for the next report.
+        }
+      };
+      socket.onclose = () => {
+        if (realtimeSocketRef.current === socket) {
+          realtimeSocketRef.current = null;
+        }
+        scheduleReconnect();
+      };
+      socket.onerror = () => socket.close();
+    };
+
+    connect();
+    const summaryTimer = setInterval(publishSummary, 5_000);
+    return () => {
+      disposed = true;
+      clearInterval(summaryTimer);
+      if (realtimeReconnectTimerRef.current) {
+        clearTimeout(realtimeReconnectTimerRef.current);
+        realtimeReconnectTimerRef.current = null;
+      }
+      closeSocket();
+      realtimeTrafficByNodeRef.current.clear();
+    };
+  }, [isAdmin]);
 
   const loadPackageData = async () => {
     setLoading(true);
@@ -680,6 +806,37 @@ export default function DashboardPage() {
            </Card>
          </div>
 
+         {isAdmin && (
+           <Card className="mb-6 lg:mb-8 border border-gray-200 dark:border-default-200 shadow-md">
+             <CardHeader className="pb-3">
+               <div className="flex w-full items-center justify-between gap-3">
+                 <div className="flex items-center gap-2">
+                   <svg className="h-5 w-5 text-primary" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true">
+                     <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v3.586l2.707 2.707a1 1 0 001.414-1.414L12 8.586V6z" clipRule="evenodd" />
+                   </svg>
+                   <h2 className="text-lg lg:text-xl font-semibold text-foreground">全节点实时流量</h2>
+                 </div>
+                 <span className="text-xs text-default-500">
+                   {realtimeTraffic.reportingNodes > 0 ? `${realtimeTraffic.reportingNodes} 个节点正在上报` : '等待节点上报'}
+                 </span>
+               </div>
+             </CardHeader>
+             <CardBody className="pt-0">
+               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                 <div className="rounded-lg border border-primary-200 bg-primary-50 p-4 dark:border-primary-300/20 dark:bg-primary-100/20">
+                   <p className="text-sm text-primary-700 dark:text-primary-300">↑ 全节点上行</p>
+                   <p className="mt-1 font-mono text-2xl font-semibold text-primary-800 dark:text-primary-200">{formatFlow(realtimeTraffic.uploadSpeed)}/s</p>
+                 </div>
+                 <div className="rounded-lg border border-success-200 bg-success-50 p-4 dark:border-success-300/20 dark:bg-success-100/20">
+                   <p className="text-sm text-success-700 dark:text-success-300">↓ 全节点下行</p>
+                   <p className="mt-1 font-mono text-2xl font-semibold text-success-800 dark:text-success-200">{formatFlow(realtimeTraffic.downloadSpeed)}/s</p>
+                 </div>
+               </div>
+               <p className="mt-3 text-xs text-default-500">按各节点最新两次上报的差值汇总；首次上报仅建立基线，不会把累计流量误显示为速率。</p>
+             </CardBody>
+           </Card>
+         )}
+
          {/* 24小时流量统计图表 */}
          <Card className="mb-6 lg:mb-8 border border-gray-200 dark:border-default-200 shadow-md">
            <CardHeader className="pb-3">
@@ -955,4 +1112,4 @@ export default function DashboardPage() {
       </div>
           
   );
-} 
+}

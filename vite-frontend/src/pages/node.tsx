@@ -1002,21 +1002,6 @@ export default function NodePage() {
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-2 text-xs">
-                      <div className="rounded bg-default-50 p-2 dark:bg-default-100">
-                        <div className="text-default-600">内存已用 / 总量</div>
-                        <div className="mt-0.5 font-mono text-foreground">
-                          {formatOptionalRatio(node.systemInfo?.memoryUsed, node.systemInfo?.memoryTotal)}
-                        </div>
-                      </div>
-                      <div className="rounded bg-default-50 p-2 dark:bg-default-100">
-                        <div className="text-default-600">可用 / 缓存</div>
-                        <div className="mt-0.5 font-mono text-foreground">
-                          {formatOptionalCapacity(node.systemInfo?.memoryAvailable)} / {formatOptionalCapacity(node.systemInfo?.memoryCached)}
-                        </div>
-                      </div>
-                    </div>
-
                     {/* 小型实时曲线。完整曲线在“查看曲线”中展开。 */}
                     <div className="rounded-md border border-divider p-2.5">
                       <div className="mb-2 flex items-center justify-between text-xs">

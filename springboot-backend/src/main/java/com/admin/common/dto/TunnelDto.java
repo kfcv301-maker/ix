@@ -24,6 +24,12 @@ public class TunnelDto {
      */
     private List<Long> entryNodeIds;
 
+    /**
+     * Public addresses for multi-ingress. They follow entryNodeIds order and
+     * are intentionally separate from a node's management address.
+     */
+    private List<String> entryIps;
+
     // 出口节点ID，当type=1时可以为空，会自动设置为入口节点ID
     private Long outNodeId;
     

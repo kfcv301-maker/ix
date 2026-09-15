@@ -30,6 +30,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import javax.annotation.Resource;
+import java.net.InetAddress;
 import java.math.BigDecimal;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -119,9 +120,15 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
         if (entryNodeIds.isEmpty()) {
             return R.err("请至少选择一个入口节点");
         }
+        List<String> entryIps = normalizeEntryIps(tunnelDto);
+        R entryIpValidation = validateExplicitEntryIps(entryNodeIds, entryIps);
+        if (entryIpValidation.getCode() != 0) {
+            return entryIpValidation;
+        }
         // Keep the first entry in the legacy column. Existing integrations keep
         // working while the relation table is the source of truth for fan-out.
         tunnelDto.setEntryNodeIds(entryNodeIds);
+        tunnelDto.setEntryIps(entryIps);
         tunnelDto.setInNodeId(entryNodeIds.get(0));
         // 1. 验证隧道名称唯一性
         R nameValidationResult = validateTunnelNameUniqueness(tunnelDto.getName());
@@ -390,7 +397,16 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
         
         // 设置入口节点信息
         tunnel.setInNodeId(tunnelDto.getInNodeId());
-        tunnel.setInIp(inNode.getIp());
+        // A multi-ingress tunnel can be reached through public addresses which
+        // differ from the Agent's management address.  Persist those addresses
+        // in the existing in_ip column so every existing forward query and UI
+        // automatically uses the configured public endpoint.  Single-ingress
+        // tunnels retain the original node-IP behavior unchanged.
+        if (tunnelDto.getEntryNodeIds().size() > 1) {
+            tunnel.setInIp(String.join(",", tunnelDto.getEntryIps()));
+        } else {
+            tunnel.setInIp(inNode.getIp());
+        }
         
         // 设置流量计算类型
         tunnel.setFlow(tunnelDto.getFlow());
@@ -506,6 +522,57 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
             uniqueIds.add(tunnelDto.getInNodeId());
         }
         return new ArrayList<>(uniqueIds);
+    }
+
+    private List<String> normalizeEntryIps(TunnelDto tunnelDto) {
+        if (tunnelDto.getEntryIps() == null) {
+            return Collections.emptyList();
+        }
+        return tunnelDto.getEntryIps().stream()
+                .filter(Objects::nonNull)
+                .map(String::trim)
+                .filter(StringUtils::isNotBlank)
+                .map(this::stripIpv6Brackets)
+                .collect(Collectors.toList());
+    }
+
+    private R validateExplicitEntryIps(List<Long> entryNodeIds, List<String> entryIps) {
+        if (entryNodeIds.size() <= 1) {
+            return R.ok();
+        }
+        if (entryIps.size() != entryNodeIds.size()) {
+            return R.err("多入口隧道必须为每个入口节点填写一个公网 IP");
+        }
+        for (String entryIp : entryIps) {
+            if (!isLiteralIpAddress(entryIp)) {
+                return R.err("入口 IP 格式不正确：" + entryIp);
+            }
+        }
+        return R.ok();
+    }
+
+    private String stripIpv6Brackets(String address) {
+        return address.startsWith("[") && address.endsWith("]")
+                ? address.substring(1, address.length() - 1)
+                : address;
+    }
+
+    /** Accept IPv4/IPv6 literals only; host names must not silently become public endpoints. */
+    private boolean isLiteralIpAddress(String address) {
+        if (StringUtils.isBlank(address)) {
+            return false;
+        }
+        boolean ipv4CharactersOnly = address.matches("[0-9.]+");
+        boolean ipv6CharactersOnly = address.matches("[0-9a-fA-F:.]+");
+        if (!ipv4CharactersOnly && !ipv6CharactersOnly) {
+            return false;
+        }
+        try {
+            InetAddress parsed = InetAddress.getByName(address);
+            return ipv4CharactersOnly || parsed.getHostAddress().contains(":");
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
     private boolean saveEntryNodes(Long tunnelId, List<Long> nodeIds) {

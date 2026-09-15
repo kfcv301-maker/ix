@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { Card, CardBody, CardHeader } from "@heroui/card";
 import { Button } from "@heroui/button";
-import { Input } from "@heroui/input";
+import { Input, Textarea } from "@heroui/input";
 import { Select, SelectItem } from "@heroui/select";
 import { Modal, ModalContent, ModalHeader, ModalBody, ModalFooter } from "@heroui/modal";
 import { Chip } from "@heroui/chip";
@@ -26,6 +26,7 @@ interface Tunnel {
   type: number; // 1: 端口转发, 2: 隧道转发
   inNodeId: number;
   entryNodeIds?: number[];
+  entryIps?: string[];
   outNodeId?: number;
   inIp: string;
   outIp?: string;
@@ -51,6 +52,7 @@ interface TunnelForm {
   type: number;
   inNodeId: number | null;
   entryNodeIds: number[];
+  entryIps: string[];
   outNodeId?: number | null;
   protocol: string;
   tcpListenAddr: string;
@@ -101,6 +103,7 @@ export default function TunnelPage() {
     type: 1,
     inNodeId: null,
     entryNodeIds: [],
+    entryIps: [],
     outNodeId: null,
     protocol: 'tls',
     tcpListenAddr: '[::]',
@@ -159,6 +162,13 @@ export default function TunnelPage() {
     if (form.entryNodeIds.length === 0) {
       newErrors.inNodeId = '请选择入口节点';
     }
+
+    if (form.entryNodeIds.length > 1) {
+      const entryIps = form.entryIps.map(ip => ip.trim()).filter(Boolean);
+      if (entryIps.length !== form.entryNodeIds.length) {
+        newErrors.entryIps = '请按入口节点顺序，每行填写一个公网 IP';
+      }
+    }
     
     if (!form.tcpListenAddr.trim()) {
       newErrors.tcpListenAddr = '请输入TCP监听地址';
@@ -197,6 +207,7 @@ export default function TunnelPage() {
       type: 1,
       inNodeId: null,
       entryNodeIds: [],
+      entryIps: [],
       outNodeId: null,
       protocol: 'tls',
       tcpListenAddr: '[::]',
@@ -219,6 +230,7 @@ export default function TunnelPage() {
       type: tunnel.type,
       inNodeId: tunnel.inNodeId,
       entryNodeIds: tunnel.entryNodeIds?.length ? tunnel.entryNodeIds : [tunnel.inNodeId],
+      entryIps: tunnel.entryIps?.length ? tunnel.entryIps : (tunnel.inIp || '').split(',').map(ip => ip.trim()).filter(Boolean),
       outNodeId: tunnel.outNodeId || null,
       protocol: tunnel.protocol || 'tls',
       tcpListenAddr: tunnel.tcpListenAddr || '[::]',
@@ -713,6 +725,7 @@ export default function TunnelPage() {
                         setForm(prev => ({
                           ...prev,
                           entryNodeIds,
+                          entryIps: entryNodeIds.length > 1 ? prev.entryIps.slice(0, entryNodeIds.length) : [],
                           inNodeId: entryNodeIds[0] || null
                         }));
                       }}
@@ -739,6 +752,23 @@ export default function TunnelPage() {
                         </SelectItem>
                       ))}
                     </Select>
+
+                    {form.entryNodeIds.length > 1 && (
+                      <Textarea
+                        label="入口公网 IP（按节点顺序，每行一个）"
+                        placeholder="203.0.113.10\n2001:db8::10"
+                        value={form.entryIps.join('\n')}
+                        onChange={(event) => setForm(prev => ({
+                          ...prev,
+                          entryIps: event.target.value.split(/[\n,]/).map(ip => ip.trim()).filter(Boolean)
+                        }))}
+                        isInvalid={!!errors.entryIps}
+                        errorMessage={errors.entryIps}
+                        variant="bordered"
+                        isDisabled={isEdit}
+                        description={`顺序：${form.entryNodeIds.map(id => nodes.find(node => node.id === id)?.name || `节点 ${id}`).join(' → ')}。用于用户访问的入口地址；Agent 仍按上方所选节点下发转发，不会使用节点监控中的管理 IP。`}
+                      />
+                    )}
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <Input
@@ -861,7 +891,7 @@ export default function TunnelPage() {
                         color="primary"
                         variant="flat"
                         title={`已选择 ${form.entryNodeIds.length} 个入口节点`}
-                        description="每条转发会自动同步到全部入口节点。将同一个域名的 A/AAAA 记录分别解析到这些节点即可。"
+                        description="每条转发会自动同步到全部入口节点。请在上方按顺序填写公网 IP，再将同一个域名的 A/AAAA 记录分别解析到这些地址。"
                         className="mt-4"
                       />
                     )}
