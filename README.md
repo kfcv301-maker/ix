@@ -60,6 +60,24 @@ curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/panel_install
 curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/panel_install.sh | sudo bash -s -- update
 ```
 
+### 从原版哆啦A梦面板升级
+
+原版 `bqlpfy/flux-panel` 的数据库放在 Docker 卷 `mysql_data` 中。下面的迁移脚本会先在新版目录创建一份仅留在服务器本机的 SQL 备份，再复用这个数据卷和原 `.env` 启动新版；节点、用户、隧道、转发、流量和密钥不需要导入或重新创建。原面板目录和原容器不会被删除；如果新版后端未通过检查，脚本会自动恢复原容器。
+
+在原版面板的安装目录运行：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/upgrade_from_original.sh | sudo bash
+```
+
+原版不在当前目录时，填写其目录：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/upgrade_from_original.sh | sudo bash -s -- --source-dir /path/to/original-panel
+```
+
+先只检查兼容性、不做任何修改可加 `--dry-run`。迁移完成后，后续更新仍使用上面的 `panel_install.sh ... update` 命令；它会保留原数据库卷和 `.env`。
+
 ### 安装节点 Agent
 
 在面板的节点管理页面复制安装命令即可。安装命令会自动带入当前面板域名和该节点独立密钥，无须设置或暴露后端固定端口：

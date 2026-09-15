@@ -28,6 +28,7 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.List;
 import java.util.Objects;
+import java.util.stream.Collectors;
 
 import org.springframework.beans.factory.annotation.Value;
 
@@ -155,10 +156,15 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
         // 更新隧道入口ip
         List<Tunnel> inNodeId = tunnelService.list(new QueryWrapper<Tunnel>().eq("in_node_id", updateNode.getId()));
         if (!inNodeId.isEmpty()) {
-            for (Tunnel tunnel : inNodeId) {
+            List<Tunnel> singleIngressTunnels = inNodeId.stream()
+                    .filter(tunnel -> isSingleIngressTunnel(tunnel))
+                    .collect(Collectors.toList());
+            for (Tunnel tunnel : singleIngressTunnels) {
                 tunnel.setInIp(updateNode.getIp());
             }
-            tunnelService.updateBatchById(inNodeId);
+            if (!singleIngressTunnels.isEmpty()) {
+                tunnelService.updateBatchById(singleIngressTunnels);
+            }
         }
 
         // 更新服务器出口ip
@@ -171,6 +177,20 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
         }
 
         return result ? R.ok(SUCCESS_UPDATE_MSG) : R.err(ERROR_UPDATE_MSG);
+    }
+
+    /**
+     * A multi-ingress tunnel stores its public addresses independently of a
+     * node's management address. Editing a node must never overwrite those
+     * user-configured addresses. The comma check keeps older data safe even
+     * before the relation-table migration has run.
+     */
+    private boolean isSingleIngressTunnel(Tunnel tunnel) {
+        if (tunnel.getInIp() != null && tunnel.getInIp().contains(",")) {
+            return false;
+        }
+        return tunnelEntryNodeMapper.selectCount(
+                new QueryWrapper<com.admin.entity.TunnelEntryNode>().eq("tunnel_id", tunnel.getId())) <= 1;
     }
 
     /**

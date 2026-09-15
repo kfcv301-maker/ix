@@ -56,8 +56,12 @@ services:
     networks: [flux-panel]
 
 volumes:
+  # Keep names explicit.  A migration from the upstream panel can set
+  # MYSQL_DATA_VOLUME=mysql_data to attach its existing data without copying it.
   mysql_data:
+    name: ${MYSQL_DATA_VOLUME:-flux-panel-enhanced_mysql_data}
   backend_logs:
+    name: ${BACKEND_LOG_VOLUME:-flux-panel-enhanced_backend_logs}
 
 networks:
   flux-panel:

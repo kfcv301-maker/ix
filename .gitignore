@@ -232,6 +232,7 @@ go-gost/gost.json
 *.tmp
 *.temp
 .cache/
+.upgrade-backups/
 
 
 gitee/
