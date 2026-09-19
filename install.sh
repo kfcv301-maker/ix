@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 星澜转发面板节点 Agent 安装脚本。
+# Lunaris Relay 节点 Agent 安装脚本。
 set -Eeuo pipefail
 
 REPO_RAW_BASE="${REPO_RAW_BASE:-https://raw.githubusercontent.com/kfcv301-maker/ix/main}"
@@ -38,7 +38,7 @@ fail() { printf '\033[1;31m[FAIL]\033[0m %s\n' "$*" >&2; exit 1; }
 
 usage() {
   cat <<'EOF'
-星澜转发面板节点 Agent 安装脚本
+Lunaris Relay 节点 Agent 安装脚本
 
 用法：
   install.sh --panel https://panel.example.com --token 节点独立密钥
@@ -227,7 +227,7 @@ apply_tcp_tuning() {
   temporary_file="$(mktemp)"
   APPLIED_SYSCTL_KEYS=()
   cat > "$temporary_file" <<EOF
-# 星澜转发面板节点网络调优。
+# Lunaris Relay 节点网络调优。
 EOF
 
   if (( FQ_SUPPORTED == 1 )); then
@@ -309,7 +309,7 @@ write_service() {
   if [[ "$INIT_SYSTEM" == "systemd" ]]; then
     cat > "/etc/systemd/system/$SERVICE_NAME.service" <<EOF
 [Unit]
-Description=星澜转发面板 Node Agent
+Description=Lunaris Relay Node Agent
 After=network-online.target
 Wants=network-online.target
 
@@ -336,7 +336,7 @@ EOF
 
   cat > "/etc/init.d/$SERVICE_NAME" <<EOF
 #!/sbin/openrc-run
-description="星澜转发面板 Node Agent"
+description="Lunaris Relay Node Agent"
 command="$INSTALL_DIR/run-agent.sh"
 command_user="root"
 supervisor="supervise-daemon"
@@ -586,7 +586,7 @@ configure_ddns() {
 
   cat > "/etc/systemd/system/${DDNS_SERVICE_NAME}.service" <<EOF
 [Unit]
-Description=星澜转发面板 Cloudflare DDNS
+Description=Lunaris Relay Cloudflare DDNS
 Wants=network-online.target
 After=network-online.target
 
@@ -597,7 +597,7 @@ EOF
 
   cat > "/etc/systemd/system/${DDNS_TIMER_NAME}" <<EOF
 [Unit]
-Description=Run 星澜转发面板 Cloudflare DDNS every minute
+Description=Run Lunaris Relay Cloudflare DDNS every minute
 
 [Timer]
 OnBootSec=90s
@@ -668,7 +668,7 @@ uninstall_agent() {
     ok "已恢复安装前的同名 TCP 配置"
   elif [[ -f "$SYSCTL_FILE" ]]; then
     rm -f "$SYSCTL_FILE"
-    info "已移除星澜转发面板的持久化 TCP 配置；当前内核运行参数可在重启后恢复为系统配置。"
+    info "已移除 Lunaris Relay 的持久化 TCP 配置；当前内核运行参数可在重启后恢复为系统配置。"
   fi
   [[ "$INIT_SYSTEM" != "systemd" ]] || systemctl daemon-reload
   ok "节点 Agent 已卸载"

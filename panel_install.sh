@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 星澜转发面板安装与更新脚本。
+# Lunaris Relay 安装与更新脚本。
 set -Eeuo pipefail
 
 REPO_URL="${REPO_URL:-https://github.com/kfcv301-maker/ix.git}"
@@ -14,7 +14,7 @@ fail() { printf '\033[1;31m[FAIL]\033[0m %s\n' "$*" >&2; exit 1; }
 
 usage() {
   cat <<'EOF'
-星澜转发面板管理脚本
+Lunaris Relay 管理脚本
 
 用法：
   panel_install.sh install     安装或更新面板（默认）
