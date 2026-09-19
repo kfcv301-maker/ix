@@ -575,7 +575,8 @@ configure_ddns() {
     return
   fi
 
-  [[ "$DDNS_MODE" == "enabled" ]] || return
+  # “unchanged” 表示保留现有 DDNS 设置；它是正常路径，不能让安装脚本以失败退出。
+  [[ "$DDNS_MODE" == "enabled" ]] || return 0
   [[ "$INIT_SYSTEM" == "systemd" ]] || fail "Cloudflare DDNS 定时任务目前需要 systemd；可使用 --disable-ddns 安装 Agent。"
   umask 077
   # 重新执行安装命令可能代表换机或更换记录，强制首次任务立即同步。
