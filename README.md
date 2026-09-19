@@ -107,7 +107,7 @@ curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/install.sh | 
 
 ### Cloudflare DDNS（可选）
 
-在节点管理中点击“安装”，开启 Cloudflare DDNS 后填写 API Token 和完整记录域名即可生成一条命令。首次成功生成后，这两个字段会作为该节点的安装预设保存在当前管理员浏览器；下次打开同一节点会自动带回，不写入面板数据库。安装完成会立刻更新记录，节点随后每 1 分钟检查公网 IPv4/IPv6，地址变化时才调用 Cloudflare 更新记录；AWS 换机后重跑同一条命令即可恢复。检测到 IPv6 时会创建或更新同名 AAAA 记录；没有可用 IPv6 时不会创建、修改或删除 AAAA 记录。Token 需要 Cloudflare 的 `Zone:Read` 与 `DNS:Edit` 权限。
+在节点管理中点击“安装”，开启 Cloudflare DDNS 后填写 API Token 和完整记录域名即可生成一条命令。首次成功生成后，这两个字段会作为该节点的安装预设保存在当前管理员浏览器；下次打开同一节点会自动带回，不写入面板数据库。安装完成及每次开机后的首次任务都会同步记录，节点运行期间每 1 分钟检查公网 IPv4/IPv6，地址变化时才调用 Cloudflare 更新记录；AWS 换机后重跑同一条命令即可恢复。检测到 IPv6 时会创建或更新同名 AAAA 记录；没有可用 IPv6 时不会创建、修改或删除 AAAA 记录。Token 需要 Cloudflare 的 `Zone:Read` 与 `DNS:Edit` 权限。
 
 节点每次连接或重连面板后都会立即上报当前 GOST 配置，面板据此补回重装/重启后确实缺失的转发服务；十分钟一次的周期上报仍保留作漂移校验。这样无需为了恢复规则而手工编辑保存转发。
 

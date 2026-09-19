@@ -1515,7 +1515,7 @@ export default function NodePage() {
                     <span className="font-medium">启用 Cloudflare DDNS</span>
                   </Switch>
                   <p className="mt-1 text-xs text-default-500">
-                    安装后立即同步，并每 1 分钟检查公网 IPv4/IPv6；地址变化时才更新 A/AAAA 记录。
+                    安装后及每次开机首次任务都会同步；运行中每 1 分钟检查公网 IPv4/IPv6，地址变化时才更新 A/AAAA 记录。
                   </p>
                 </div>
 

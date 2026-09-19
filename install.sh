@@ -385,6 +385,7 @@ CLOUDFLARE_API="https://api.cloudflare.com/client/v4"
 source "$CONFIG_FILE"
 LAST_IPV4=""
 LAST_IPV6=""
+LAST_BOOT_ID=""
 if [[ -r "$STATE_FILE" ]]; then
   source "$STATE_FILE"
 fi
@@ -449,7 +450,14 @@ sync_record() {
 
 main() {
   [[ -n "${CF_API_TOKEN:-}" && -n "${CF_RECORD_NAME:-}" ]] || fail "DDNS 配置不完整"
-  local zone_id ipv4 ipv6 next_ipv4 next_ipv6 should_sync=0
+  local zone_id ipv4 ipv6 next_ipv4 next_ipv6 current_boot_id should_sync=0 force_boot_sync=0
+  current_boot_id="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)"
+  # The previous machine may have moved this record while this node was off.
+  # Synchronize once after every boot even when this node receives its old IP.
+  if [[ -n "$current_boot_id" && "$current_boot_id" != "$LAST_BOOT_ID" ]]; then
+    force_boot_sync=1
+    should_sync=1
+  fi
   ipv4="$(curl -4 --fail --silent --show-error --connect-timeout 10 https://api.ipify.org 2>/dev/null || true)"
   ipv6="$(curl -6 --fail --silent --show-error --connect-timeout 10 https://api64.ipify.org 2>/dev/null || true)"
   next_ipv4="$LAST_IPV4"
@@ -470,14 +478,14 @@ main() {
   fi
 
   zone_id="$(find_zone_id)"
-  if [[ -n "$ipv4" && "$ipv4" != "$LAST_IPV4" ]]; then
+  if [[ -n "$ipv4" && ( "$force_boot_sync" == "1" || "$ipv4" != "$LAST_IPV4" ) ]]; then
     sync_record A "$ipv4" "$zone_id"
   fi
-  if [[ -n "$ipv6" && "$ipv6" != "$LAST_IPV6" ]]; then
+  if [[ -n "$ipv6" && ( "$force_boot_sync" == "1" || "$ipv6" != "$LAST_IPV6" ) ]]; then
     sync_record AAAA "$ipv6" "$zone_id"
   fi
   umask 077
-  printf 'LAST_IPV4=%q\nLAST_IPV6=%q\n' "$next_ipv4" "$next_ipv6" > "$STATE_FILE"
+  printf 'LAST_IPV4=%q\nLAST_IPV6=%q\nLAST_BOOT_ID=%q\n' "$next_ipv4" "$next_ipv6" "$current_boot_id" > "$STATE_FILE"
   chmod 600 "$STATE_FILE"
 }
 
