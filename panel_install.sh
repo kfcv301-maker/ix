@@ -7,6 +7,7 @@ BRANCH="${BRANCH:-main}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/flux-panel-enhanced}"
 FRONTEND_PORT="${FRONTEND_PORT:-6366}"
 BACKEND_PORT="${BACKEND_PORT:-6365}"
+FRONTEND_BIND_ADDRESS="${FRONTEND_BIND_ADDRESS:-127.0.0.1}"
 
 info() { printf '\033[1;34m[INFO]\033[0m %s\n' "$*"; }
 ok() { printf '\033[1;32m[ OK ]\033[0m %s\n' "$*"; }
@@ -26,6 +27,7 @@ Lunaris Relay 管理脚本
 可选环境变量：
   INSTALL_DIR=/opt/flux-panel-enhanced
   FRONTEND_PORT=6366 BACKEND_PORT=6365
+  FRONTEND_BIND_ADDRESS=127.0.0.1  # 使用现有 Nginx 时保持仅本机监听；直连时设为 0.0.0.0
   REPO_URL=https://github.com/kfcv301-maker/ix.git BRANCH=main
 EOF
 }
@@ -111,6 +113,7 @@ DB_PASSWORD=$(random_secret)
 JWT_SECRET=$(random_secret)
 FRONTEND_PORT=$FRONTEND_PORT
 BACKEND_PORT=$BACKEND_PORT
+FRONTEND_BIND_ADDRESS=$FRONTEND_BIND_ADDRESS
 EOF
   chmod 600 "$env_file"
   ok "已生成仅保存在本机的 .env"

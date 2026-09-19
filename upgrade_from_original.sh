@@ -114,6 +114,9 @@ copy_runtime_env() {
     printf 'JWT_SECRET=%s\n' "$jwt_secret"
     printf 'FRONTEND_PORT=%s\n' "$frontend_port"
     printf 'BACKEND_PORT=%s\n' "$backend_port"
+    # The upstream panel exposes its frontend only through localhost for the
+    # host Nginx reverse proxy. Preserve that network boundary on cutover.
+    printf 'FRONTEND_BIND_ADDRESS=127.0.0.1\n'
     # The upstream Compose file names these volumes explicitly. Reusing them
     # makes the new containers operate on the same data rather than an import.
     printf 'MYSQL_DATA_VOLUME=mysql_data\n'

@@ -50,6 +50,8 @@ curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/panel_install
 
 默认使用前端端口 `6366`、后端端口 `6365`，数据库密码与 JWT 密钥在服务器本机的 `/opt/flux-panel-enhanced/.env` 自动生成，脚本不会把它们上传到 GitHub。需要自定义端口时：
 
+前端默认只监听 `127.0.0.1:6366`，适合由宿主机 Nginx/Caddy 反向代理并管理 HTTPS；确需直接暴露前端端口时，在 `.env` 设置 `FRONTEND_BIND_ADDRESS=0.0.0.0` 后重新执行更新。
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/panel_install.sh | sudo env FRONTEND_PORT=8080 BACKEND_PORT=6365 bash
 ```
