@@ -406,10 +406,52 @@ json_boolean() {
   tr -d '\n' | sed -n "s/.*\"${key}\"[[:space:]]*:[[:space:]]*\\(true\\|false\\).*/\\1/p"
 }
 
+json_string() {
+  local key="$1"
+  tr -d '\n' | sed -n "s/.*\"${key}\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p"
+}
+
+json_record_count() {
+  grep -oE '"id"[[:space:]]*:[[:space:]]*"[^"]+"' | wc -l | tr -d '[:space:]'
+}
+
+is_valid_ipv4() {
+  local address="$1" octet
+  local -a octets
+  IFS='.' read -r -a octets <<< "$address"
+  [[ "${#octets[@]}" -eq 4 ]] || return 1
+  for octet in "${octets[@]}"; do
+    [[ "$octet" =~ ^[0-9]{1,3}$ ]] || return 1
+    (( 10#$octet <= 255 )) || return 1
+  done
+}
+
+is_valid_ipv6() {
+  local address="$1" without_colons remainder component
+  local -a components
+  [[ "$address" == *:* && "$address" != *[^0-9a-fA-F:]* && "$address" != *":::"* ]] || return 1
+  without_colons="${address//:/}"
+  if [[ "$address" == *"::"* ]]; then
+    remainder="${address#*::}"
+    [[ "$remainder" != *"::"* ]] || return 1
+    (( ${#address} - ${#without_colons} <= 8 )) || return 1
+  else
+    (( ${#address} - ${#without_colons} == 7 )) || return 1
+  fi
+  IFS=':' read -r -a components <<< "${address//::/:}"
+  for component in "${components[@]}"; do
+    [[ -z "$component" || "$component" =~ ^[0-9a-fA-F]{1,4}$ ]] || return 1
+  done
+}
+
 cf_request() {
-  curl --fail --silent --show-error --retry 2 --connect-timeout 10 \
+  local response
+  response="$(curl --fail --silent --show-error --retry 4 --retry-all-errors --retry-delay 2 \
+    --connect-timeout 10 --max-time 30 \
     -H "Authorization: Bearer ${CF_API_TOKEN}" \
-    -H 'Content-Type: application/json' "$@"
+    -H 'Content-Type: application/json' "$@")" || return 1
+  grep -Eq '"success"[[:space:]]*:[[:space:]]*true' <<< "$response" || return 1
+  printf '%s' "$response"
 }
 
 find_zone_id() {
@@ -427,24 +469,40 @@ find_zone_id() {
 }
 
 sync_record() {
-  local record_type="$1" address="$2" zone_id="$3" response record_id ttl proxied payload
+  local record_type="$1" address="$2" zone_id="$3" response record_count record_id current_address ttl proxied payload
   response="$(cf_request --get \
     --data-urlencode "type=${record_type}" \
     --data-urlencode "name=${CF_RECORD_NAME}" \
-    "${CLOUDFLARE_API}/zones/${zone_id}/dns_records")" || fail "无法查询 ${record_type} 记录"
-  record_id="$(printf '%s' "$response" | json_first_id)"
-  ttl="$(printf '%s' "$response" | json_number ttl)"
-  proxied="$(printf '%s' "$response" | json_boolean proxied)"
-  ttl="${ttl:-1}"
-  proxied="${proxied:-false}"
-  payload="{\"type\":\"${record_type}\",\"name\":\"${CF_RECORD_NAME}\",\"content\":\"${address}\",\"ttl\":${ttl},\"proxied\":${proxied}}"
-
-  if [[ -n "$record_id" ]]; then
-    response="$(cf_request -X PATCH --data "$payload" "${CLOUDFLARE_API}/zones/${zone_id}/dns_records/${record_id}")" || fail "更新 ${record_type} 记录失败"
-  else
-    response="$(cf_request -X POST --data "$payload" "${CLOUDFLARE_API}/zones/${zone_id}/dns_records")" || fail "创建 ${record_type} 记录失败"
+    "${CLOUDFLARE_API}/zones/${zone_id}/dns_records?per_page=100")" || fail "无法查询 ${record_type} 记录"
+  record_count="$(printf '%s' "$response" | json_record_count)"
+  case "$record_count" in
+    0)
+      ttl=1
+      proxied=false
+      payload="{\"type\":\"${record_type}\",\"name\":\"${CF_RECORD_NAME}\",\"content\":\"${address}\",\"ttl\":${ttl},\"proxied\":${proxied}}"
+      response="$(cf_request -X POST --data "$payload" "${CLOUDFLARE_API}/zones/${zone_id}/dns_records")" || fail "创建 ${record_type} 记录失败"
+      ;;
+    1)
+      record_id="$(printf '%s' "$response" | json_first_id)"
+      current_address="$(printf '%s' "$response" | json_string content)"
+      if [[ "$current_address" == "$address" ]]; then
+        echo "[DDNS] ${record_type} ${CF_RECORD_NAME} 已是 ${address}，无需更新"
+        return
+      fi
+      ttl="$(printf '%s' "$response" | json_number ttl)"
+      proxied="$(printf '%s' "$response" | json_boolean proxied)"
+      ttl="${ttl:-1}"
+      proxied="${proxied:-false}"
+      payload="{\"type\":\"${record_type}\",\"name\":\"${CF_RECORD_NAME}\",\"content\":\"${address}\",\"ttl\":${ttl},\"proxied\":${proxied}}"
+      response="$(cf_request -X PATCH --data "$payload" "${CLOUDFLARE_API}/zones/${zone_id}/dns_records/${record_id}")" || fail "更新 ${record_type} 记录失败"
+      ;;
+    *)
+      fail "${CF_RECORD_NAME} 存在 ${record_count} 条 ${record_type} 记录；节点 DDNS 只管理单条记录，已拒绝修改"
+      ;;
+  esac
+  if ! grep -Eq '"success"[[:space:]]*:[[:space:]]*true' <<<"$response"; then
+    fail "Cloudflare 未接受 ${record_type} 记录更新"
   fi
-  grep -Eq '"success"[[:space:]]*:[[:space:]]*true' <<<"$response" || fail "Cloudflare 未接受 ${record_type} 记录更新"
   echo "[DDNS] ${record_type} ${CF_RECORD_NAME} -> ${address}"
 }
 
@@ -458,18 +516,29 @@ main() {
     force_boot_sync=1
     should_sync=1
   fi
-  ipv4="$(curl -4 --fail --silent --show-error --connect-timeout 10 https://api.ipify.org 2>/dev/null || true)"
-  ipv6="$(curl -6 --fail --silent --show-error --connect-timeout 10 https://api64.ipify.org 2>/dev/null || true)"
+  ipv4="$(curl -4 --fail --silent --show-error --retry 4 --retry-all-errors --retry-delay 2 --connect-timeout 10 --max-time 30 https://api.ipify.org 2>/dev/null || true)"
+  ipv6="$(curl -6 --fail --silent --show-error --retry 4 --retry-all-errors --retry-delay 2 --connect-timeout 10 --max-time 30 https://api64.ipify.org 2>/dev/null || true)"
   next_ipv4="$LAST_IPV4"
   next_ipv6="$LAST_IPV6"
 
-  if [[ "$ipv4" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+  if [[ -n "$ipv4" ]] && ! is_valid_ipv4 "$ipv4"; then
+    echo "[DDNS] 忽略无效的 IPv4 检测结果" >&2
+    ipv4=""
+  fi
+  if [[ -n "$ipv6" ]] && ! is_valid_ipv6 "$ipv6"; then
+    echo "[DDNS] 忽略无效的 IPv6 检测结果" >&2
+    ipv6=""
+  fi
+  if [[ -n "$ipv4" ]]; then
     [[ "$ipv4" != "$LAST_IPV4" ]] && should_sync=1
     next_ipv4="$ipv4"
   fi
-  if [[ "$ipv6" == *:* ]]; then
+  if [[ -n "$ipv6" ]]; then
     [[ "$ipv6" != "$LAST_IPV6" ]] && should_sync=1
     next_ipv6="$ipv6"
+  fi
+  if (( force_boot_sync == 1 )) && [[ -z "$ipv4" && -z "$ipv6" ]]; then
+    fail "开机同步时未检测到可用公网 IP，将在下次定时任务重试"
   fi
   [[ -n "$next_ipv4" || -n "$next_ipv6" ]] || fail "未检测到可公开访问的 IPv4 或 IPv6 地址"
   if (( should_sync == 0 )); then

@@ -1515,7 +1515,7 @@ export default function NodePage() {
                     <span className="font-medium">启用 Cloudflare DDNS</span>
                   </Switch>
                   <p className="mt-1 text-xs text-default-500">
-                    安装后及每次开机首次任务都会同步；运行中每 1 分钟检查公网 IPv4/IPv6，地址变化时才更新 A/AAAA 记录。
+                    安装后及每次开机首次任务都会核验 Cloudflare 记录，仅不一致时更新；运行中每 1 分钟检查公网 IPv4/IPv6，地址变化时才更新 A/AAAA 记录。
                   </p>
                 </div>
 
@@ -1536,7 +1536,7 @@ export default function NodePage() {
                       value={cfRecordName}
                       onValueChange={setCfRecordName}
                       isDisabled={installCommandLoading}
-                      description="填写完整域名。已有 A/AAAA 记录会更新，不存在时自动创建；下次为该节点生成命令会自动带回。"
+                      description="填写完整域名。每种记录类型只能有一条：存在时更新、不存在时创建；多条同类型记录会拒绝修改，避免误改。"
                     />
                     <Alert
                       color="warning"
