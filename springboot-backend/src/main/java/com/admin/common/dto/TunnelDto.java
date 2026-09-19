@@ -25,10 +25,17 @@ public class TunnelDto {
     private List<Long> entryNodeIds;
 
     /**
-     * Public addresses for multi-ingress. They follow entryNodeIds order and
-     * are intentionally separate from a node's management address.
+     * Legacy multi-ingress public addresses. Kept so API clients from earlier
+     * releases can still create their existing IP-based tunnels.
      */
     private List<String> entryIps;
+
+    /**
+     * One public hostname for a multi-ingress tunnel. The hostname is stored
+     * in the existing inIp column; its A/AAAA records are managed by the user
+     * and may point to every selected ingress node.
+     */
+    private String entryDomain;
 
     // 出口节点ID，当type=1时可以为空，会自动设置为入口节点ID
     private Long outNodeId;

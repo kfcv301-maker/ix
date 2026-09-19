@@ -120,15 +120,17 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
         if (entryNodeIds.isEmpty()) {
             return R.err("请至少选择一个入口节点");
         }
-        List<String> entryIps = normalizeEntryIps(tunnelDto);
-        R entryIpValidation = validateExplicitEntryIps(entryNodeIds, entryIps);
-        if (entryIpValidation.getCode() != 0) {
-            return entryIpValidation;
+        List<String> legacyEntryIps = normalizeEntryIps(tunnelDto);
+        String entryDomain = normalizeEntryDomain(tunnelDto.getEntryDomain());
+        R entryAddressValidation = validateMultiIngressAddress(entryNodeIds, entryDomain, legacyEntryIps);
+        if (entryAddressValidation.getCode() != 0) {
+            return entryAddressValidation;
         }
         // Keep the first entry in the legacy column. Existing integrations keep
         // working while the relation table is the source of truth for fan-out.
         tunnelDto.setEntryNodeIds(entryNodeIds);
-        tunnelDto.setEntryIps(entryIps);
+        tunnelDto.setEntryIps(legacyEntryIps);
+        tunnelDto.setEntryDomain(entryDomain);
         tunnelDto.setInNodeId(entryNodeIds.get(0));
         // 1. 验证隧道名称唯一性
         R nameValidationResult = validateTunnelNameUniqueness(tunnelDto.getName());
@@ -397,13 +399,14 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
         
         // 设置入口节点信息
         tunnel.setInNodeId(tunnelDto.getInNodeId());
-        // A multi-ingress tunnel can be reached through public addresses which
-        // differ from the Agent's management address.  Persist those addresses
-        // in the existing in_ip column so every existing forward query and UI
-        // automatically uses the configured public endpoint.  Single-ingress
-        // tunnels retain the original node-IP behavior unchanged.
+        // Persist the public domain in the existing in_ip column. This keeps
+        // all existing forward queries and UI consumers compatible without a
+        // schema migration. A domain is an external display/access address;
+        // the Agent still receives rules through the selected entry nodes.
         if (tunnelDto.getEntryNodeIds().size() > 1) {
-            tunnel.setInIp(String.join(",", tunnelDto.getEntryIps()));
+            tunnel.setInIp(StrUtil.isNotBlank(tunnelDto.getEntryDomain())
+                    ? tunnelDto.getEntryDomain()
+                    : String.join(",", tunnelDto.getEntryIps()));
         } else {
             tunnel.setInIp(inNode.getIp());
         }
@@ -536,19 +539,43 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
                 .collect(Collectors.toList());
     }
 
-    private R validateExplicitEntryIps(List<Long> entryNodeIds, List<String> entryIps) {
+    private String normalizeEntryDomain(String entryDomain) {
+        if (StringUtils.isBlank(entryDomain)) {
+            return "";
+        }
+        String normalized = entryDomain.trim().toLowerCase(Locale.ROOT);
+        return normalized.endsWith(".")
+                ? normalized.substring(0, normalized.length() - 1)
+                : normalized;
+    }
+
+    private R validateMultiIngressAddress(List<Long> entryNodeIds, String entryDomain, List<String> legacyEntryIps) {
         if (entryNodeIds.size() <= 1) {
             return R.ok();
         }
-        if (entryIps.size() != entryNodeIds.size()) {
-            return R.err("多入口隧道必须为每个入口节点填写一个公网 IP");
+        if (StringUtils.isNotBlank(entryDomain)) {
+            return isValidDomainName(entryDomain)
+                    ? R.ok()
+                    : R.err("多入口访问域名格式不正确");
         }
-        for (String entryIp : entryIps) {
+        // Compatibility for older panel builds that still submit entryIps.
+        // New UI submissions always use one entryDomain instead.
+        if (legacyEntryIps.size() != entryNodeIds.size()) {
+            return R.err("多入口隧道必须填写一个对外访问域名");
+        }
+        for (String entryIp : legacyEntryIps) {
             if (!isLiteralIpAddress(entryIp)) {
-                return R.err("入口 IP 格式不正确：" + entryIp);
+                return R.err("旧版入口 IP 格式不正确：" + entryIp);
             }
         }
         return R.ok();
+    }
+
+    private boolean isValidDomainName(String domain) {
+        if (domain.length() > 253 || isLiteralIpAddress(domain)) {
+            return false;
+        }
+        return domain.matches("(?i)^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}$");
     }
 
     private String stripIpv6Brackets(String address) {

@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { Card, CardBody, CardHeader } from "@heroui/card";
 import { Button } from "@heroui/button";
-import { Input, Textarea } from "@heroui/input";
+import { Input } from "@heroui/input";
 import { Select, SelectItem } from "@heroui/select";
 import { Modal, ModalContent, ModalHeader, ModalBody, ModalFooter } from "@heroui/modal";
 import { Chip } from "@heroui/chip";
@@ -26,7 +26,6 @@ interface Tunnel {
   type: number; // 1: 端口转发, 2: 隧道转发
   inNodeId: number;
   entryNodeIds?: number[];
-  entryIps?: string[];
   outNodeId?: number;
   inIp: string;
   outIp?: string;
@@ -52,7 +51,7 @@ interface TunnelForm {
   type: number;
   inNodeId: number | null;
   entryNodeIds: number[];
-  entryIps: string[];
+  entryDomain: string;
   outNodeId?: number | null;
   protocol: string;
   tcpListenAddr: string;
@@ -103,7 +102,7 @@ export default function TunnelPage() {
     type: 1,
     inNodeId: null,
     entryNodeIds: [],
-    entryIps: [],
+    entryDomain: '',
     outNodeId: null,
     protocol: 'tls',
     tcpListenAddr: '[::]',
@@ -163,10 +162,11 @@ export default function TunnelPage() {
       newErrors.inNodeId = '请选择入口节点';
     }
 
-    if (form.entryNodeIds.length > 1) {
-      const entryIps = form.entryIps.map(ip => ip.trim()).filter(Boolean);
-      if (entryIps.length !== form.entryNodeIds.length) {
-        newErrors.entryIps = '请按入口节点顺序，每行填写一个公网 IP';
+    if (!isEdit && form.entryNodeIds.length > 1) {
+      const entryDomain = form.entryDomain.trim();
+      const domainPattern = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i;
+      if (!domainPattern.test(entryDomain)) {
+        newErrors.entryDomain = '请输入有效的对外访问域名，例如 game.example.com';
       }
     }
     
@@ -207,7 +207,7 @@ export default function TunnelPage() {
       type: 1,
       inNodeId: null,
       entryNodeIds: [],
-      entryIps: [],
+      entryDomain: '',
       outNodeId: null,
       protocol: 'tls',
       tcpListenAddr: '[::]',
@@ -230,7 +230,9 @@ export default function TunnelPage() {
       type: tunnel.type,
       inNodeId: tunnel.inNodeId,
       entryNodeIds: tunnel.entryNodeIds?.length ? tunnel.entryNodeIds : [tunnel.inNodeId],
-      entryIps: tunnel.entryIps?.length ? tunnel.entryIps : (tunnel.inIp || '').split(',').map(ip => ip.trim()).filter(Boolean),
+      // Existing tunnels keep their saved inIp unchanged during edit. The
+      // domain field only participates when creating a new multi-ingress tunnel.
+      entryDomain: '',
       outNodeId: tunnel.outNodeId || null,
       protocol: tunnel.protocol || 'tls',
       tcpListenAddr: tunnel.tcpListenAddr || '[::]',
@@ -359,16 +361,16 @@ export default function TunnelPage() {
     }
   };
 
-  // 获取显示的IP（处理多IP）
-  const getDisplayIp = (ipString?: string): string => {
-    if (!ipString) return '-';
+  // 获取对外地址（兼容旧版以逗号保存的多个 IP）
+  const getDisplayAddress = (address?: string): string => {
+    if (!address) return '-';
     
-    const ips = ipString.split(',').map(ip => ip.trim()).filter(ip => ip);
+    const addresses = address.split(',').map(item => item.trim()).filter(item => item);
     
-    if (ips.length === 0) return '-';
-    if (ips.length === 1) return ips[0];
+    if (addresses.length === 0) return '-';
+    if (addresses.length === 1) return addresses[0];
     
-    return `${ips[0]} 等${ips.length}个`;
+    return `${addresses[0]} 等${addresses.length}个`;
   };
 
   // 获取节点名称
@@ -512,7 +514,7 @@ export default function TunnelPage() {
                             {getEntryNodeNames(tunnel)}
                           </code>
                           <code className="text-xs font-mono text-default-500 block truncate">
-                            {getDisplayIp(tunnel.inIp)}
+                            {getDisplayAddress(tunnel.inIp)}
                           </code>
                         </div>
                         
@@ -532,7 +534,7 @@ export default function TunnelPage() {
                             {tunnel.type === 1 ? getNodeName(tunnel.inNodeId) : getNodeName(tunnel.outNodeId)}
                           </code>
                           <code className="text-xs font-mono text-default-500 block truncate">
-                            {tunnel.type === 1 ? getDisplayIp(tunnel.inIp) : getDisplayIp(tunnel.outIp)}
+                            {tunnel.type === 1 ? getDisplayAddress(tunnel.inIp) : getDisplayAddress(tunnel.outIp)}
                           </code>
                         </div>
                       </div>
@@ -725,7 +727,6 @@ export default function TunnelPage() {
                         setForm(prev => ({
                           ...prev,
                           entryNodeIds,
-                          entryIps: entryNodeIds.length > 1 ? prev.entryIps.slice(0, entryNodeIds.length) : [],
                           inNodeId: entryNodeIds[0] || null
                         }));
                       }}
@@ -753,20 +754,16 @@ export default function TunnelPage() {
                       ))}
                     </Select>
 
-                    {form.entryNodeIds.length > 1 && (
-                      <Textarea
-                        label="入口公网 IP（按节点顺序，每行一个）"
-                        placeholder="203.0.113.10\n2001:db8::10"
-                        value={form.entryIps.join('\n')}
-                        onChange={(event) => setForm(prev => ({
-                          ...prev,
-                          entryIps: event.target.value.split(/[\n,]/).map(ip => ip.trim()).filter(Boolean)
-                        }))}
-                        isInvalid={!!errors.entryIps}
-                        errorMessage={errors.entryIps}
+                    {!isEdit && form.entryNodeIds.length > 1 && (
+                      <Input
+                        label="对外访问域名"
+                        placeholder="game.example.com"
+                        value={form.entryDomain}
+                        onChange={(event) => setForm(prev => ({ ...prev, entryDomain: event.target.value }))}
+                        isInvalid={!!errors.entryDomain}
+                        errorMessage={errors.entryDomain}
                         variant="bordered"
-                        isDisabled={isEdit}
-                        description={`顺序：${form.entryNodeIds.map(id => nodes.find(node => node.id === id)?.name || `节点 ${id}`).join(' → ')}。用于用户访问的入口地址；Agent 仍按上方所选节点下发转发，不会使用节点监控中的管理 IP。`}
+                        description="只填写一个域名。请将这个域名的多条 A/AAAA 记录解析到已选入口节点；规则仍由系统同步到全部入口节点，不会使用节点监控中的管理 IP。"
                       />
                     )}
 
@@ -891,7 +888,9 @@ export default function TunnelPage() {
                         color="primary"
                         variant="flat"
                         title={`已选择 ${form.entryNodeIds.length} 个入口节点`}
-                        description="每条转发会自动同步到全部入口节点。请在上方按顺序填写公网 IP，再将同一个域名的 A/AAAA 记录分别解析到这些地址。"
+                        description={isEdit
+                          ? "已有多入口关系与对外地址会保持不变；每条转发仍会同步到全部入口节点。"
+                          : "每条转发会自动同步到全部入口节点。请为上方同一个域名添加多条 A/AAAA 记录，分别指向这些入口节点。"}
                         className="mt-4"
                       />
                     )}
