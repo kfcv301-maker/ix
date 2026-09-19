@@ -7,6 +7,7 @@ import com.admin.common.dto.NodeDto;
 import com.admin.common.dto.NodeInstallCommandDto;
 import com.admin.common.dto.NodeUpdateDto;
 import com.admin.common.lang.R;
+import com.admin.common.utils.AESCrypto;
 import com.admin.common.utils.WebSocketServer;
 import com.admin.entity.Node;
 import com.admin.entity.Tunnel;
@@ -22,6 +23,7 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import org.springframework.beans.BeanUtils;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Value;
 
 import javax.annotation.Resource;
 import java.net.URI;
@@ -29,8 +31,6 @@ import java.net.URISyntaxException;
 import java.util.List;
 import java.util.Objects;
 import java.util.stream.Collectors;
-
-import org.springframework.beans.factory.annotation.Value;
 
 /**
  * <p>
@@ -69,6 +69,8 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
     private static final String ERROR_PORT_END_REQUIRED = "结束端口不能为空";
     private static final String ERROR_PORT_RANGE_INVALID = "端口必须在1-65535范围内";
     private static final String ERROR_PORT_ORDER_INVALID = "结束端口不能小于起始端口";
+    private static final String DEFAULT_TCP_TUNING_PROFILE = "balanced";
+    private static final String DDNS_RECORD_PATTERN = "(?i)^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}$";
 
     // ========== 依赖注入 ==========
     
@@ -82,6 +84,11 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
     @Lazy
     private TunnelService tunnelService;
 
+    @Value("${jwt-secret}")
+    private String jwtSecret;
+
+    private volatile AESCrypto ddnsCrypto;
+
     // ========== 公共接口实现 ==========
 
     /**
@@ -93,6 +100,11 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
     @Override
     public R createNode(NodeDto nodeDto) {
         Node node = buildNewNode(nodeDto);
+        R installSettings = applyInstallSettings(node, null, nodeDto.getTcpTuningProfile(),
+                nodeDto.getDdnsEnabled(), nodeDto.getCfApiToken(), nodeDto.getCfRecordName());
+        if (installSettings.getCode() != 0) {
+            return installSettings;
+        }
         boolean result = this.save(node);
         return result ? R.ok(SUCCESS_CREATE_MSG) : R.err(ERROR_CREATE_MSG);
     }
@@ -151,6 +163,11 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
 
         // 2. 构建更新对象并执行更新
         Node updateNode = buildUpdateNode(nodeUpdateDto);
+        R installSettings = applyInstallSettings(updateNode, node, nodeUpdateDto.getTcpTuningProfile(),
+                nodeUpdateDto.getDdnsEnabled(), nodeUpdateDto.getCfApiToken(), nodeUpdateDto.getCfRecordName());
+        if (installSettings.getCode() != 0) {
+            return installSettings;
+        }
         boolean result = this.updateById(updateNode);
 
         // 更新隧道入口ip
@@ -287,12 +304,105 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
     }
 
     /**
+     * Persists installation preferences at node creation/edit time. The token
+     * is encrypted with a key derived from the panel JWT secret, so the node
+     * table and API responses never contain the plaintext Cloudflare token.
+     */
+    private R applyInstallSettings(Node target, Node existing, String requestedProfile,
+                                   Boolean requestedDdnsEnabled, String requestedToken,
+                                   String requestedRecordName) {
+        String profile = requestedProfile == null
+                ? (existing == null ? DEFAULT_TCP_TUNING_PROFILE : existing.getTcpTuningProfile())
+                : requestedProfile;
+        profile = normalizeTcpTuningProfile(profile);
+        if (profile == null) {
+            return R.err("TCP 调优档位无效");
+        }
+        target.setTcpTuningProfile(profile);
+
+        boolean enabled = requestedDdnsEnabled != null
+                ? requestedDdnsEnabled
+                : existing != null && Integer.valueOf(1).equals(existing.getDdnsEnabled());
+        target.setDdnsEnabled(enabled ? 1 : 0);
+        if (!enabled) {
+            target.setDdnsToken(null);
+            target.setDdnsRecordName(null);
+            return R.ok();
+        }
+
+        String recordName = StrUtil.isBlank(requestedRecordName)
+                ? (existing == null ? null : existing.getDdnsRecordName())
+                : requestedRecordName.trim().toLowerCase();
+        if (StrUtil.isBlank(recordName) || !recordName.matches(DDNS_RECORD_PATTERN)) {
+            return R.err("启用 DDNS 时必须填写有效的完整记录域名");
+        }
+
+        String encryptedToken;
+        if (StrUtil.isBlank(requestedToken)) {
+            encryptedToken = existing == null ? null : existing.getDdnsToken();
+        } else {
+            if (requestedToken.contains("\n") || requestedToken.contains("\r")) {
+                return R.err("Cloudflare API Token 格式无效");
+            }
+            try {
+                encryptedToken = getDdnsCrypto().encrypt(requestedToken.trim());
+            } catch (RuntimeException exception) {
+                return R.err("DDNS Token 加密失败，请检查面板密钥配置");
+            }
+        }
+        if (StrUtil.isBlank(encryptedToken)) {
+            return R.err("启用 DDNS 时必须填写 Cloudflare API Token");
+        }
+
+        target.setDdnsToken(encryptedToken);
+        target.setDdnsRecordName(recordName);
+        return R.ok();
+    }
+
+    private String normalizeTcpTuningProfile(String profile) {
+        if (StrUtil.isBlank(profile)) {
+            return DEFAULT_TCP_TUNING_PROFILE;
+        }
+        String normalized = profile.trim().toLowerCase();
+        if ("tiny".equals(normalized) || "small".equals(normalized)
+                || "balanced".equals(normalized) || "standard".equals(normalized)) {
+            return normalized;
+        }
+        return null;
+    }
+
+    private AESCrypto getDdnsCrypto() {
+        AESCrypto crypto = ddnsCrypto;
+        if (crypto == null) {
+            synchronized (this) {
+                crypto = ddnsCrypto;
+                if (crypto == null) {
+                    crypto = new AESCrypto(jwtSecret + ":node-ddns:v1");
+                    ddnsCrypto = crypto;
+                }
+            }
+        }
+        return crypto;
+    }
+
+    private String decryptDdnsToken(String encryptedToken) {
+        try {
+            return getDdnsCrypto().decryptString(encryptedToken);
+        } catch (RuntimeException exception) {
+            return null;
+        }
+    }
+
+    /**
      * 隐藏节点列表中的密钥信息
      * 
      * @param nodeList 节点列表
      */
     private void hideNodeSecrets(List<Node> nodeList) {
-        nodeList.forEach(node -> node.setSecret(null));
+        nodeList.forEach(node -> {
+            node.setSecret(null);
+            node.setDdnsToken(null);
+        });
     }
 
 
@@ -401,33 +511,19 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
         command.append("--panel ").append(shellQuote(panelUrl))
                .append(" --token ").append(shellQuote(node.getSecret()));
 
-        String tcpTuningProfile = commandDto.getTcpTuningProfile();
-        if (StrUtil.isNotBlank(tcpTuningProfile)) {
-            String normalizedProfile = tcpTuningProfile.trim().toLowerCase();
-            if (!("tiny".equals(normalizedProfile) || "small".equals(normalizedProfile)
-                    || "balanced".equals(normalizedProfile) || "standard".equals(normalizedProfile))) {
-                return R.err("TCP 调优档位无效");
-            }
-            command.append(" --tcp-profile ").append(shellQuote(normalizedProfile));
-        }
+        String tcpTuningProfile = normalizeTcpTuningProfile(node.getTcpTuningProfile());
+        command.append(" --tcp-profile ").append(shellQuote(
+                tcpTuningProfile == null ? DEFAULT_TCP_TUNING_PROFILE : tcpTuningProfile));
 
-        if (Boolean.TRUE.equals(commandDto.getDdnsEnabled())) {
-            String token = commandDto.getCfApiToken();
-            String recordName = commandDto.getCfRecordName();
-            if (StrUtil.isBlank(token) || StrUtil.isBlank(recordName)) {
-                return R.err("启用 DDNS 时必须填写 Cloudflare API Token 和记录域名");
-            }
-            if (token.contains("\n") || token.contains("\r")) {
-                return R.err("Cloudflare API Token 格式无效");
-            }
-
-            String normalizedRecordName = recordName.trim().toLowerCase();
-            if (!normalizedRecordName.matches("(?i)^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}$")) {
-                return R.err("DDNS 记录域名格式无效，请填写完整域名，例如 node.example.com");
+        if (Integer.valueOf(1).equals(node.getDdnsEnabled())) {
+            String token = decryptDdnsToken(node.getDdnsToken());
+            String recordName = node.getDdnsRecordName();
+            if (StrUtil.isBlank(token) || StrUtil.isBlank(recordName) || !recordName.matches(DDNS_RECORD_PATTERN)) {
+                return R.err("该节点的 DDNS 配置不完整或无法解密，请编辑节点后重新保存");
             }
             command.append(" --cf-api-token ").append(shellQuote(token))
-                   .append(" --cf-record ").append(shellQuote(normalizedRecordName));
-        } else if (Boolean.FALSE.equals(commandDto.getDdnsEnabled())) {
+                   .append(" --cf-record ").append(shellQuote(recordName));
+        } else {
             command.append(" --disable-ddns");
         }
         return R.ok(command.toString());

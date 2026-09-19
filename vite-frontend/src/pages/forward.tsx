@@ -1598,7 +1598,7 @@ export default function ForwardPage() {
                     
                     <Input
                       label="入口端口"
-                      placeholder="留空自动分配"
+                      placeholder="留空随机分配"
                       type="number"
                       value={form.inPort?.toString() || ''}
                       onChange={(e) => setForm(prev => ({ 
@@ -1611,7 +1611,7 @@ export default function ForwardPage() {
                       description={
                         selectedTunnel && selectedTunnel.inNodePortSta && selectedTunnel.inNodePortEnd
                           ? `允许范围: ${selectedTunnel.inNodePortSta}-${selectedTunnel.inNodePortEnd}`
-                          : '留空将自动分配可用端口'
+                          : '留空将从节点端口范围随机分配未占用端口'
                       }
                     />
                     
@@ -2158,4 +2158,4 @@ export default function ForwardPage() {
       </div>
     
   );
-} 
+}

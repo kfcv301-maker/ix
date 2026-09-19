@@ -64,6 +64,10 @@ CREATE TABLE `node` (
   `http` int(10) NOT NULL DEFAULT '0',
   `tls` int(10) NOT NULL DEFAULT '0',
   `socks` int(10) NOT NULL DEFAULT '0',
+  `tcp_tuning_profile` varchar(20) NOT NULL DEFAULT 'balanced',
+  `ddns_enabled` tinyint(1) NOT NULL DEFAULT '0',
+  `ddns_token` longtext DEFAULT NULL,
+  `ddns_record_name` varchar(253) DEFAULT NULL,
   `created_time` bigint(20) NOT NULL,
   `updated_time` bigint(20) DEFAULT NULL,
   `status` int(10) NOT NULL

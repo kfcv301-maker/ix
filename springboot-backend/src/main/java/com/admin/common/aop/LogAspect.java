@@ -18,11 +18,15 @@ import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 @Component
 @Aspect
 @Slf4j
 public class LogAspect {
+
+    private static final Pattern SENSITIVE_JSON_VALUE = Pattern.compile(
+            "(?i)(\\\"(?:cfApiToken|ddnsToken|secret|password|pwd)\\\"\\s*:\\s*\\\")[^\\\"]*(\\\")");
 
     @Pointcut("@annotation(com.admin.common.aop.LogAnnotation)")
     public void pt() {
@@ -74,7 +78,7 @@ public class LogAspect {
         String requestParams = getRequestParams(joinPoint);
         
         // 获取返回参数
-        String responseParams = returnValue != null ? JSON.toJSONString(returnValue) : "无返回值";
+        String responseParams = returnValue != null ? redactSensitiveValues(JSON.toJSONString(returnValue)) : "无返回值";
         
         // 合并为一条完整的日志信息
         String logMessage = String.format(
@@ -152,27 +156,27 @@ public class LogAspect {
             if (args.length == 0) {
                 return "无参数";
             } else if (args[0] != null && args[0].toString().contains("SecurityContextHolderAwareRequestWrapper")) {
-                return JSON.toJSONString(Arrays.toString(ArrayUtil.remove(args, 0)));
+                return redactSensitiveValues(JSON.toJSONString(Arrays.toString(ArrayUtil.remove(args, 0))));
             } else {
                 // 检查是否只有一个参数且已经是JSON字符串格式
                 if (args.length == 1 && args[0] != null) {
                     // 如果参数本身就是字符串且是JSON格式，直接返回
                     if (args[0] instanceof String && ((String) args[0]).startsWith("{") && ((String) args[0]).endsWith("}")) {
-                        return (String) args[0];
+                        return redactSensitiveValues((String) args[0]);
                     }
                     
                     // 如果参数是普通对象，直接序列化
                     try {
-                        return JSON.toJSONString(args[0]);
+                        return redactSensitiveValues(JSON.toJSONString(args[0]));
                     } catch (Exception e) {
                         // 如果序列化失败，再尝试使用参数名映射
                         Map<String, Object> map = new HashMap<>();
                         String[] names = ((CodeSignature) joinPoint.getSignature()).getParameterNames();
                         if (names != null) {
                             map.put(names[0], args[0]);
-                            return JSON.toJSONString(map);
+                            return redactSensitiveValues(JSON.toJSONString(map));
                         }
-                        return JSON.toJSONString(args[0]);
+                        return redactSensitiveValues(JSON.toJSONString(args[0]));
                     }
                 } else {
                     // 多个参数时，使用参数名映射
@@ -183,11 +187,15 @@ public class LogAspect {
                             map.put(names[i], args[i]);
                         }
                     }
-                    return JSON.toJSONString(map);
+                    return redactSensitiveValues(JSON.toJSONString(map));
                 }
             }
         } catch (Exception e) {
             return "获取参数失败: " + e.getMessage();
         }
+    }
+
+    private String redactSensitiveValues(String value) {
+        return SENSITIVE_JSON_VALUE.matcher(value).replaceAll("$1***$2");
     }
 }

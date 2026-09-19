@@ -62,6 +62,8 @@ curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/panel_install
 curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/panel_install.sh | sudo bash -s -- update
 ```
 
+完成一次上述更新后，管理员也可以在面板的“网站配置”页面使用“检查并更新”。它会先在服务器本机导出 MySQL 备份，再拉取 `main` 分支并重建面板；不会删除数据库卷、节点、转发、账号、设置或 `.env`。更新器不开放公网端口，仅接受面板内部的带随机密钥请求。
+
 ### 从原版哆啦A梦面板升级
 
 原版 `bqlpfy/flux-panel` 的数据库放在 Docker 卷 `mysql_data` 中。下面的迁移脚本会先在新版目录创建一份仅留在服务器本机的 SQL 备份，再复用这个数据卷和原 `.env` 启动新版；节点、用户、隧道、转发、流量和密钥不需要导入或重新创建。原面板目录和原容器不会被删除；如果新版后端未通过检查，脚本会自动恢复原容器。
@@ -92,7 +94,7 @@ curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/install.sh | 
 
 安装命令自动读取管理员当前浏览器的面板域名。例如从 `https://panel.example.com` 打开面板时，Agent 使用 `wss://panel.example.com/system-info` 保持通信，并通过 `https://panel.example.com/flow/*` 上报数据；不再要求管理员在网站配置填写 IP 或后端端口。新 Agent 将独立节点密钥放在 `Authorization: Bearer` 请求头中；后端仍接受旧 Agent 的 URL 密钥参数，已有节点无需重装。域名的反向代理须把 `/system-info`（WebSocket）、`/flow/upload` 与 `/flow/config` 转到后端，并使用有效 HTTPS 证书。
 
-节点安装时会先检测内核版本、CPU、内存、默认出口网卡以及 BBR/FQ 支持，再做 TCP 调优，最后才下载和启动 Agent。调优写入 `/etc/sysctl.d/99-flux-panel-network.conf`，不需要额外确认。面板生成安装命令时可选下面四档；未传档位的旧命令仍会按机器配置自动选择。
+节点安装时会先检测内核版本、CPU、内存、默认出口网卡以及 BBR/FQ 支持，再做 TCP 调优，最后才下载和启动 Agent。调优写入 `/etc/sysctl.d/99-flux-panel-network.conf`，不需要额外确认。管理员在“新增/编辑节点”时选定下面四档，之后点击“安装”只会直接生成命令；未传档位的旧命令仍会按机器配置自动选择。
 
 | 档位 | 建议机器配置 | 单连接收发缓存上限 | 接入 / SYN / 收包队列 |
 | --- | --- | --- | --- |
@@ -109,7 +111,7 @@ curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/install.sh | 
 
 ### Cloudflare DDNS（可选）
 
-在节点管理中点击“安装”，开启 Cloudflare DDNS 后填写 API Token 和完整记录域名即可生成一条命令。首次成功生成后，这两个字段会作为该节点的安装预设保存在当前管理员浏览器；下次打开同一节点会自动带回，不写入面板数据库。安装完成及每次开机后的首次任务都会核验 Cloudflare 记录，仅在不一致时更新；节点运行期间每 1 分钟检查公网 IPv4/IPv6，地址变化时才调用 Cloudflare 更新记录。每种记录类型只能有一条，若同一个 DDNS 域名存在多条 A 或 AAAA 记录，脚本会拒绝修改以避免误改。AWS 换机后重跑同一条命令即可恢复。检测到 IPv6 时会创建或更新同名 AAAA 记录；没有可用 IPv6 时不会创建、修改或删除 AAAA 记录。Token 需要 Cloudflare 的 `Zone:Read` 与 `DNS:Edit` 权限。
+在“新增/编辑节点”中开启 Cloudflare DDNS，并填写 API Token 和完整记录域名；这些设置会随节点保存。Token 使用面板 JWT 密钥派生的 AES-GCM 加密后才写入数据库，节点列表与日志不会返回明文。编辑已配置节点时令牌框留空并保存会保留原令牌；填写新值才会替换。此后点击“安装”不再要求重复填写。安装完成及每次开机后的首次任务都会核验 Cloudflare 记录，仅在不一致时更新；节点运行期间每 1 分钟检查公网 IPv4/IPv6，地址变化时才调用 Cloudflare 更新记录。每种记录类型只能有一条，若同一个 DDNS 域名存在多条 A 或 AAAA 记录，脚本会拒绝修改以避免误改。AWS 换机后重跑同一条命令即可恢复。检测到 IPv6 时会创建或更新同名 AAAA 记录；没有可用 IPv6 时不会创建、修改或删除 AAAA 记录。Token 需要 Cloudflare 的 `Zone:Read` 与 `DNS:Edit` 权限。
 
 节点每次连接或重连面板后都会立即上报当前 GOST 配置，面板据此补回重装/重启后确实缺失的转发服务；十分钟一次的周期上报仍保留作漂移校验。这样无需为了恢复规则而手工编辑保存转发。
 

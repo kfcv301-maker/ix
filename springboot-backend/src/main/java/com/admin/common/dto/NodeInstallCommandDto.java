@@ -11,18 +11,19 @@ public class NodeInstallCommandDto {
     private Long id;
 
     /**
-     * null 保持旧客户端的行为；true 配置 DDNS；false 移除现有 DDNS 配置。
+     * Legacy fields are retained only so older browser bundles do not fail
+     * deserialization. New commands always use the settings saved on Node.
      */
+    @Deprecated
     private Boolean ddnsEnabled;
 
+    @Deprecated
     private String cfApiToken;
 
+    @Deprecated
     private String cfRecordName;
 
-    /**
-     * 节点安装时由管理员选择的 TCP 调优档位：tiny、small、balanced 或 standard。
-     * 为空时保留安装脚本的旧版自动选择行为，兼容旧客户端。
-     */
+    @Deprecated
     private String tcpTuningProfile;
 
     /**

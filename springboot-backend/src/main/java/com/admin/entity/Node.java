@@ -1,5 +1,6 @@
 package com.admin.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import java.io.Serializable;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
@@ -37,5 +38,21 @@ public class Node extends BaseEntity {
     private Integer tls;
 
     private Integer socks;
+
+    /** TCP tuning preset selected when the node is created or edited. */
+    private String tcpTuningProfile;
+
+    /** Whether the generated node installation command should configure DDNS. */
+    private Integer ddnsEnabled;
+
+    /**
+     * AES-GCM encrypted Cloudflare token. Never serialize it in node responses
+     * or request logs.
+     */
+    @JsonIgnore
+    private String ddnsToken;
+
+    /** The DNS record managed by this node when DDNS is enabled. */
+    private String ddnsRecordName;
 
 }

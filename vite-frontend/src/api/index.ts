@@ -29,6 +29,7 @@ export const getNodeList = () => Network.post("/node/list");
 export const updateNode = (data: any) => Network.post("/node/update", data);
 export const deleteNode = (id: number) => Network.post("/node/delete", { id });
 export interface NodeInstallOptions {
+  /** Legacy browser bundles may still send these. Saved node settings take precedence. */
   ddnsEnabled?: boolean;
   cfApiToken?: string;
   cfRecordName?: string;
@@ -38,6 +39,8 @@ export interface NodeInstallOptions {
 }
 
 export const getNodeInstallCommand = (id: number, options: NodeInstallOptions = {}) => Network.post("/node/install", { id, ...options });
+export const getPanelUpdateStatus = () => Network.post("/panel-update/status");
+export const startPanelUpdate = () => Network.post("/panel-update/start");
 export const checkNodeStatus = (nodeId?: number) => {
   const params = nodeId ? { nodeId } : {};
   return Network.post("/node/check-status", params);

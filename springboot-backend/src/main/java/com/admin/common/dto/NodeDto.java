@@ -29,4 +29,14 @@ public class NodeDto {
     @Max(value = 65535, message = "结束端口不能超过65535")
     private Integer portEnd;
 
+    /** tiny, small, balanced or standard; balanced is used when omitted. */
+    private String tcpTuningProfile;
+
+    /** DDNS settings are saved with the node, not asked again when copying its command. */
+    private Boolean ddnsEnabled;
+
+    private String cfApiToken;
+
+    private String cfRecordName;
+
 }

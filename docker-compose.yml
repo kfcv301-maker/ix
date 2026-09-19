@@ -34,6 +34,7 @@ services:
       DB_USER: ${DB_USER}
       DB_PASSWORD: ${DB_PASSWORD}
       JWT_SECRET: ${JWT_SECRET}
+      PANEL_UPDATER_TOKEN: ${PANEL_UPDATER_TOKEN}
       LOG_DIR: /app/logs
       JAVA_OPTS: -Xms256m -Xmx512m -Dfile.encoding=UTF-8 -Duser.timezone=Asia/Shanghai
     ports:
@@ -53,6 +54,23 @@ services:
       - "${FRONTEND_BIND_ADDRESS:-127.0.0.1}:${FRONTEND_PORT}:80"
     depends_on:
       - backend
+    networks: [flux-panel]
+
+  # Deliberately has no published port.  The backend can reach it only on the
+  # Docker network and authenticates every request with PANEL_UPDATER_TOKEN.
+  updater:
+    image: docker/compose:2.27.0
+    restart: unless-stopped
+    environment:
+      PANEL_UPDATER_TOKEN: ${PANEL_UPDATER_TOKEN}
+      INSTALL_DIR: /workspace
+      PROJECT_NAME: flux-panel-enhanced
+      REPO_URL: https://github.com/kfcv301-maker/ix.git
+      BRANCH: main
+    volumes:
+      - .:/workspace
+      - /var/run/docker.sock:/var/run/docker.sock
+    entrypoint: ["/bin/sh", "/workspace/updater/entrypoint.sh"]
     networks: [flux-panel]
 
 volumes:

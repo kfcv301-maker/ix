@@ -9,8 +9,8 @@ import { Switch } from "@heroui/switch";
 import { Spinner } from "@heroui/spinner";
 import { Alert } from "@heroui/alert";
 import { Progress } from "@heroui/progress";
+import axios from "axios";
 import toast from 'react-hot-toast';
-import axios from 'axios';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
 
@@ -37,6 +37,9 @@ interface Node {
   connectionStatus: 'online' | 'offline';
   systemInfo?: NodeSystemInfo | null;
   copyLoading?: boolean;
+  tcpTuningProfile?: TcpTuningProfile;
+  ddnsEnabled?: number;
+  ddnsRecordName?: string;
 }
 
 interface NodeSystemInfo {
@@ -114,58 +117,13 @@ interface NodeForm {
   http: number; // 0 关 1 开
   tls: number;  // 0 关 1 开
   socks: number; // 0 关 1 开
+  tcpTuningProfile: TcpTuningProfile;
+  ddnsEnabled: boolean;
+  cfApiToken: string;
+  cfRecordName: string;
 }
 
 type TcpTuningProfile = 'tiny' | 'small' | 'balanced' | 'standard';
-
-interface DdnsInstallPreset {
-  enabled: boolean;
-  cfApiToken: string;
-  cfRecordName: string;
-  tcpTuningProfile: TcpTuningProfile;
-}
-
-const ddnsPresetStorageKey = (nodeId: number) =>
-  `flux-panel:node-install:${window.location.origin}:${nodeId}`;
-
-const readDdnsInstallPreset = (nodeId: number): DdnsInstallPreset | null => {
-  try {
-    const saved = window.localStorage.getItem(ddnsPresetStorageKey(nodeId));
-    if (!saved) return null;
-    const preset = JSON.parse(saved) as Partial<DdnsInstallPreset>;
-    const validProfile = ['tiny', 'small', 'balanced', 'standard'].includes(preset.tcpTuningProfile || '')
-      ? preset.tcpTuningProfile as TcpTuningProfile
-      : 'balanced';
-    return {
-      enabled: Boolean(preset.enabled),
-      cfApiToken: typeof preset.cfApiToken === 'string' ? preset.cfApiToken : '',
-      cfRecordName: typeof preset.cfRecordName === 'string' ? preset.cfRecordName : '',
-      tcpTuningProfile: validProfile,
-    };
-  } catch {
-    return null;
-  }
-};
-
-const saveDdnsInstallPreset = (nodeId: number, preset: DdnsInstallPreset) => {
-  window.localStorage.setItem(ddnsPresetStorageKey(nodeId), JSON.stringify(preset));
-};
-
-// 浏览器页面和 API 不一定同域：移动端 WebView、反向代理或单独托管前端时，
-// window.location.origin 可能不是 Agent 应连接的公开面板地址。优先复用当前
-// 已成功请求 API 的地址，避免生成可打开面板却无法让节点上线的安装命令。
-const resolveAgentPanelUrl = (): string => {
-  try {
-    const apiBaseUrl = axios.defaults.baseURL || '/api/v1/';
-    const resolved = new URL(apiBaseUrl, window.location.origin);
-    if (resolved.protocol === 'http:' || resolved.protocol === 'https:') {
-      return resolved.origin;
-    }
-  } catch {
-    // Fall through to the current browser origin for a malformed custom API URL.
-  }
-  return window.location.origin;
-};
 
 export default function NodePage() {
   const [nodeList, setNodeList] = useState<Node[]>([]);
@@ -191,21 +149,19 @@ export default function NodePage() {
     portEnd: 65535,
     http: 0,
     tls: 0,
-    socks: 0
+    socks: 0,
+    tcpTuningProfile: 'balanced',
+    ddnsEnabled: false,
+    cfApiToken: '',
+    cfRecordName: ''
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
   
   // 安装命令相关状态
-  const [installSetupModal, setInstallSetupModal] = useState(false);
   const [installCommandModal, setInstallCommandModal] = useState(false);
   const [installCommand, setInstallCommand] = useState('');
   const [currentNodeName, setCurrentNodeName] = useState('');
-  const [installNode, setInstallNode] = useState<Node | null>(null);
   const [installCommandLoading, setInstallCommandLoading] = useState(false);
-  const [ddnsEnabled, setDdnsEnabled] = useState(false);
-  const [cfApiToken, setCfApiToken] = useState('');
-  const [cfRecordName, setCfRecordName] = useState('');
-  const [tcpTuningProfile, setTcpTuningProfile] = useState<TcpTuningProfile>('balanced');
   
   const websocketRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -605,6 +561,15 @@ export default function NodePage() {
     } else if (form.portEnd < form.portSta) {
       newErrors.portEnd = '结束端口不能小于起始端口';
     }
+
+    if (form.ddnsEnabled) {
+      if (!form.cfRecordName.trim()) {
+        newErrors.cfRecordName = '启用 DDNS 时请填写记录域名';
+      }
+      if (!isEdit && !form.cfApiToken.trim()) {
+        newErrors.cfApiToken = '新节点启用 DDNS 时请填写 Cloudflare API Token';
+      }
+    }
     
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
@@ -633,7 +598,12 @@ export default function NodePage() {
       portEnd: node.portEnd,
       http: typeof node.http === 'number' ? node.http : 1,
       tls: typeof node.tls === 'number' ? node.tls : 1,
-      socks: typeof node.socks === 'number' ? node.socks : 1
+      socks: typeof node.socks === 'number' ? node.socks : 1,
+      tcpTuningProfile: node.tcpTuningProfile || 'balanced',
+      ddnsEnabled: node.ddnsEnabled === 1,
+      // 出于安全考虑，后端从不回传令牌。留空保存会保留已加密的旧令牌。
+      cfApiToken: '',
+      cfRecordName: node.ddnsRecordName || ''
     });
     const offline = node.connectionStatus !== 'online';
     setProtocolDisabled(offline);
@@ -668,55 +638,27 @@ export default function NodePage() {
     }
   };
 
-  const openInstallSetup = (node: Node) => {
-    const preset = readDdnsInstallPreset(node.id);
-    setInstallNode(node);
-    setCurrentNodeName(node.name);
-    setDdnsEnabled(preset?.enabled ?? false);
-    setCfApiToken(preset?.cfApiToken ?? '');
-    setCfRecordName(preset?.cfRecordName ?? '');
-    setTcpTuningProfile(preset?.tcpTuningProfile ?? 'balanced');
-    setInstallSetupModal(true);
-  };
-
-  const closeInstallSetup = () => {
-    if (installCommandLoading) return;
-    setInstallSetupModal(false);
-    setInstallNode(null);
-    setCfApiToken('');
-    setCfRecordName('');
-  };
-
-  // 凭据仅保存在当前管理员浏览器中，生成命令时才发送给后端拼接；不写入节点数据库。
-  const handleGenerateInstallCommand = async () => {
-    if (!installNode) return;
-    if (ddnsEnabled && (!cfApiToken.trim() || !cfRecordName.trim())) {
-      toast.error('请填写 Cloudflare API Token 和 DDNS 记录域名');
-      return;
+  const resolveAgentPanelUrl = (): string => {
+    const apiBaseUrl = axios.defaults.baseURL || import.meta.env.VITE_API_BASE || window.location.origin;
+    try {
+      const parsed = new URL(apiBaseUrl, window.location.origin);
+      return `${parsed.protocol}//${parsed.host}`;
+    } catch {
+      return window.location.origin;
     }
+  };
 
+  // 安装参数在新增/编辑节点时已保存；这里仅生成与复制命令，不再要求重复填写。
+  const openInstallCommand = async (node: Node) => {
+    if (installCommandLoading) return;
+    setCurrentNodeName(node.name);
     setInstallCommandLoading(true);
     try {
-      const res = await getNodeInstallCommand(installNode.id, {
+      const res = await getNodeInstallCommand(node.id, {
         panelUrl: resolveAgentPanelUrl(),
-        ddnsEnabled,
-        tcpTuningProfile,
-        ...(ddnsEnabled ? {
-          cfApiToken: cfApiToken.trim(),
-          cfRecordName: cfRecordName.trim(),
-        } : {}),
       });
       if (res.code === 0 && res.data) {
-        saveDdnsInstallPreset(installNode.id, {
-          enabled: ddnsEnabled,
-          cfApiToken: cfApiToken.trim(),
-          cfRecordName: cfRecordName.trim(),
-          tcpTuningProfile,
-        });
         setInstallCommand(res.data);
-        setInstallSetupModal(false);
-        setCfApiToken('');
-        setCfRecordName('');
         try {
           await navigator.clipboard.writeText(res.data);
           toast.success('安装命令已生成并复制到剪贴板');
@@ -770,10 +712,14 @@ export default function NodePage() {
         ip: ipString,
         serverIp: form.serverIp,
         portSta: form.portSta,
-        portEnd: form.portEnd,
-        http: form.http,
-        tls: form.tls,
-        socks: form.socks
+      portEnd: form.portEnd,
+      http: form.http,
+      tls: form.tls,
+      socks: form.socks,
+      tcpTuningProfile: form.tcpTuningProfile,
+      ddnsEnabled: form.ddnsEnabled,
+      cfApiToken: form.cfApiToken.trim(),
+      cfRecordName: form.cfRecordName.trim()
       };
       
       const res = await apiCall(data);
@@ -792,7 +738,10 @@ export default function NodePage() {
               portEnd: form.portEnd,
               http: form.http,
               tls: form.tls,
-              socks: form.socks
+              socks: form.socks,
+              tcpTuningProfile: form.tcpTuningProfile,
+              ddnsEnabled: form.ddnsEnabled ? 1 : 0,
+              ddnsRecordName: form.ddnsEnabled ? form.cfRecordName.trim() : ''
             } : n
           ));
         } else {
@@ -819,7 +768,11 @@ export default function NodePage() {
       portEnd: 65535,
       http: 0,
       tls: 0,
-      socks: 0
+      socks: 0,
+      tcpTuningProfile: 'balanced',
+      ddnsEnabled: false,
+      cfApiToken: '',
+      cfRecordName: ''
     });
     setErrors({});
   };
@@ -1105,7 +1058,7 @@ export default function NodePage() {
                         size="sm"
                         variant="flat"
                         color="success"
-                        onPress={() => openInstallSetup(node)}
+                        onPress={() => openInstallCommand(node)}
                         className="flex-1 min-h-8"
                       >
                         安装
@@ -1330,6 +1283,62 @@ export default function NodePage() {
                   />
                 </div>
 
+                <div className="rounded-lg border border-default-200 bg-default-50 p-3">
+                  <label className="block text-sm font-medium text-default-700" htmlFor="node-tcp-tuning-profile">
+                    TCP 调优档位
+                  </label>
+                  <select
+                    id="node-tcp-tuning-profile"
+                    value={form.tcpTuningProfile}
+                    onChange={(event) => setForm(prev => ({ ...prev, tcpTuningProfile: event.target.value as TcpTuningProfile }))}
+                    className="mt-2 w-full rounded-lg border border-default-300 bg-background px-3 py-2 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
+                  >
+                    <option value="tiny">轻量：适合 512 MB 以下（缓存上限 4 MB）</option>
+                    <option value="small">小型：适合 512 MB–1 GB（缓存上限 8 MB）</option>
+                    <option value="balanced">均衡：适合 1–2 GB 或单核（缓存上限 12 MB）</option>
+                    <option value="standard">高性能：建议 2 GB+ 且双核以上（缓存上限 16 MB）</option>
+                  </select>
+                  <p className="mt-1 text-xs text-default-500">
+                    安装命令会使用此设置；脚本仍会检测 CPU、内存及内核能力，BBR/FQ 不受档位影响。
+                  </p>
+                </div>
+
+                <div className="rounded-lg border border-default-200 bg-default-50 p-3">
+                  <Switch
+                    isSelected={form.ddnsEnabled}
+                    onValueChange={(value) => setForm(prev => ({ ...prev, ddnsEnabled: value }))}
+                  >
+                    <span className="font-medium">启用 Cloudflare DDNS</span>
+                  </Switch>
+                  <p className="mt-1 text-xs text-default-500">
+                    配置会随节点保存。安装、重装或自动换机时直接执行同一安装命令即可恢复 DDNS；运行中每分钟仅在本机公网 IP 改变时才调用 Cloudflare。
+                  </p>
+
+                  {form.ddnsEnabled && (
+                    <div className="mt-3 space-y-3">
+                      <Input
+                        label="Cloudflare API Token"
+                        type="password"
+                        autoComplete="off"
+                        value={form.cfApiToken}
+                        onValueChange={(value) => setForm(prev => ({ ...prev, cfApiToken: value }))}
+                        isInvalid={!!errors.cfApiToken}
+                        errorMessage={errors.cfApiToken}
+                        description={isEdit ? '留空并保存会保留当前令牌；填写新值会替换。' : '需要 Zone:Read 和 DNS:Edit 权限。'}
+                      />
+                      <Input
+                        label="DDNS 记录域名"
+                        placeholder="node.example.com"
+                        value={form.cfRecordName}
+                        onValueChange={(value) => setForm(prev => ({ ...prev, cfRecordName: value }))}
+                        isInvalid={!!errors.cfRecordName}
+                        errorMessage={errors.cfRecordName}
+                        description="填写完整域名；IPv6 可用时会自动维护 AAAA 记录。"
+                      />
+                    </div>
+                  )}
+                </div>
+
                 {/* 屏蔽协议 */}
                 <div className="mt-1">
                   <div className="text-sm font-medium text-default-700">屏蔽协议</div>
@@ -1467,95 +1476,6 @@ export default function NodePage() {
                 </ModalFooter>
               </>
             )}
-          </ModalContent>
-        </Modal>
-
-        {/* 节点安装选项 */}
-        <Modal
-          isOpen={installSetupModal}
-          onClose={closeInstallSetup}
-          size="lg"
-          backdrop="blur"
-          placement="center"
-          isDismissable={!installCommandLoading}
-        >
-          <ModalContent>
-            <ModalHeader>安装节点 - {currentNodeName}</ModalHeader>
-            <ModalBody>
-              <div className="space-y-4">
-                <p className="text-sm text-default-600">
-                  生成的命令可直接在节点执行；重装或 AWS 自动换机时重跑同一条命令即可恢复配置。
-                </p>
-                <div className="rounded-lg border border-default-200 bg-default-50 p-3">
-                  <label className="block text-sm font-medium text-default-700" htmlFor="tcp-tuning-profile">
-                    TCP 调优档位
-                  </label>
-                  <select
-                    id="tcp-tuning-profile"
-                    value={tcpTuningProfile}
-                    onChange={(event) => setTcpTuningProfile(event.target.value as TcpTuningProfile)}
-                    disabled={installCommandLoading}
-                    className="mt-2 w-full rounded-lg border border-default-300 bg-background px-3 py-2 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    <option value="tiny">轻量：适合 512 MB 以下（缓存上限 4 MB）</option>
-                    <option value="small">小型：适合 512 MB–1 GB（缓存上限 8 MB）</option>
-                    <option value="balanced">均衡：适合 1–2 GB 或单核（缓存上限 12 MB）</option>
-                    <option value="standard">高性能：建议 2 GB+ 且双核以上（缓存上限 16 MB）</option>
-                  </select>
-                  <p className="mt-1 text-xs text-default-500">
-                    脚本仍会检测 CPU、内存和内核能力；BBR/FQ 不受档位影响，内核不支持时会安全回退。
-                  </p>
-                </div>
-                <div className="rounded-lg border border-default-200 bg-default-50 p-3">
-                  <Switch
-                    isSelected={ddnsEnabled}
-                    onValueChange={setDdnsEnabled}
-                    isDisabled={installCommandLoading}
-                  >
-                    <span className="font-medium">启用 Cloudflare DDNS</span>
-                  </Switch>
-                  <p className="mt-1 text-xs text-default-500">
-                    安装后及每次开机首次任务都会核验 Cloudflare 记录，仅不一致时更新；运行中每 1 分钟检查公网 IPv4/IPv6，地址变化时才更新 A/AAAA 记录。
-                  </p>
-                </div>
-
-                {ddnsEnabled && (
-                  <div className="space-y-3">
-                    <Input
-                      label="Cloudflare API Token"
-                      type="password"
-                      autoComplete="off"
-                      value={cfApiToken}
-                      onValueChange={setCfApiToken}
-                      isDisabled={installCommandLoading}
-                      description="Token 需要 Zone:Read 和 DNS:Edit 权限；生成成功后会仅保存在本浏览器此节点的安装预设中，不写入面板数据库。"
-                    />
-                    <Input
-                      label="DDNS 记录域名"
-                      placeholder="node.example.com"
-                      value={cfRecordName}
-                      onValueChange={setCfRecordName}
-                      isDisabled={installCommandLoading}
-                      description="填写完整域名。每种记录类型只能有一条：存在时更新、不存在时创建；多条同类型记录会拒绝修改，避免误改。"
-                    />
-                    <Alert
-                      color="warning"
-                      variant="flat"
-                      title="令牌会写入安装命令"
-                      description="执行后仅保存到该节点的 root 专用配置文件（权限 600）。请不要把生成的命令发给无关人员。"
-                    />
-                  </div>
-                )}
-              </div>
-            </ModalBody>
-            <ModalFooter>
-              <Button variant="flat" onPress={closeInstallSetup} isDisabled={installCommandLoading}>
-                取消
-              </Button>
-              <Button color="primary" onPress={handleGenerateInstallCommand} isLoading={installCommandLoading}>
-                生成并复制命令
-              </Button>
-            </ModalFooter>
           </ModalContent>
         </Modal>
 

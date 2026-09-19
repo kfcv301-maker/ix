@@ -41,6 +41,10 @@ mybatis-plus:
 jwt-secret: ${JWT_SECRET}
 log-dir: ${LOG_DIR}
 
+panel-updater:
+  url: ${PANEL_UPDATER_URL:http://updater:18080}
+  token: ${PANEL_UPDATER_TOKEN:}
+
 
 captcha:
   init-default-resource: true

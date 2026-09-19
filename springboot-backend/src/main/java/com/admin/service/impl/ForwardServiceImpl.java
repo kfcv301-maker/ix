@@ -24,6 +24,7 @@ import org.springframework.stereotype.Service;
 
 import javax.annotation.Resource;
 import java.util.*;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.Collectors;
 
 /**
@@ -1344,12 +1345,7 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
         for (Node inNode : inNodes) {
             usedPorts.addAll(getAllUsedPortsOnNode(inNode.getId(), excludeForwardId));
         }
-        for (int port = rangeStart; port <= rangeEnd; port++) {
-            if (!usedPorts.contains(port)) {
-                return port;
-            }
-        }
-        return null;
+        return chooseRandomAvailablePort(rangeStart, rangeEnd, usedPorts);
     }
 
     /**
@@ -1376,10 +1372,37 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
         // 获取该节点上所有已被占用的端口（包括作为入口和出口使用的端口）
         Set<Integer> usedPorts = getAllUsedPortsOnNode(nodeId, excludeForwardId);
 
-        // 在节点端口范围内寻找未使用的端口
-        for (int port = node.getPortSta(); port <= node.getPortEnd(); port++) {
-            if (!usedPorts.contains(port)) {
-                return port;
+        return chooseRandomAvailablePort(node.getPortSta(), node.getPortEnd(), usedPorts);
+    }
+
+    /**
+     * Automatic ports are intentionally non-sequential. A few random probes
+     * keep the common case fast; the random-offset fallback still checks every
+     * port exactly once so a partially full range cannot produce a false
+     * “full” result.
+     */
+    private Integer chooseRandomAvailablePort(int rangeStart, int rangeEnd, Set<Integer> usedPorts) {
+        long rangeSize = (long) rangeEnd - rangeStart + 1;
+        long usedInRange = usedPorts.stream()
+                .filter(port -> port >= rangeStart && port <= rangeEnd)
+                .count();
+        if (rangeSize <= 0 || usedInRange >= rangeSize) {
+            return null;
+        }
+
+        int probes = (int) Math.min(rangeSize, 32);
+        for (int attempt = 0; attempt < probes; attempt++) {
+            int candidate = ThreadLocalRandom.current().nextInt(rangeStart, rangeEnd + 1);
+            if (!usedPorts.contains(candidate)) {
+                return candidate;
+            }
+        }
+
+        int offset = ThreadLocalRandom.current().nextInt((int) rangeSize);
+        for (int step = 0; step < rangeSize; step++) {
+            int candidate = rangeStart + (int) ((offset + step) % rangeSize);
+            if (!usedPorts.contains(candidate)) {
+                return candidate;
             }
         }
         return null;

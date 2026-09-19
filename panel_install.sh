@@ -97,6 +97,12 @@ validate_port() {
 create_env_if_missing() {
   local env_file="$INSTALL_DIR/.env"
   if [[ -f "$env_file" ]]; then
+    if ! grep -q '^PANEL_UPDATER_TOKEN=' "$env_file"; then
+      umask 077
+      printf '\nPANEL_UPDATER_TOKEN=%s\n' "$(random_secret)" >> "$env_file"
+      chmod 600 "$env_file"
+      ok "已为在线更新服务补充本机访问密钥"
+    fi
     ok "保留现有 .env 与数据库凭据"
     return
   fi
@@ -111,6 +117,7 @@ DB_NAME=flux_panel
 DB_USER=flux_panel
 DB_PASSWORD=$(random_secret)
 JWT_SECRET=$(random_secret)
+PANEL_UPDATER_TOKEN=$(random_secret)
 FRONTEND_PORT=$FRONTEND_PORT
 BACKEND_PORT=$BACKEND_PORT
 FRONTEND_BIND_ADDRESS=$FRONTEND_BIND_ADDRESS

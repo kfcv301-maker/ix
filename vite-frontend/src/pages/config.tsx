@@ -8,7 +8,7 @@ import { Divider } from "@heroui/divider";
 import { Switch } from "@heroui/switch";
 import { Select, SelectItem } from "@heroui/select";
 import toast from 'react-hot-toast';
-import { updateConfigs } from '@/api';
+import { getPanelUpdateStatus, startPanelUpdate, updateConfigs } from '@/api';
 import { SettingsIcon } from '@/components/icons';
 
 import { isAdmin } from '@/utils/auth';
@@ -40,6 +40,15 @@ interface ConfigItem {
   options?: { label: string; value: string; description?: string }[];
   dependsOn?: string; // 依赖的配置项key
   dependsValue?: string; // 依赖的配置项值
+}
+
+interface PanelUpdateStatus {
+  state?: 'idle' | 'queued' | 'backing_up' | 'checking' | 'updating' | 'completed' | 'failed';
+  message?: string;
+  currentRevision?: string | null;
+  targetRevision?: string | null;
+  backup?: string | null;
+  updatedAt?: string | null;
 }
 
 // 网站配置项定义
@@ -122,6 +131,9 @@ export default function ConfigPage() {
   const [saving, setSaving] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
   const [originalConfigs, setOriginalConfigs] = useState<Record<string, string>>(initialConfigs);
+  const [updateStatus, setUpdateStatus] = useState<PanelUpdateStatus | null>(null);
+  const [updateStatusError, setUpdateStatusError] = useState('');
+  const [startingUpdate, setStartingUpdate] = useState(false);
 
   // 权限检查
   useEffect(() => {
@@ -131,6 +143,44 @@ export default function ConfigPage() {
       return;
     }
   }, [navigate]);
+
+  const loadUpdateStatus = async (quiet = false) => {
+    try {
+      const response = await getPanelUpdateStatus();
+      if (response.code === 0) {
+        setUpdateStatus(response.data || {});
+        setUpdateStatusError('');
+      } else if (!quiet) {
+        setUpdateStatusError(response.msg || '在线更新服务暂不可用');
+      }
+    } catch {
+      if (!quiet) setUpdateStatusError('在线更新服务暂不可用');
+    }
+  };
+
+  useEffect(() => {
+    loadUpdateStatus(true);
+    const timer = window.setInterval(() => loadUpdateStatus(true), 5000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const handleStartUpdate = async () => {
+    setStartingUpdate(true);
+    try {
+      const response = await startPanelUpdate();
+      if (response.code === 0) {
+        setUpdateStatus(response.data || { state: 'queued', message: '更新请求已接收' });
+        setUpdateStatusError('');
+        toast.success('已开始备份并检查更新，面板会在重建时短暂不可访问');
+      } else {
+        toast.error(response.msg || '无法启动在线更新');
+      }
+    } catch {
+      toast.error('无法启动在线更新');
+    } finally {
+      setStartingUpdate(false);
+    }
+  };
 
   // 加载配置数据（优先从缓存）
   const loadConfigs = async (currentConfigs?: Record<string, string>) => {
@@ -416,6 +466,40 @@ export default function ConfigPage() {
             </CardBody>
           </Card>
         )}
+
+        <Card className="mt-4 border border-primary-100 shadow-md">
+          <CardHeader className="flex items-center justify-between gap-4">
+            <div>
+              <h2 className="text-xl font-semibold">在线更新</h2>
+              <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
+                自动备份数据库后拉取当前仓库的 main 分支并重建面板。节点、转发、账号和现有设置均保留。
+              </p>
+            </div>
+            <Button color="primary" onPress={handleStartUpdate} isLoading={startingUpdate}>
+              {startingUpdate ? '正在提交…' : '检查并更新'}
+            </Button>
+          </CardHeader>
+          <Divider />
+          <CardBody className="space-y-2 text-sm">
+            {updateStatusError ? (
+              <p className="text-warning">{updateStatusError}</p>
+            ) : (
+              <>
+                <p>
+                  状态：<span className="font-medium">{updateStatus?.message || '正在读取更新状态'}</span>
+                </p>
+                {updateStatus?.backup && <p className="text-default-500">本次数据库备份：{updateStatus.backup}</p>}
+                {updateStatus?.currentRevision && (
+                  <p className="font-mono text-xs text-default-500">
+                    版本：{updateStatus.currentRevision.slice(0, 12)}
+                    {updateStatus.targetRevision && ` → ${updateStatus.targetRevision.slice(0, 12)}`}
+                  </p>
+                )}
+                <p className="text-xs text-default-400">更新失败时不会删除数据卷；更新前生成的数据库备份可用于回滚。</p>
+              </>
+            )}
+          </CardBody>
+        </Card>
       </div>
     
   );
