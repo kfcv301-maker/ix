@@ -17,6 +17,7 @@ interface MenuItem {
   label: string;
   icon: React.ReactNode;
   adminOnly?: boolean;
+  group: 'forwarding' | 'management';
 }
 
 interface PasswordForm {
@@ -54,6 +55,7 @@ export default function AdminLayout({
     {
       path: '/dashboard',
       label: '仪表板',
+      group: 'forwarding',
       icon: (
         <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
           <path d="M3 4a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-1 1H4a1 1 0 01-1-1V4zM3 10a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H4a1 1 0 01-1-1v-6zM14 9a1 1 0 00-1 1v6a1 1 0 001 1h2a1 1 0 001-1v-6a1 1 0 00-1-1h-2z" />
@@ -63,6 +65,7 @@ export default function AdminLayout({
     {
       path: '/forward',
       label: '转发管理',
+      group: 'forwarding',
       icon: (
         <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
           <path fillRule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clipRule="evenodd" />
@@ -72,6 +75,7 @@ export default function AdminLayout({
     {
       path: '/tunnel',
       label: '隧道管理',
+      group: 'forwarding',
       icon: (
         <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
           <path fillRule="evenodd" d="M12.586 4.586a2 2 0 112.828 2.828l-3 3a2 2 0 01-2.828 0 1 1 0 00-1.414 1.414 4 4 0 005.656 0l3-3a4 4 0 00-5.656-5.656l-1.5 1.5a1 1 0 101.414 1.414l1.5-1.5zm-5 5a2 2 0 012.828 0 1 1 0 101.414-1.414 4 4 0 00-5.656 0l-3 3a4 4 0 105.656 5.656l1.5-1.5a1 1 0 10-1.414-1.414l-1.5 1.5a2 2 0 11-2.828-2.828l3-3z" clipRule="evenodd" />
@@ -82,6 +86,7 @@ export default function AdminLayout({
     {
       path: '/node',
       label: '节点监控',
+      group: 'forwarding',
       icon: (
         <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
           <path fillRule="evenodd" d="M3 3a1 1 0 000 2v8a2 2 0 002 2h2.586l-1.293 1.293a1 1 0 101.414 1.414L10 15.414l2.293 2.293a1 1 0 001.414-1.414L12.414 15H15a2 2 0 002-2V5a1 1 0 100-2H3zm11.707 4.707a1 1 0 00-1.414-1.414L10 9.586 8.707 8.293a1 1 0 00-1.414 0l-2 2a1 1 0 101.414 1.414L8 10.414l1.293 1.293a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
@@ -92,6 +97,7 @@ export default function AdminLayout({
     {
       path: '/limit',
       label: '限速管理',
+      group: 'management',
       icon: (
         <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
           <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clipRule="evenodd" />
@@ -102,6 +108,7 @@ export default function AdminLayout({
     {
       path: '/user',
       label: '用户管理',
+      group: 'management',
       icon: (
         <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
           <path d="M9 6a3 3 0 11-6 0 3 3 0 016 0zM17 6a3 3 0 11-6 0 3 3 0 016 0zM12.93 17c.046-.327.07-.66.07-1a6.97 6.97 0 00-1.5-4.33A5 5 0 0119 16v1h-6.07zM6 11a5 5 0 015 5v1H1v-1a5 5 0 015-5z" />
@@ -112,6 +119,7 @@ export default function AdminLayout({
     {
       path: '/config',
       label: '网站配置',
+      group: 'management',
       icon: (
         <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
           <path fillRule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clipRule="evenodd" />
@@ -249,6 +257,7 @@ export default function AdminLayout({
   const filteredMenuItems = menuItems.filter(item => 
     !item.adminOnly || isAdmin
   );
+  const activeMenuItem = filteredMenuItems.find((item) => item.path === location.pathname);
 
   return (
           <div className={`panel-shell flex ${isMobile ? 'min-h-screen' : 'h-screen'} bg-gray-100 dark:bg-black`}>
@@ -276,22 +285,27 @@ export default function AdminLayout({
       `}>
                  {/* Logo 区域 */}
          <div className="px-3 py-3 h-14 flex items-center">
-           <div className="flex items-center gap-2 w-full">
+            <div className="panel-brand flex items-center gap-2 w-full">
              <Logo size={24} />
-             <div className="flex-1 min-w-0">
-               <h1 className="text-sm font-bold text-foreground overflow-hidden whitespace-nowrap">{siteConfig.name}</h1>
-               <p className="text-xs text-default-500">v{siteConfig.version}</p>
-             </div>
+              <div className="flex-1 min-w-0">
+                <h1 className="text-sm font-bold text-foreground overflow-hidden whitespace-nowrap">{siteConfig.name}</h1>
+                <p className="text-xs text-default-500">v{siteConfig.version}</p>
+                {panelTheme === 'akcdn-console' && <p className="akcdn-brand-subtitle">转发管理控制台</p>}
+              </div>
            </div>
          </div>
 
                  {/* 菜单导航 */}
          <nav className="panel-navigation flex-1 px-4 py-6 overflow-y-auto">
            <ul className="space-y-1">
-            {filteredMenuItems.map((item) => {
-              const isActive = location.pathname === item.path;
-              return (
-                <li key={item.path}>
+             {filteredMenuItems.map((item, index) => {
+               const isActive = location.pathname === item.path;
+               return (
+                 <React.Fragment key={item.path}>
+                 {panelTheme === 'akcdn-console' && (index === 0 || filteredMenuItems[index - 1].group !== item.group) && (
+                   <li className="akcdn-nav-group-title">{item.group === 'forwarding' ? '转发' : '管理'}</li>
+                 )}
+                 <li>
                                      <button
                      onClick={() => handleMenuClick(item.path)}
                      className={`panel-nav-item
@@ -307,10 +321,11 @@ export default function AdminLayout({
                        {item.icon}
                      </div>
                      <span className="font-medium text-sm">{item.label}</span>
-                   </button>
-                </li>
-              );
-            })}
+                  </button>
+                 </li>
+                 </React.Fragment>
+               );
+             })}
             <li>
               <button
                 type="button"
@@ -349,8 +364,14 @@ export default function AdminLayout({
       {/* 主内容区域 */}
       <div className={`flex flex-col flex-1 ${isMobile ? 'min-h-0' : 'h-full overflow-hidden'}`}>
                  {/* 顶部导航栏 */}
-         <header className="panel-header bg-white dark:bg-black shadow-md border-b border-gray-200 dark:border-gray-600 h-14 flex items-center justify-between px-4 lg:px-6 relative z-10">
-          <div className="flex items-center gap-4">
+          <header className="panel-header bg-white dark:bg-black shadow-md border-b border-gray-200 dark:border-gray-600 h-14 flex items-center justify-between px-4 lg:px-6 relative z-10">
+            <div className="flex items-center gap-4">
+              {!isMobile && panelTheme === 'akcdn-console' && (
+                <div className="akcdn-page-heading">
+                  <span>控制台</span>
+                  <h2>{activeMenuItem?.label || '概览'}</h2>
+                </div>
+              )}
             {/* 移动端菜单按钮 */}
             {isMobile && (
               <Button

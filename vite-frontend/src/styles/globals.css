@@ -100,6 +100,21 @@ html, body {
   --panel-shadow: 0 16px 38px rgba(202, 111, 147, 0.13);
 }
 
+/* AKCDN 风格：仅在用户主动选择后生效，默认主题与其他皮肤保持原样。 */
+:root[data-panel-theme='akcdn-console'] {
+  --panel-bg: #f4f7fb;
+  --panel-surface: rgba(255, 255, 255, 0.96);
+  --panel-surface-soft: #f7fbff;
+  --panel-sidebar: #ffffff;
+  --panel-sidebar-ink: #4b637b;
+  --panel-text: #172b3f;
+  --panel-muted: #7b8da0;
+  --panel-border: #e5edf5;
+  --panel-accent: #257cff;
+  --panel-accent-soft: #eaf2ff;
+  --panel-shadow: 0 14px 32px rgba(27, 74, 119, 0.08);
+}
+
 :root[data-panel-theme] body,
 :root[data-panel-theme] #root,
 :root[data-panel-theme] .panel-shell,
@@ -120,6 +135,12 @@ html, body {
   background-image:
     radial-gradient(circle at 15% 8%, rgba(255, 177, 204, 0.32), transparent 22rem),
     radial-gradient(circle at 85% 92%, rgba(255, 208, 174, 0.3), transparent 24rem);
+}
+
+:root[data-panel-theme='akcdn-console'] .panel-main {
+  background-image:
+    radial-gradient(circle at 88% 0%, rgba(51, 194, 255, 0.12), transparent 21rem),
+    linear-gradient(180deg, #f8fbfe 0%, #f4f7fb 42rem);
 }
 
 :root[data-panel-theme] .panel-sidebar {
@@ -202,6 +223,173 @@ html, body {
   backdrop-filter: blur(18px);
 }
 
+:root[data-panel-theme='akcdn-console'] .panel-sidebar {
+  width: 220px !important;
+  background: #ffffff !important;
+  border-right: 1px solid #e7edf4 !important;
+  box-shadow: 6px 0 24px rgba(29, 75, 119, 0.035) !important;
+}
+
+:root[data-panel-theme='akcdn-console'] .panel-brand {
+  min-height: 62px;
+  align-items: flex-start;
+  padding: 7px 9px;
+}
+
+:root[data-panel-theme='akcdn-console'] .panel-brand > svg {
+  width: 31px;
+  height: 31px;
+  padding: 5px;
+  border-radius: 10px;
+  color: #ffffff;
+  background: linear-gradient(135deg, #33c2ff, #165dff);
+  box-shadow: 0 7px 16px rgba(37, 124, 255, 0.24);
+}
+
+:root[data-panel-theme='akcdn-console'] .panel-brand h1 {
+  color: #1e3953 !important;
+  font-size: 16px;
+  line-height: 21px;
+}
+
+:root[data-panel-theme='akcdn-console'] .panel-brand .text-default-500 {
+  display: none;
+}
+
+.akcdn-brand-subtitle {
+  margin: 2px 0 0;
+  color: #93a3b4;
+  font-size: 10px;
+  line-height: 14px;
+  letter-spacing: 0.02em;
+}
+
+:root[data-panel-theme='akcdn-console'] .panel-navigation {
+  padding: 15px 12px 22px;
+}
+
+.akcdn-nav-group-title {
+  padding: 14px 12px 6px;
+  color: #a0adba;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+}
+
+:root[data-panel-theme='akcdn-console'] .panel-nav-item {
+  position: relative;
+  min-height: 42px;
+  padding: 10px 12px !important;
+  border-radius: 9px;
+  color: #62758a !important;
+  font-weight: 500;
+}
+
+:root[data-panel-theme='akcdn-console'] .panel-nav-item:hover {
+  background: #f3f8fe !important;
+  color: #257cff !important;
+}
+
+:root[data-panel-theme='akcdn-console'] .panel-nav-item.bg-primary-100 {
+  color: #257cff !important;
+  background: #eef5ff !important;
+  box-shadow: inset 0 0 0 1px rgba(37, 124, 255, 0.05);
+}
+
+:root[data-panel-theme='akcdn-console'] .panel-nav-item.bg-primary-100::before {
+  position: absolute;
+  top: 9px;
+  bottom: 9px;
+  left: -12px;
+  width: 3px;
+  border-radius: 0 5px 5px 0;
+  background: #257cff;
+  content: '';
+}
+
+:root[data-panel-theme='akcdn-console'] .panel-sidebar > div:last-child {
+  padding-bottom: 18px;
+}
+
+:root[data-panel-theme='akcdn-console'] .panel-header {
+  height: 70px !important;
+  padding-right: 28px;
+  padding-left: 28px;
+  background: rgba(255, 255, 255, 0.9) !important;
+  border-bottom-color: #e8eef5 !important;
+  box-shadow: 0 2px 10px rgba(31, 65, 97, 0.025) !important;
+  backdrop-filter: blur(12px);
+}
+
+.akcdn-page-heading {
+  display: grid;
+  gap: 1px;
+}
+
+.akcdn-page-heading span {
+  color: #9aa8b7;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.akcdn-page-heading h2 {
+  margin: 0;
+  color: #243a50;
+  font-size: 19px;
+  font-weight: 650;
+  line-height: 23px;
+}
+
+:root[data-panel-theme='akcdn-console'] .panel-header [data-slot='base'] {
+  color: #466079 !important;
+  border-radius: 9px;
+}
+
+:root[data-panel-theme='akcdn-console'] .panel-main [data-slot='base'] {
+  border-radius: 14px;
+}
+
+:root[data-panel-theme='akcdn-console'] .panel-main [data-slot='base'][class*='border'] {
+  border-color: #e4ecf4 !important;
+  box-shadow: 0 9px 24px rgba(31, 75, 118, 0.055) !important;
+}
+
+:root[data-panel-theme='akcdn-console'] .panel-main .bg-gradient-to-r {
+  background-image: linear-gradient(115deg, #edf7ff, #f9fcff 54%, #edf4ff) !important;
+}
+
+:root[data-panel-theme='akcdn-console'] .panel-main .bg-primary-50,
+:root[data-panel-theme='akcdn-console'] .panel-main .bg-primary-100 {
+  background-color: #edf5ff !important;
+}
+
+:root[data-panel-theme='akcdn-console'] .panel-main .bg-blue-100 {
+  background-color: #eaf6ff !important;
+}
+
+:root[data-panel-theme='akcdn-console'] .panel-main .bg-green-100 {
+  background-color: #eaf9f2 !important;
+}
+
+:root[data-panel-theme='akcdn-console'] .panel-main .bg-orange-100 {
+  background-color: #fff6e9 !important;
+}
+
+:root[data-panel-theme='akcdn-console'] .panel-main .bg-purple-100 {
+  background-color: #f2efff !important;
+}
+
+:root[data-panel-theme='akcdn-console'] .panel-main input,
+:root[data-panel-theme='akcdn-console'] .panel-main textarea {
+  border-color: #dce7f1 !important;
+  background: #fbfdff !important;
+}
+
+:root[data-panel-theme='akcdn-console'] .panel-main table thead {
+  background: #f7faff;
+}
+
 .panel-theme-choice {
   display: flex;
   align-items: center;
@@ -240,10 +428,26 @@ html, body {
 .panel-theme-swatch i:nth-child(3) { height: 42%; background: #71717a; }
 .panel-theme-choice-dora-sky .panel-theme-swatch { background: linear-gradient(135deg, #087bc7, #6fd0ff); }
 .panel-theme-choice-dora-sky .panel-theme-swatch i { background: rgba(255,255,255,.72); }
+.panel-theme-choice-akcdn-console .panel-theme-swatch { background: linear-gradient(135deg, #f9fcff, #e7f3ff); }
+.panel-theme-choice-akcdn-console .panel-theme-swatch i { background: #257cff; }
+.panel-theme-choice-akcdn-console .panel-theme-swatch i:nth-child(2) { background: #33c2ff; }
+.panel-theme-choice-akcdn-console .panel-theme-swatch i:nth-child(3) { background: #d6e7ff; }
 .panel-theme-choice-neon-console .panel-theme-swatch { background: #060a12; background-image: linear-gradient(rgba(0,229,255,.13) 1px, transparent 1px), linear-gradient(90deg, rgba(0,229,255,.13) 1px, transparent 1px); background-size: 10px 10px; }
 .panel-theme-choice-neon-console .panel-theme-swatch i { background: #00e5ff; }
 .panel-theme-choice-sakura-glass .panel-theme-swatch { background: linear-gradient(135deg, #ffd4e2, #fff5fa); }
 .panel-theme-choice-sakura-glass .panel-theme-swatch i { background: #f68daf; }
+
+@media (max-width: 768px) {
+  :root[data-panel-theme='akcdn-console'] .panel-sidebar {
+    width: 256px !important;
+  }
+
+  :root[data-panel-theme='akcdn-console'] .panel-header {
+    height: 56px !important;
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+}
 
 
 /* 验证码弹层动画 */
