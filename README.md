@@ -1,6 +1,6 @@
-# Flux Panel Enhanced
+# 星澜转发面板
 
-基于 [bqlpfy/flux-panel](https://github.com/bqlpfy/flux-panel) 继续维护的哆啦A梦转发面板魔改版。原版的节点、用户、隧道和端口转发功能都保留了，这里主要补节点重装恢复、监控和安装部署这些实际使用中容易出问题的地方。
+基于 [bqlpfy/flux-panel](https://github.com/bqlpfy/flux-panel) 继续维护的转发面板。原版的节点、用户、隧道和端口转发功能都保留了，这里主要补节点重装恢复、监控和安装部署这些实际使用中容易出问题的地方。
 
 ## 这版改了什么
 

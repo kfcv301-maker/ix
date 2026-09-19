@@ -17,7 +17,7 @@ fail() { printf '\033[1;31m[FAIL]\033[0m %s\n' "$*" >&2; exit 1; }
 
 usage() {
   cat <<'EOF'
-Flux Panel Enhanced 原版迁移脚本
+星澜转发面板原版迁移脚本
 
 用法：
   upgrade_from_original.sh [--source-dir 原版目录] [--target-dir 新版目录] [--dry-run]
