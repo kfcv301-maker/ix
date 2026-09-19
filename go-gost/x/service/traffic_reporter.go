@@ -244,6 +244,25 @@ func StartConfigReporter(ctx context.Context) {
 	}
 }
 
+// ReportConfigNow sends one best-effort inventory report after an Agent has
+// reconnected to the panel. It complements (rather than replaces) the
+// periodic reporter: the periodic job still repairs drift discovered while a
+// connection remains up, while this path removes the long reconnect delay.
+func ReportConfigNow() {
+	if configReportURL == "" {
+		fmt.Printf("⚠️ 配置上报URL未设置，跳过连接后的即时上报\n")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if success, err := sendConfigReport(ctx); err != nil {
+		fmt.Printf("❌ 连接后即时配置上报失败: %v\n", err)
+	} else if success {
+		fmt.Printf("✅ 连接后即时配置上报成功\n")
+	}
+}
+
 // serviceStatus 接口定义
 type serviceStatus interface {
 	Status() *Status

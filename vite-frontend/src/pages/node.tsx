@@ -116,6 +116,57 @@ interface NodeForm {
   socks: number; // 0 关 1 开
 }
 
+type TcpTuningProfile = 'tiny' | 'small' | 'balanced' | 'standard';
+
+interface DdnsInstallPreset {
+  enabled: boolean;
+  cfApiToken: string;
+  cfRecordName: string;
+  tcpTuningProfile: TcpTuningProfile;
+}
+
+const ddnsPresetStorageKey = (nodeId: number) =>
+  `flux-panel:node-install:${window.location.origin}:${nodeId}`;
+
+const readDdnsInstallPreset = (nodeId: number): DdnsInstallPreset | null => {
+  try {
+    const saved = window.localStorage.getItem(ddnsPresetStorageKey(nodeId));
+    if (!saved) return null;
+    const preset = JSON.parse(saved) as Partial<DdnsInstallPreset>;
+    const validProfile = ['tiny', 'small', 'balanced', 'standard'].includes(preset.tcpTuningProfile || '')
+      ? preset.tcpTuningProfile as TcpTuningProfile
+      : 'balanced';
+    return {
+      enabled: Boolean(preset.enabled),
+      cfApiToken: typeof preset.cfApiToken === 'string' ? preset.cfApiToken : '',
+      cfRecordName: typeof preset.cfRecordName === 'string' ? preset.cfRecordName : '',
+      tcpTuningProfile: validProfile,
+    };
+  } catch {
+    return null;
+  }
+};
+
+const saveDdnsInstallPreset = (nodeId: number, preset: DdnsInstallPreset) => {
+  window.localStorage.setItem(ddnsPresetStorageKey(nodeId), JSON.stringify(preset));
+};
+
+// 浏览器页面和 API 不一定同域：移动端 WebView、反向代理或单独托管前端时，
+// window.location.origin 可能不是 Agent 应连接的公开面板地址。优先复用当前
+// 已成功请求 API 的地址，避免生成可打开面板却无法让节点上线的安装命令。
+const resolveAgentPanelUrl = (): string => {
+  try {
+    const apiBaseUrl = axios.defaults.baseURL || '/api/v1/';
+    const resolved = new URL(apiBaseUrl, window.location.origin);
+    if (resolved.protocol === 'http:' || resolved.protocol === 'https:') {
+      return resolved.origin;
+    }
+  } catch {
+    // Fall through to the current browser origin for a malformed custom API URL.
+  }
+  return window.location.origin;
+};
+
 export default function NodePage() {
   const [nodeList, setNodeList] = useState<Node[]>([]);
   const [loading, setLoading] = useState(false);
@@ -154,6 +205,7 @@ export default function NodePage() {
   const [ddnsEnabled, setDdnsEnabled] = useState(false);
   const [cfApiToken, setCfApiToken] = useState('');
   const [cfRecordName, setCfRecordName] = useState('');
+  const [tcpTuningProfile, setTcpTuningProfile] = useState<TcpTuningProfile>('balanced');
   
   const websocketRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -617,11 +669,13 @@ export default function NodePage() {
   };
 
   const openInstallSetup = (node: Node) => {
+    const preset = readDdnsInstallPreset(node.id);
     setInstallNode(node);
     setCurrentNodeName(node.name);
-    setDdnsEnabled(false);
-    setCfApiToken('');
-    setCfRecordName('');
+    setDdnsEnabled(preset?.enabled ?? false);
+    setCfApiToken(preset?.cfApiToken ?? '');
+    setCfRecordName(preset?.cfRecordName ?? '');
+    setTcpTuningProfile(preset?.tcpTuningProfile ?? 'balanced');
     setInstallSetupModal(true);
   };
 
@@ -633,7 +687,7 @@ export default function NodePage() {
     setCfRecordName('');
   };
 
-  // 生成安装命令。Cloudflare 凭据只参与本次命令生成，不会发送到节点数据库。
+  // 凭据仅保存在当前管理员浏览器中，生成命令时才发送给后端拼接；不写入节点数据库。
   const handleGenerateInstallCommand = async () => {
     if (!installNode) return;
     if (ddnsEnabled && (!cfApiToken.trim() || !cfRecordName.trim())) {
@@ -644,14 +698,21 @@ export default function NodePage() {
     setInstallCommandLoading(true);
     try {
       const res = await getNodeInstallCommand(installNode.id, {
-        panelUrl: window.location.origin,
+        panelUrl: resolveAgentPanelUrl(),
         ddnsEnabled,
+        tcpTuningProfile,
         ...(ddnsEnabled ? {
           cfApiToken: cfApiToken.trim(),
           cfRecordName: cfRecordName.trim(),
         } : {}),
       });
       if (res.code === 0 && res.data) {
+        saveDdnsInstallPreset(installNode.id, {
+          enabled: ddnsEnabled,
+          cfApiToken: cfApiToken.trim(),
+          cfRecordName: cfRecordName.trim(),
+          tcpTuningProfile,
+        });
         setInstallCommand(res.data);
         setInstallSetupModal(false);
         setCfApiToken('');
@@ -1426,6 +1487,26 @@ export default function NodePage() {
                   生成的命令可直接在节点执行；重装或 AWS 自动换机时重跑同一条命令即可恢复配置。
                 </p>
                 <div className="rounded-lg border border-default-200 bg-default-50 p-3">
+                  <label className="block text-sm font-medium text-default-700" htmlFor="tcp-tuning-profile">
+                    TCP 调优档位
+                  </label>
+                  <select
+                    id="tcp-tuning-profile"
+                    value={tcpTuningProfile}
+                    onChange={(event) => setTcpTuningProfile(event.target.value as TcpTuningProfile)}
+                    disabled={installCommandLoading}
+                    className="mt-2 w-full rounded-lg border border-default-300 bg-background px-3 py-2 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <option value="tiny">轻量：适合 512 MB 以下（缓存上限 4 MB）</option>
+                    <option value="small">小型：适合 512 MB–1 GB（缓存上限 8 MB）</option>
+                    <option value="balanced">均衡：适合 1–2 GB 或单核（缓存上限 12 MB）</option>
+                    <option value="standard">高性能：建议 2 GB+ 且双核以上（缓存上限 16 MB）</option>
+                  </select>
+                  <p className="mt-1 text-xs text-default-500">
+                    脚本仍会检测 CPU、内存和内核能力；BBR/FQ 不受档位影响，内核不支持时会安全回退。
+                  </p>
+                </div>
+                <div className="rounded-lg border border-default-200 bg-default-50 p-3">
                   <Switch
                     isSelected={ddnsEnabled}
                     onValueChange={setDdnsEnabled}
@@ -1447,7 +1528,7 @@ export default function NodePage() {
                       value={cfApiToken}
                       onValueChange={setCfApiToken}
                       isDisabled={installCommandLoading}
-                      description="Token 需要 Zone:Read 和 DNS:Edit 权限；不会保存到面板数据库。"
+                      description="Token 需要 Zone:Read 和 DNS:Edit 权限；生成成功后会仅保存在本浏览器此节点的安装预设中，不写入面板数据库。"
                     />
                     <Input
                       label="DDNS 记录域名"
@@ -1455,7 +1536,7 @@ export default function NodePage() {
                       value={cfRecordName}
                       onValueChange={setCfRecordName}
                       isDisabled={installCommandLoading}
-                      description="填写完整域名。已有 A/AAAA 记录会更新，不存在时自动创建。"
+                      description="填写完整域名。已有 A/AAAA 记录会更新，不存在时自动创建；下次为该节点生成命令会自动带回。"
                     />
                     <Alert
                       color="warning"

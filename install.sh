@@ -15,6 +15,7 @@ DDNS_MODE="unchanged"
 CF_API_TOKEN=""
 CF_RECORD_NAME=""
 TUNE_TCP=1
+TCP_PROFILE_OVERRIDE=""
 HOST_MEMORY_MB=0
 HOST_CPU_CORES=1
 SELECTED_CONGESTION_CONTROL=""
@@ -42,6 +43,7 @@ Flux Panel Enhanced 节点 Agent 安装脚本
 用法：
   install.sh --panel https://panel.example.com --token 节点独立密钥
   install.sh --panel https://panel.example.com --token 节点独立密钥 --skip-tcp-tuning
+  install.sh --panel https://panel.example.com --token 节点独立密钥 --tcp-profile balanced
   install.sh --panel https://panel.example.com --token 节点独立密钥 --cf-api-token Cloudflare令牌 --cf-record node.example.com
   install.sh --panel https://panel.example.com --token 节点独立密钥 --disable-ddns
   install.sh --uninstall
@@ -82,6 +84,34 @@ detect_host_profile() {
 }
 
 select_tuning_profile() {
+  if [[ -n "$TCP_PROFILE_OVERRIDE" ]]; then
+    case "$TCP_PROFILE_OVERRIDE" in
+      tiny)
+        TUNING_PROFILE="tiny"; R_MEM_MAX=4194304; W_MEM_MAX=4194304
+        TCP_RMEM="4096 65536 4194304"; TCP_WMEM="4096 16384 4194304"
+        SOMAXCONN=2048; TCP_MAX_SYN_BACKLOG=1024; NETDEV_MAX_BACKLOG=2048
+        ;;
+      small)
+        TUNING_PROFILE="small"; R_MEM_MAX=8388608; W_MEM_MAX=8388608
+        TCP_RMEM="4096 98304 8388608"; TCP_WMEM="4096 16384 8388608"
+        SOMAXCONN=4096; TCP_MAX_SYN_BACKLOG=2048; NETDEV_MAX_BACKLOG=4096
+        ;;
+      balanced)
+        TUNING_PROFILE="balanced"; R_MEM_MAX=12582912; W_MEM_MAX=12582912
+        TCP_RMEM="4096 131072 12582912"; TCP_WMEM="4096 16384 12582912"
+        SOMAXCONN=8192; TCP_MAX_SYN_BACKLOG=4096; NETDEV_MAX_BACKLOG=4096
+        ;;
+      standard)
+        TUNING_PROFILE="standard"; R_MEM_MAX=16777216; W_MEM_MAX=16777216
+        TCP_RMEM="4096 131072 16777216"; TCP_WMEM="4096 16384 16777216"
+        SOMAXCONN=16384; TCP_MAX_SYN_BACKLOG=8192; NETDEV_MAX_BACKLOG=8192
+        ;;
+      *) fail "TCP 调优档位无效：$TCP_PROFILE_OVERRIDE" ;;
+    esac
+    info "使用面板选择的 TCP 档位：$TUNING_PROFILE（收发缓存上限 $((R_MEM_MAX / 1024 / 1024)) MB，接入队列 $SOMAXCONN）"
+    return
+  fi
+
   # 你指定的 16 MB / 16384 / 8192 是硬上限。内存小只向下收缩，绝不放大。
   if (( HOST_MEMORY_MB > 0 && HOST_MEMORY_MB < 512 )); then
     TUNING_PROFILE="tiny"
@@ -574,6 +604,7 @@ while [[ $# -gt 0 ]]; do
     --cf-api-token) CF_API_TOKEN="${2:-}"; DDNS_MODE="enabled"; shift 2 ;;
     --cf-record) CF_RECORD_NAME="${2:-}"; DDNS_MODE="enabled"; shift 2 ;;
     --disable-ddns) DDNS_MODE="disabled"; shift ;;
+    --tcp-profile) TCP_PROFILE_OVERRIDE="${2:-}"; shift 2 ;;
     --skip-tcp-tuning) TUNE_TCP=0; shift ;;
     --uninstall) uninstall_agent; exit 0 ;;
     --help|-h) usage; exit 0 ;;

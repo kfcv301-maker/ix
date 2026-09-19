@@ -90,9 +90,9 @@ curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/install.sh | 
 
 安装命令自动读取管理员当前浏览器的面板域名。例如从 `https://panel.example.com` 打开面板时，Agent 使用 `wss://panel.example.com/system-info` 保持通信，并通过 `https://panel.example.com/flow/*` 上报数据；不再要求管理员在网站配置填写 IP 或后端端口。新 Agent 将独立节点密钥放在 `Authorization: Bearer` 请求头中；后端仍接受旧 Agent 的 URL 密钥参数，已有节点无需重装。域名的反向代理须把 `/system-info`（WebSocket）、`/flow/upload` 与 `/flow/config` 转到后端，并使用有效 HTTPS 证书。
 
-节点安装时会先检测内核版本、CPU、内存、默认出口网卡以及 BBR/FQ 支持，再做 TCP 调优，最后才下载和启动 Agent。调优写入 `/etc/sysctl.d/99-flux-panel-network.conf`，不需要额外确认。
+节点安装时会先检测内核版本、CPU、内存、默认出口网卡以及 BBR/FQ 支持，再做 TCP 调优，最后才下载和启动 Agent。调优写入 `/etc/sysctl.d/99-flux-panel-network.conf`，不需要额外确认。面板生成安装命令时可选下面四档；未传档位的旧命令仍会按机器配置自动选择。
 
-| 自动档位 | 选择条件 | 单连接收发缓存上限 | 接入 / SYN / 收包队列 |
+| 档位 | 建议机器配置 | 单连接收发缓存上限 | 接入 / SYN / 收包队列 |
 | --- | --- | --- | --- |
 | `tiny` | 内存低于 512 MB | 4 MB | 2048 / 1024 / 2048 |
 | `small` | 512 MB 至 1 GB 内存 | 8 MB | 4096 / 2048 / 4096 |
@@ -107,7 +107,9 @@ curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/install.sh | 
 
 ### Cloudflare DDNS（可选）
 
-在节点管理中点击“安装”，开启 Cloudflare DDNS 后填写 API Token 和完整记录域名即可生成一条命令。安装完成会立刻更新记录，节点随后每 1 分钟检查公网 IPv4/IPv6，地址变化时才调用 Cloudflare 更新记录；AWS 换机后重跑同一条命令即可恢复。检测到 IPv6 时会创建或更新同名 AAAA 记录；没有可用 IPv6 时不会创建、修改或删除 AAAA 记录。Token 需要 Cloudflare 的 `Zone:Read` 与 `DNS:Edit` 权限，面板不保存 Token。
+在节点管理中点击“安装”，开启 Cloudflare DDNS 后填写 API Token 和完整记录域名即可生成一条命令。首次成功生成后，这两个字段会作为该节点的安装预设保存在当前管理员浏览器；下次打开同一节点会自动带回，不写入面板数据库。安装完成会立刻更新记录，节点随后每 1 分钟检查公网 IPv4/IPv6，地址变化时才调用 Cloudflare 更新记录；AWS 换机后重跑同一条命令即可恢复。检测到 IPv6 时会创建或更新同名 AAAA 记录；没有可用 IPv6 时不会创建、修改或删除 AAAA 记录。Token 需要 Cloudflare 的 `Zone:Read` 与 `DNS:Edit` 权限。
+
+节点每次连接或重连面板后都会立即上报当前 GOST 配置，面板据此补回重装/重启后确实缺失的转发服务；十分钟一次的周期上报仍保留作漂移校验。这样无需为了恢复规则而手工编辑保存转发。
 
 手动命令格式：
 

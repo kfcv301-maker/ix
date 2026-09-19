@@ -73,6 +73,10 @@ interface RealtimeTrafficSummary {
   updatedAt?: number;
 }
 
+interface RealtimeTrafficSample extends RealtimeTrafficSummary {
+  timestamp: number;
+}
+
 export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [userInfo, setUserInfo] = useState<UserInfo>({} as UserInfo);
@@ -85,6 +89,7 @@ export default function DashboardPage() {
     downloadSpeed: 0,
     reportingNodes: 0
   });
+  const [realtimeTrafficHistory, setRealtimeTrafficHistory] = useState<RealtimeTrafficSample[]>([]);
   const realtimeSocketRef = useRef<WebSocket | null>(null);
   const realtimeReconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const realtimeTrafficByNodeRef = useRef<Map<number, RealtimeNodeTraffic>>(new Map());
@@ -218,11 +223,17 @@ export default function DashboardPage() {
       const now = Date.now();
       const freshNodes = Array.from(realtimeTrafficByNodeRef.current.values())
         .filter(node => now - node.reportedAt <= 15_000);
-      setRealtimeTraffic({
+      const summary: RealtimeTrafficSummary = {
         uploadSpeed: freshNodes.reduce((total, node) => total + node.uploadSpeed, 0),
         downloadSpeed: freshNodes.reduce((total, node) => total + node.downloadSpeed, 0),
         reportingNodes: freshNodes.length,
         updatedAt: freshNodes.length ? now : undefined
+      };
+      setRealtimeTraffic(summary);
+      setRealtimeTrafficHistory(previous => {
+        const next = [...previous, { ...summary, timestamp: now }];
+        // 两秒一个上报点，保留最近两分钟即可让图表有趋势而不长期占用浏览器内存。
+        return next.filter(sample => now - sample.timestamp <= 120_000).slice(-60);
       });
     };
     const scheduleReconnect = () => {
@@ -298,6 +309,7 @@ export default function DashboardPage() {
       }
       closeSocket();
       realtimeTrafficByNodeRef.current.clear();
+      setRealtimeTrafficHistory([]);
     };
   }, [isAdmin]);
 
@@ -807,8 +819,8 @@ export default function DashboardPage() {
          </div>
 
          {isAdmin && (
-           <Card className="mb-6 lg:mb-8 border border-gray-200 dark:border-default-200 shadow-md">
-             <CardHeader className="pb-3">
+           <Card className="mb-6 overflow-hidden border border-gray-200 shadow-md dark:border-default-200 lg:mb-8">
+             <CardHeader className="border-b border-default-100 bg-gradient-to-r from-primary-50 via-background to-success-50 pb-3 dark:border-default-100/10 dark:from-primary-100/20 dark:via-background dark:to-success-100/10">
                <div className="flex w-full items-center justify-between gap-3">
                  <div className="flex items-center gap-2">
                    <svg className="h-5 w-5 text-primary" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true">
@@ -816,23 +828,63 @@ export default function DashboardPage() {
                    </svg>
                    <h2 className="text-lg lg:text-xl font-semibold text-foreground">全节点实时流量</h2>
                  </div>
-                 <span className="text-xs text-default-500">
-                   {realtimeTraffic.reportingNodes > 0 ? `${realtimeTraffic.reportingNodes} 个节点正在上报` : '等待节点上报'}
-                 </span>
+                 <div className="text-right text-xs text-default-500">
+                   <p className="font-medium text-default-700">
+                     {realtimeTraffic.reportingNodes > 0 ? `${realtimeTraffic.reportingNodes} 个节点正在上报` : '等待节点上报'}
+                   </p>
+                   <p className="mt-0.5">{realtimeTraffic.updatedAt ? `更新于 ${new Date(realtimeTraffic.updatedAt).toLocaleTimeString()}` : '尚未收到实时样本'}</p>
+                 </div>
                </div>
              </CardHeader>
-             <CardBody className="pt-0">
-               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                 <div className="rounded-lg border border-primary-200 bg-primary-50 p-4 dark:border-primary-300/20 dark:bg-primary-100/20">
-                   <p className="text-sm text-primary-700 dark:text-primary-300">↑ 全节点上行</p>
-                   <p className="mt-1 font-mono text-2xl font-semibold text-primary-800 dark:text-primary-200">{formatFlow(realtimeTraffic.uploadSpeed)}/s</p>
+             <CardBody className="p-4 pt-4 lg:p-5">
+               <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,0.82fr)_minmax(280px,1.18fr)]">
+                 <div className="grid grid-cols-2 gap-3">
+                   <div className="col-span-2 rounded-xl bg-default-100/70 p-4 dark:bg-default-100/10">
+                     <p className="text-xs font-medium uppercase tracking-wider text-default-500">当前总吞吐</p>
+                     <p className="mt-1 font-mono text-2xl font-semibold tracking-tight text-foreground lg:text-3xl">
+                       {formatFlow(realtimeTraffic.uploadSpeed + realtimeTraffic.downloadSpeed)}/s
+                     </p>
+                     <p className="mt-1 text-xs text-default-500">所有 15 秒内有监控上报的节点汇总</p>
+                   </div>
+                   <div className="rounded-xl border border-primary-200 bg-primary-50 p-3 dark:border-primary-300/20 dark:bg-primary-100/20">
+                     <p className="text-xs text-primary-700 dark:text-primary-300">↑ 上行</p>
+                     <p className="mt-1 font-mono text-lg font-semibold text-primary-800 dark:text-primary-200">{formatFlow(realtimeTraffic.uploadSpeed)}/s</p>
+                   </div>
+                   <div className="rounded-xl border border-success-200 bg-success-50 p-3 dark:border-success-300/20 dark:bg-success-100/20">
+                     <p className="text-xs text-success-700 dark:text-success-300">↓ 下行</p>
+                     <p className="mt-1 font-mono text-lg font-semibold text-success-800 dark:text-success-200">{formatFlow(realtimeTraffic.downloadSpeed)}/s</p>
+                   </div>
                  </div>
-                 <div className="rounded-lg border border-success-200 bg-success-50 p-4 dark:border-success-300/20 dark:bg-success-100/20">
-                   <p className="text-sm text-success-700 dark:text-success-300">↓ 全节点下行</p>
-                   <p className="mt-1 font-mono text-2xl font-semibold text-success-800 dark:text-success-200">{formatFlow(realtimeTraffic.downloadSpeed)}/s</p>
+                 <div className="h-48 rounded-xl border border-default-200 bg-background p-3 dark:border-default-100/10">
+                   {realtimeTrafficHistory.length < 2 ? (
+                     <div className="flex h-full items-center justify-center text-sm text-default-400">正在收集最近两分钟的流量趋势…</div>
+                   ) : (
+                     <ResponsiveContainer width="100%" height="100%">
+                       <LineChart data={realtimeTrafficHistory} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+                         <CartesianGrid strokeDasharray="3 3" vertical={false} className="opacity-30" />
+                         <XAxis
+                           dataKey="timestamp"
+                           tickFormatter={(value) => new Date(value).toLocaleTimeString([], { minute: '2-digit', second: '2-digit' })}
+                           tick={{ fontSize: 11 }} tickLine={false} axisLine={false} minTickGap={32}
+                         />
+                         <YAxis hide />
+                         <Tooltip
+                           labelFormatter={(value) => new Date(Number(value)).toLocaleTimeString()}
+                           formatter={(value, name) => [`${formatFlow(Number(value ?? 0))}/s`, String(name) === 'uploadSpeed' ? '上行' : '下行']}
+                           contentStyle={{ borderRadius: 10, border: '1px solid rgba(148,163,184,.35)' }}
+                         />
+                         <Line type="monotone" dataKey="uploadSpeed" name="uploadSpeed" stroke="#3b82f6" strokeWidth={2} dot={false} isAnimationActive={false} />
+                         <Line type="monotone" dataKey="downloadSpeed" name="downloadSpeed" stroke="#10b981" strokeWidth={2} dot={false} isAnimationActive={false} />
+                       </LineChart>
+                     </ResponsiveContainer>
+                   )}
                  </div>
                </div>
-               <p className="mt-3 text-xs text-default-500">按各节点最新两次上报的差值汇总；首次上报仅建立基线，不会把累计流量误显示为速率。</p>
+               <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-default-500">
+                 <span><i className="mr-1 inline-block h-2 w-2 rounded-full bg-primary" />上行</span>
+                 <span><i className="mr-1 inline-block h-2 w-2 rounded-full bg-success" />下行</span>
+                 <span>首次上报仅建立基线，不会将累计流量误当作实时速率。</span>
+               </div>
              </CardBody>
            </Card>
          )}

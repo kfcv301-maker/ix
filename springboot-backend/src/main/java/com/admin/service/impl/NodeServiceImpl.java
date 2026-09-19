@@ -401,6 +401,16 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
         command.append("--panel ").append(shellQuote(panelUrl))
                .append(" --token ").append(shellQuote(node.getSecret()));
 
+        String tcpTuningProfile = commandDto.getTcpTuningProfile();
+        if (StrUtil.isNotBlank(tcpTuningProfile)) {
+            String normalizedProfile = tcpTuningProfile.trim().toLowerCase();
+            if (!("tiny".equals(normalizedProfile) || "small".equals(normalizedProfile)
+                    || "balanced".equals(normalizedProfile) || "standard".equals(normalizedProfile))) {
+                return R.err("TCP 调优档位无效");
+            }
+            command.append(" --tcp-profile ").append(shellQuote(normalizedProfile));
+        }
+
         if (Boolean.TRUE.equals(commandDto.getDdnsEnabled())) {
             String token = commandDto.getCfApiToken();
             String recordName = commandDto.getCfRecordName();

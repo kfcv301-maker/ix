@@ -151,6 +151,7 @@ type WebSocketReporter struct {
 	connecting     bool              // 新增：正在连接状态
 	connMutex      sync.Mutex        // 新增：连接状态锁
 	aesCrypto      *crypto.AESCrypto // 新增：AES加密器
+	onConnected    func()            // WebSocket 每次连通后的轻量回调
 }
 
 // NewWebSocketReporter 创建一个新的WebSocket报告器
@@ -191,6 +192,23 @@ func (w *WebSocketReporter) Stop() {
 		w.conn.Close()
 	}
 
+}
+
+// SetConnectedHandler registers work that must run after every successful
+// WebSocket connection. The callback is deliberately invoked asynchronously:
+// a slow HTTP report must never hold the WebSocket connection lock or delay
+// the monitoring heartbeat.
+func (w *WebSocketReporter) SetConnectedHandler(handler func()) {
+	w.connMutex.Lock()
+	w.onConnected = handler
+	alreadyConnected := w.connected
+	w.connMutex.Unlock()
+	// StartWebSocketReporterWithConfig starts the reporter immediately. On a
+	// very fast local/network connection it may already be connected before the
+	// caller attaches its callback, so run the same recovery path once here.
+	if alreadyConnected && handler != nil {
+		go handler()
+	}
 }
 
 // run 主运行循环
@@ -293,6 +311,7 @@ func (w *WebSocketReporter) connect() error {
 
 	w.conn = conn
 	w.connected = true
+	connectedHandler := w.onConnected
 
 	// 设置关闭处理器来检测连接状态
 	w.conn.SetCloseHandler(func(code int, text string) error {
@@ -301,6 +320,14 @@ func (w *WebSocketReporter) connect() error {
 		w.connMutex.Unlock()
 		return nil
 	})
+
+	// A panel restart does not restart the Agent, so the periodic ten-minute
+	// configuration reporter used to leave a just-reconnected node waiting for
+	// its next tick. Report the current inventory now so the panel can restore
+	// only services that are actually missing, without an edit/save operation.
+	if connectedHandler != nil {
+		go connectedHandler()
+	}
 
 	fmt.Printf("✅ WebSocket连接建立成功 (http=%d, tls=%d, socks=%d)\n", cfg.Http, cfg.Tls, cfg.Socks)
 	return nil

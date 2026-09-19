@@ -32,6 +32,7 @@ export interface NodeInstallOptions {
   ddnsEnabled?: boolean;
   cfApiToken?: string;
   cfRecordName?: string;
+  tcpTuningProfile?: 'tiny' | 'small' | 'balanced' | 'standard';
   /** The public origin shown in the administrator's browser, used for Agent callbacks. */
   panelUrl?: string;
 }
