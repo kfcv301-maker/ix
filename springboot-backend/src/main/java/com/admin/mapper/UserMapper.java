@@ -35,7 +35,7 @@ public interface UserMapper extends BaseMapper<User> {
      * Return the ingress and egress nodes attached to tunnels the user may use.
      * This is used by the monitoring WebSocket to enforce server-side isolation.
      */
-    List<Long> getAccessibleNodeIds(@Param("userId") Integer userId);
+    List<Long> getAccessibleNodeIds(@Param("userId") Long userId);
     
     /**
      * 管理员查询所有隧道（流量和转发设置为99999）
