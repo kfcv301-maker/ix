@@ -18,6 +18,7 @@ import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 import javax.annotation.Resource;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.concurrent.ConcurrentHashMap;
@@ -127,11 +128,7 @@ public class WebSocketServer extends TextWebSocketHandler {
                     String broadcastMessage = jsonObject.toJSONString();
                     
                     // 异步处理广播消息，避免阻塞当前线程
-                    for (WebSocketSession targetSession : activeSessions) {
-                        if (targetSession != null && targetSession.isOpen() && !targetSession.equals(session)) {
-                            sendToUser(targetSession, broadcastMessage, null);
-                        }
-                    }
+                    broadcastNodeMessage(Long.valueOf(id), broadcastMessage);
                 }
             }
         } catch (Exception e) {
@@ -266,7 +263,7 @@ public class WebSocketServer extends TextWebSocketHandler {
                         res.put("id", id);
                         res.put("type", "status");
                         res.put("data", 1);
-                        broadcastMessage(res.toJSONString());
+                        broadcastNodeMessage(nodeId, res.toJSONString());
 
                         // config.json 会在重装 agent 时被重新创建，协议开关会回到
                         // 默认值。面板中的节点设置才是权威来源：连接建立后自动下发
@@ -371,7 +368,7 @@ public class WebSocketServer extends TextWebSocketHandler {
                             res.put("id", id);
                             res.put("type", "status");
                             res.put("data", 0);
-                            broadcastMessage(res.toJSONString());
+                            broadcastNodeMessage(nodeId, res.toJSONString());
                         } else {
                             log.info("节点 {} 状态更新为离线失败", nodeId);
                         }
@@ -447,11 +444,36 @@ public class WebSocketServer extends TextWebSocketHandler {
         }
     }
 
-    // 广播消息
-    public static void broadcastMessage(String message) {
+    /**
+     * Broadcast a node event only to sessions authorized to see that node.
+     * Browser sessions never decide the filter themselves: the handshake stores
+     * the role and the allowed node IDs as server-side session attributes.
+     */
+    private static void broadcastNodeMessage(Long nodeId, String message) {
         for (WebSocketSession session : activeSessions) {
-            sendToUser(session, message);
+            if (canViewNode(session, nodeId)) {
+                sendToUser(session, message);
+            }
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static boolean canViewNode(WebSocketSession session, Long nodeId) {
+        if (session == null || nodeId == null || !session.isOpen()) {
+            return false;
+        }
+
+        Object roleValue = session.getAttributes().get("roleId");
+        if (roleValue instanceof Number && ((Number) roleValue).intValue() == 0) {
+            return true;
+        }
+        if ("0".equals(String.valueOf(roleValue))) {
+            return true;
+        }
+
+        Object allowedValue = session.getAttributes().get("allowedNodeIds");
+        return allowedValue instanceof Set
+                && ((Set<Long>) allowedValue).contains(nodeId);
     }
 
 

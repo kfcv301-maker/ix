@@ -21,6 +21,7 @@ import {
   deleteNode,
   getNodeInstallCommand
 } from "@/api";
+import { getRealtimeSocketUrl } from "@/utils/realtime-socket";
 
 interface Node {
   id: number;
@@ -164,9 +165,9 @@ export default function NodePage() {
   const [installCommandLoading, setInstallCommandLoading] = useState(false);
   
   const websocketRef = useRef<WebSocket | null>(null);
-  const reconnectTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectAttemptsRef = useRef(0);
-  const maxReconnectAttempts = 5;
+  const shouldMaintainSocketRef = useRef(true);
 
   // 仅保留当前页面的最近 3 分钟实时样本。这样不需要新增数据库表，
   // 同时仍可在节点卡片和展开窗口中观察趋势。
@@ -178,11 +179,34 @@ export default function NodePage() {
   };
 
   useEffect(() => {
-    loadNodes();
-    initWebSocket();
+    shouldMaintainSocketRef.current = true;
+    const startMonitoring = async () => {
+      // 先有节点列表再处理上报，避免移动网络较快时首批实时数据被空列表丢弃。
+      await loadNodes();
+      initWebSocket();
+    };
+    startMonitoring();
+
+    const reconnectWhenForeground = () => {
+      if (document.hidden || !shouldMaintainSocketRef.current) return;
+      reconnectAttemptsRef.current = 0;
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+      if (websocketRef.current) {
+        websocketRef.current.onclose = null;
+        websocketRef.current.close();
+        websocketRef.current = null;
+      }
+      initWebSocket();
+    };
+    document.addEventListener('visibilitychange', reconnectWhenForeground);
     
     return () => {
-      closeWebSocket();
+      shouldMaintainSocketRef.current = false;
+      document.removeEventListener('visibilitychange', reconnectWhenForeground);
+      closeWebSocket(true);
     };
   }, []);
 
@@ -210,6 +234,7 @@ export default function NodePage() {
 
   // 初始化WebSocket连接
   const initWebSocket = () => {
+    if (!shouldMaintainSocketRef.current) return;
     if (websocketRef.current && 
         (websocketRef.current.readyState === WebSocket.OPEN || 
          websocketRef.current.readyState === WebSocket.CONNECTING)) {
@@ -217,15 +242,11 @@ export default function NodePage() {
     }
     
     if (websocketRef.current) {
-      closeWebSocket();
+      closeWebSocket(false);
     }
     
-    // 构建WebSocket URL，使用axios的baseURL
-    const baseUrl = axios.defaults.baseURL || (import.meta.env.VITE_API_BASE ? `${import.meta.env.VITE_API_BASE}/api/v1/` : '/api/v1/');
-    const wsUrl = baseUrl.replace(/^http/, 'ws').replace(/\/api\/v1\/$/, '') + `/system-info?type=0&secret=${localStorage.getItem('token')}`;
-    
     try {
-      websocketRef.current = new WebSocket(wsUrl);
+      websocketRef.current = new WebSocket(getRealtimeSocketUrl());
       
       websocketRef.current.onopen = () => {
         reconnectAttemptsRef.current = 0;
@@ -383,17 +404,19 @@ export default function NodePage() {
 
   // 尝试重新连接
   const attemptReconnect = () => {
-    if (reconnectAttemptsRef.current < maxReconnectAttempts) {
-      reconnectAttemptsRef.current++;
-      
-      reconnectTimerRef.current = setTimeout(() => {
-        initWebSocket();
-      }, 3000 * reconnectAttemptsRef.current);
-    }
+    if (!shouldMaintainSocketRef.current || reconnectTimerRef.current) return;
+    reconnectAttemptsRef.current++;
+    // 移动浏览器后台会暂停或销毁 WebSocket；不设次数上限，并把退避控制在
+    // 15 秒以内，用户回到页面后也会立即重新建立连接。
+    const delay = Math.min(3_000 * reconnectAttemptsRef.current, 15_000);
+    reconnectTimerRef.current = setTimeout(() => {
+      reconnectTimerRef.current = null;
+      initWebSocket();
+    }, delay);
   };
 
   // 关闭WebSocket连接
-  const closeWebSocket = () => {
+  const closeWebSocket = (clearMonitoringState = true) => {
     if (reconnectTimerRef.current) {
       clearTimeout(reconnectTimerRef.current);
       reconnectTimerRef.current = null;
@@ -415,11 +438,13 @@ export default function NodePage() {
       websocketRef.current = null;
     }
     
-    setNodeList(prev => prev.map(node => ({
-      ...node,
-      connectionStatus: 'offline',
-      systemInfo: null
-    })));
+    if (clearMonitoringState) {
+      setNodeList(prev => prev.map(node => ({
+        ...node,
+        connectionStatus: 'offline',
+        systemInfo: null
+      })));
+    }
   };
 
 
@@ -779,22 +804,22 @@ export default function NodePage() {
 
   return (
     
-      <div className="px-3 lg:px-6 py-8">
+      <div className="px-3 py-3 lg:px-6 lg:py-8">
         {/* 页面头部 */}
-        <div className="flex items-center justify-between mb-6">
-        <div className="flex-1">
-        </div>
-
-        <Button
-              size="sm"
-              variant="flat"
-              color="primary"
-              onPress={handleAdd}
-             
-            >
-              新增
-            </Button>
-     
+        <div className="mb-4 flex items-center justify-between gap-3 lg:mb-6">
+          <div className="min-w-0">
+            <h1 className="text-lg font-semibold text-foreground lg:text-xl">节点监控</h1>
+            <p className="mt-0.5 truncate text-xs text-default-500">实时查看资源、链路速率与节点状态</p>
+          </div>
+          <Button
+            size="sm"
+            variant="flat"
+            color="primary"
+            onPress={handleAdd}
+            className="min-h-10 flex-shrink-0 px-4"
+          >
+            新增节点
+          </Button>
         </div>
 
         {/* 节点列表 */}
@@ -826,7 +851,7 @@ export default function NodePage() {
             {nodeList.map((node) => (
               <Card 
                 key={node.id} 
-                className="shadow-sm border border-divider hover:shadow-md transition-shadow duration-200"
+                className="border border-divider shadow-sm transition-shadow duration-200 hover:shadow-md"
               >
                 <CardHeader className="pb-2">
                   <div className="flex justify-between items-start w-full">

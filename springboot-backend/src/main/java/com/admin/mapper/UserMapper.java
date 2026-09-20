@@ -30,6 +30,12 @@ public interface UserMapper extends BaseMapper<User> {
      * @return 转发列表
      */
     List<UserPackageDto.UserForwardDetailDto> getUserForwardDetails(@Param("userId") Integer userId);
+
+    /**
+     * Return the ingress and egress nodes attached to tunnels the user may use.
+     * This is used by the monitoring WebSocket to enforce server-side isolation.
+     */
+    List<Long> getAccessibleNodeIds(@Param("userId") Integer userId);
     
     /**
      * 管理员查询所有隧道（流量和转发设置为99999）

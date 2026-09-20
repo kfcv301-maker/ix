@@ -4,6 +4,7 @@ package com.admin.config;
 import com.admin.common.utils.IpUtils;
 import com.admin.common.utils.JwtUtil;
 import com.admin.entity.Node;
+import com.admin.mapper.UserMapper;
 import com.admin.service.NodeService;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import lombok.extern.slf4j.Slf4j;
@@ -17,8 +18,12 @@ import org.springframework.web.socket.server.support.HttpSessionHandshakeInterce
 import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
 import java.net.InetSocketAddress;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 
 @Configuration
@@ -27,6 +32,9 @@ public class WebSocketInterceptor extends HttpSessionHandshakeInterceptor {
 
     @Resource
     NodeService nodeService;
+
+    @Resource
+    UserMapper userMapper;
 
     @Override
     public void afterHandshake(ServerHttpRequest request, ServerHttpResponse response, WebSocketHandler wsHandler, Exception ex) {
@@ -61,7 +69,21 @@ public class WebSocketInterceptor extends HttpSessionHandshakeInterceptor {
         }else {
             boolean b = JwtUtil.validateToken(secret);
             if (!b) return false;
-            attributes.put("id", JwtUtil.getUserIdFromToken(secret));
+            Integer userId = JwtUtil.getUserIdFromToken(secret);
+            Integer roleId = JwtUtil.getRoleIdFromToken(secret);
+            attributes.put("id", userId);
+            attributes.put("roleId", roleId);
+
+            // Do the authorization lookup during the authenticated handshake. The
+            // WebSocket handler then filters every node status and metric event
+            // without trusting the browser to hide data it should not receive.
+            if (!Objects.equals(roleId, 0)) {
+                List<Long> nodeIds = userMapper.getAccessibleNodeIds(userId);
+                Set<Long> allowedNodeIds = nodeIds == null
+                        ? Collections.emptySet()
+                        : Collections.unmodifiableSet(new HashSet<>(nodeIds));
+                attributes.put("allowedNodeIds", allowedNodeIds);
+            }
         }
         attributes.put("type", type);
         return true;
