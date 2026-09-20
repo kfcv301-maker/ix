@@ -17,7 +17,8 @@ import {
   updateTunnel, 
   deleteTunnel,
   getNodeList,
-  diagnoseTunnel
+  diagnoseTunnel,
+  diagnoseTunnelForwards
 } from "@/api";
 
 interface Tunnel {
@@ -79,6 +80,25 @@ interface DiagnosisResult {
   }>;
 }
 
+interface ForwardPingResult {
+  forwardId: number;
+  forwardName: string;
+  remoteAddress?: string;
+  success: boolean;
+  message?: string;
+  results: DiagnosisResult['results'];
+}
+
+interface TunnelForwardDiagnosisResult {
+  tunnelId: number;
+  tunnelName: string;
+  timestamp: number;
+  totalForwards: number;
+  successfulForwards: number;
+  failedForwards: number;
+  forwards: ForwardPingResult[];
+}
+
 export default function TunnelPage() {
   const [loading, setLoading] = useState(true);
   const [tunnels, setTunnels] = useState<Tunnel[]>([]);
@@ -92,9 +112,13 @@ export default function TunnelPage() {
   const [submitLoading, setSubmitLoading] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [diagnosisLoading, setDiagnosisLoading] = useState(false);
+  const [forwardPingModalOpen, setForwardPingModalOpen] = useState(false);
+  const [forwardPingLoading, setForwardPingLoading] = useState(false);
   const [tunnelToDelete, setTunnelToDelete] = useState<Tunnel | null>(null);
   const [currentDiagnosisTunnel, setCurrentDiagnosisTunnel] = useState<Tunnel | null>(null);
   const [diagnosisResult, setDiagnosisResult] = useState<DiagnosisResult | null>(null);
+  const [currentPingTunnel, setCurrentPingTunnel] = useState<Tunnel | null>(null);
+  const [forwardPingResult, setForwardPingResult] = useState<TunnelForwardDiagnosisResult | null>(null);
   
   // 表单状态
   const [form, setForm] = useState<TunnelForm>({
@@ -380,6 +404,58 @@ export default function TunnelPage() {
     return node ? node.name : `节点${nodeId}`;
   };
 
+  // 逐条检测当前隧道下的转发。后端会依次复用单条转发的完整 TCP 链路诊断。
+  const handleDiagnoseAllForwards = async (tunnel: Tunnel) => {
+    setCurrentPingTunnel(tunnel);
+    setForwardPingModalOpen(true);
+    setForwardPingLoading(true);
+    setForwardPingResult(null);
+
+    try {
+      const response = await diagnoseTunnelForwards(tunnel.id);
+      if (response.code === 0) {
+        setForwardPingResult(response.data);
+      } else {
+        toast.error(response.msg || '一键 PING 失败');
+        setForwardPingResult({
+          tunnelId: tunnel.id,
+          tunnelName: tunnel.name,
+          timestamp: Date.now(),
+          totalForwards: 0,
+          successfulForwards: 0,
+          failedForwards: 1,
+          forwards: [{
+            forwardId: 0,
+            forwardName: '批量检测失败',
+            success: false,
+            message: response.msg || '无法开始检测',
+            results: []
+          }]
+        });
+      }
+    } catch (error) {
+      console.error('一键 PING 失败:', error);
+      toast.error('网络错误，请重试');
+      setForwardPingResult({
+        tunnelId: tunnel.id,
+        tunnelName: tunnel.name,
+        timestamp: Date.now(),
+        totalForwards: 0,
+        successfulForwards: 0,
+        failedForwards: 1,
+        forwards: [{
+          forwardId: 0,
+          forwardName: '网络错误',
+          success: false,
+          message: '无法连接到服务器',
+          results: []
+        }]
+      });
+    } finally {
+      setForwardPingLoading(false);
+    }
+  };
+
   const getEntryNodeNames = (tunnel: Tunnel): string => {
     const entryNodeIds = tunnel.entryNodeIds?.length ? tunnel.entryNodeIds : [tunnel.inNodeId];
     return entryNodeIds.map(getNodeName).join('、');
@@ -569,6 +645,20 @@ export default function TunnelPage() {
                         }
                       >
                         编辑
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="flat"
+                        color="success"
+                        onPress={() => handleDiagnoseAllForwards(tunnel)}
+                        className="flex-1 min-h-8"
+                        startContent={
+                          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M4 12h2l2-6 4 12 2-6h6" />
+                          </svg>
+                        }
+                      >
+                        一键 PING
                       </Button>
                       <Button
                         size="sm"
@@ -1094,6 +1184,110 @@ export default function TunnelPage() {
                       isLoading={diagnosisLoading}
                     >
                       重新诊断
+                    </Button>
+                  )}
+                </ModalFooter>
+              </>
+            )}
+          </ModalContent>
+        </Modal>
+
+        {/* 隧道下全部转发的一键 PING 结果 */}
+        <Modal
+          isOpen={forwardPingModalOpen}
+          onOpenChange={setForwardPingModalOpen}
+          size="4xl"
+          scrollBehavior="outside"
+          backdrop="blur"
+          placement="center"
+        >
+          <ModalContent>
+            {(onClose) => (
+              <>
+                <ModalHeader className="flex flex-col gap-1">
+                  <h2 className="text-xl font-bold">一键 PING 结果</h2>
+                  {currentPingTunnel && (
+                    <p className="text-small text-default-500">
+                      {currentPingTunnel.name} · 逐条检测该隧道下所有转发的完整 TCP 链路
+                    </p>
+                  )}
+                </ModalHeader>
+                <ModalBody>
+                  {forwardPingLoading ? (
+                    <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
+                      <Spinner size="lg" />
+                      <div>
+                        <p className="font-medium text-foreground">正在逐条 PING 转发…</p>
+                        <p className="mt-1 text-small text-default-500">多入口或多目标地址会分别检测，请勿关闭此窗口。</p>
+                      </div>
+                    </div>
+                  ) : forwardPingResult ? (
+                    <div className="space-y-4">
+                      <div className="grid grid-cols-3 gap-3">
+                        <Card className="border border-default-200 shadow-none">
+                          <CardBody className="p-3 text-center">
+                            <div className="text-2xl font-bold text-foreground">{forwardPingResult.totalForwards}</div>
+                            <div className="text-small text-default-500">检测转发</div>
+                          </CardBody>
+                        </Card>
+                        <Card className="border border-success-200 shadow-none">
+                          <CardBody className="p-3 text-center">
+                            <div className="text-2xl font-bold text-success">{forwardPingResult.successfulForwards}</div>
+                            <div className="text-small text-default-500">全部链路通过</div>
+                          </CardBody>
+                        </Card>
+                        <Card className={`border shadow-none ${forwardPingResult.failedForwards ? 'border-danger-200' : 'border-default-200'}`}>
+                          <CardBody className="p-3 text-center">
+                            <div className={`text-2xl font-bold ${forwardPingResult.failedForwards ? 'text-danger' : 'text-default-500'}`}>{forwardPingResult.failedForwards}</div>
+                            <div className="text-small text-default-500">存在失败链路</div>
+                          </CardBody>
+                        </Card>
+                      </div>
+
+                      {forwardPingResult.totalForwards === 0 ? (
+                        <Alert color="warning" variant="flat" title="该隧道下暂无转发，无需检测。" />
+                      ) : (
+                        forwardPingResult.forwards.map((forward) => (
+                          <Card key={forward.forwardId} className={`border shadow-sm ${forward.success ? 'border-success-200' : 'border-danger-200'}`}>
+                            <CardHeader className="flex items-center justify-between gap-3 pb-2">
+                              <div className="min-w-0">
+                                <h3 className="truncate font-semibold text-foreground">{forward.forwardName || `转发 #${forward.forwardId}`}</h3>
+                                {forward.remoteAddress && <p className="mt-1 truncate font-mono text-tiny text-default-500">{forward.remoteAddress}</p>}
+                              </div>
+                              <Chip color={forward.success ? 'success' : 'danger'} variant="flat">
+                                {forward.success ? '全部通过' : '检测失败'}
+                              </Chip>
+                            </CardHeader>
+                            <CardBody className="space-y-2 pt-0">
+                              {forward.results?.length ? forward.results.map((result, index) => (
+                                <div key={index} className="grid grid-cols-[auto_1fr_auto] items-center gap-3 rounded-lg border border-default-200 px-3 py-2 text-small">
+                                  <span className={`flex h-6 w-6 items-center justify-center rounded-full text-white ${result.success ? 'bg-success' : 'bg-danger'}`}>
+                                    {result.success ? '✓' : '✗'}
+                                  </span>
+                                  <div className="min-w-0">
+                                    <p className="font-medium text-foreground">{result.description} · {result.nodeName}</p>
+                                    <p className="truncate font-mono text-tiny text-default-500">{result.targetIp}{result.targetPort ? `:${result.targetPort}` : ''}</p>
+                                  </div>
+                                  <div className="text-right text-tiny text-default-500">
+                                    {result.success ? <><p>{result.averageTime?.toFixed(0) ?? '-'} ms</p><p>丢包 {result.packetLoss?.toFixed(1) ?? '-'}%</p></> : <span className="text-danger">{result.message || '连接失败'}</span>}
+                                  </div>
+                                </div>
+                              )) : (
+                                <Alert color="danger" variant="flat" title="错误详情" description={forward.message || '未返回诊断结果'} />
+                              )}
+                              {!forward.success && forward.results?.length ? <Alert color="danger" variant="flat" title="检测结论" description={forward.message || '至少一个链路检测未通过'} /> : null}
+                            </CardBody>
+                          </Card>
+                        ))
+                      )}
+                    </div>
+                  ) : null}
+                </ModalBody>
+                <ModalFooter>
+                  <Button variant="light" onPress={onClose}>关闭</Button>
+                  {currentPingTunnel && (
+                    <Button color="success" onPress={() => handleDiagnoseAllForwards(currentPingTunnel)} isLoading={forwardPingLoading}>
+                      重新 PING
                     </Button>
                   )}
                 </ModalFooter>

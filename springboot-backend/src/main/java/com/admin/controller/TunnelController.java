@@ -137,4 +137,15 @@ public class TunnelController extends BaseController {
         return tunnelService.diagnoseTunnel(tunnelId);
     }
 
+    /**
+     * 一键检测隧道下每一条转发的完整 TCP 链路。
+     */
+    @LogAnnotation
+    @RequireRole
+    @PostMapping("/diagnose-forwards")
+    public R diagnoseTunnelForwards(@RequestBody Map<String, Object> params) {
+        Long tunnelId = Long.valueOf(params.get("tunnelId").toString());
+        return tunnelService.diagnoseTunnelForwards(tunnelId);
+    }
+
 }

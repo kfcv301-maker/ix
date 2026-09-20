@@ -56,4 +56,10 @@ public interface TunnelService extends IService<Tunnel> {
      * @return 诊断结果
      */
     R diagnoseTunnel(Long tunnelId);
+
+    /**
+     * 对隧道下的全部转发逐条执行 TCP 连通性检测。
+     * 单条转发的入口/出口链路判定与 forward/diagnose 完全一致。
+     */
+    R diagnoseTunnelForwards(Long tunnelId);
 }
