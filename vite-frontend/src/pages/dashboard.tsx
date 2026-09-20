@@ -1,12 +1,12 @@
 import { Card, CardBody, CardHeader } from "@heroui/card";
 import { Button } from "@heroui/button";
-import { Modal, ModalContent, ModalHeader, ModalBody, ModalFooter } from "@heroui/modal";
+import { Modal, ModalContent, ModalHeader, ModalBody } from "@heroui/modal";
 import { useState, useEffect, useRef } from "react";
 import toast from 'react-hot-toast';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 
-import { diagnoseForward, getUserPackageInfo } from "@/api";
+import { getUserPackageInfo } from "@/api";
 import { getRealtimeSocketUrl } from "@/utils/realtime-socket";
 
 interface UserInfo {
@@ -77,30 +77,6 @@ interface RealtimeTrafficSample extends RealtimeTrafficSummary {
   timestamp: number;
 }
 
-interface PingCheckResult {
-  description?: string;
-  success?: boolean;
-  averageTime?: number;
-  packetLoss?: number;
-  message?: string;
-}
-
-interface ForwardPingReport {
-  forwardId: number;
-  forwardName: string;
-  remoteAddress: string;
-  success: boolean;
-  message?: string;
-  results: PingCheckResult[];
-}
-
-interface ForwardPingSummary {
-  totalForwards: number;
-  successfulForwards: number;
-  failedForwards: number;
-  forwards: ForwardPingReport[];
-}
-
 export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [userInfo, setUserInfo] = useState<UserInfo>({} as UserInfo);
@@ -117,9 +93,6 @@ export default function DashboardPage() {
   const realtimeSocketRef = useRef<WebSocket | null>(null);
   const realtimeReconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const realtimeTrafficByNodeRef = useRef<Map<number, RealtimeNodeTraffic>>(new Map());
-  const [forwardPingModalOpen, setForwardPingModalOpen] = useState(false);
-  const [forwardPingLoading, setForwardPingLoading] = useState(false);
-  const [forwardPingSummary, setForwardPingSummary] = useState<ForwardPingSummary | null>(null);
   
   const [addressModalOpen, setAddressModalOpen] = useState(false);
   const [addressModalTitle, setAddressModalTitle] = useState('');
@@ -750,61 +723,6 @@ export default function DashboardPage() {
     return inFlow + outFlow;
   };
 
-  const areAllPingChecksSuccessful = (results: PingCheckResult[]) =>
-    results.length > 0 && results.every(result => result?.success === true);
-
-  const handleDiagnoseAllForwards = async () => {
-    if (forwardList.length === 0) {
-      toast.error('暂无可检测的转发');
-      return;
-    }
-
-    setForwardPingModalOpen(true);
-    setForwardPingLoading(true);
-    setForwardPingSummary({
-      totalForwards: forwardList.length,
-      successfulForwards: 0,
-      failedForwards: 0,
-      forwards: []
-    });
-
-    const reports: ForwardPingReport[] = [];
-    let successfulForwards = 0;
-    for (const forward of forwardList) {
-      try {
-        const response: any = await diagnoseForward(forward.id);
-        const results = Array.isArray(response?.data?.results) ? response.data.results : [];
-        const success = response?.code === 0 && areAllPingChecksSuccessful(results);
-        if (success) successfulForwards++;
-        reports.push({
-          forwardId: forward.id,
-          forwardName: forward.name,
-          remoteAddress: forward.remoteAddr,
-          success,
-          message: success ? undefined : (response?.msg || response?.data?.message || '至少一个链路检测未通过'),
-          results
-        });
-      } catch {
-        reports.push({
-          forwardId: forward.id,
-          forwardName: forward.name,
-          remoteAddress: forward.remoteAddr,
-          success: false,
-          message: '检测请求失败，请稍后重试',
-          results: []
-        });
-      }
-
-      setForwardPingSummary({
-        totalForwards: forwardList.length,
-        successfulForwards,
-        failedForwards: reports.length - successfulForwards,
-        forwards: [...reports]
-      });
-    }
-    setForwardPingLoading(false);
-  };
-
       if (loading) {
       return (
         
@@ -1141,7 +1059,7 @@ export default function DashboardPage() {
          {/* 转发配置 */}
          <Card className="border border-gray-200 dark:border-default-200 shadow-md">
            <CardHeader className="pb-3">
-             <div className="flex w-full items-center justify-between gap-3">
+             <div className="flex w-full items-center gap-2">
                <div className="flex min-w-0 items-center gap-2">
                  <svg className="w-5 h-5 flex-shrink-0 text-primary" fill="currentColor" viewBox="0 0 20 20">
                    <path fillRule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clipRule="evenodd" />
@@ -1151,17 +1069,6 @@ export default function DashboardPage() {
                    {forwardList.length}
                  </span>
                </div>
-               {!isAdmin && (
-                 <Button
-                   size="sm"
-                   color="primary"
-                   variant="flat"
-                   className="min-h-9 flex-shrink-0"
-                   onPress={handleDiagnoseAllForwards}
-                 >
-                   一键 PING
-                 </Button>
-               )}
              </div>
            </CardHeader>
            <CardBody className="pt-0">
@@ -1234,65 +1141,6 @@ export default function DashboardPage() {
             )}
           </CardBody>
         </Card>
-
-        <Modal
-          isOpen={forwardPingModalOpen}
-          onOpenChange={setForwardPingModalOpen}
-          size="3xl"
-          scrollBehavior="inside"
-          placement="center"
-          isDismissable={!forwardPingLoading}
-          isKeyboardDismissDisabled={forwardPingLoading}
-        >
-          <ModalContent>
-            <ModalHeader>我的转发 · 一键 PING</ModalHeader>
-            <ModalBody>
-              {forwardPingSummary && (
-                <div className="grid grid-cols-3 gap-2 text-center text-sm">
-                  <div className="rounded-lg bg-default-100 p-2 dark:bg-default-100/40"><div className="text-default-500">总数</div><div className="mt-1 font-semibold">{forwardPingSummary.totalForwards}</div></div>
-                  <div className="rounded-lg bg-success-50 p-2 text-success-700 dark:bg-success-100/20 dark:text-success-300"><div>可达</div><div className="mt-1 font-semibold">{forwardPingSummary.successfulForwards}</div></div>
-                  <div className="rounded-lg bg-danger-50 p-2 text-danger-700 dark:bg-danger-100/20 dark:text-danger-300"><div>异常</div><div className="mt-1 font-semibold">{forwardPingSummary.failedForwards}</div></div>
-                </div>
-              )}
-
-              {forwardPingLoading && (
-                <div className="flex items-center gap-2 rounded-lg bg-primary-50 p-3 text-sm text-primary-700 dark:bg-primary-100/20 dark:text-primary-300">
-                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-primary-200 border-t-primary" />
-                  正在逐条检测转发，请勿关闭此窗口…
-                </div>
-              )}
-
-              <div className="space-y-2">
-                {forwardPingSummary?.forwards.map(forward => (
-                  <div key={forward.forwardId} className={`rounded-lg border p-3 ${forward.success ? 'border-success-200 bg-success-50/40 dark:border-success-300/20 dark:bg-success-100/10' : 'border-danger-200 bg-danger-50/40 dark:border-danger-300/20 dark:bg-danger-100/10'}`}>
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="truncate font-medium text-foreground">{forward.forwardName}</p>
-                        <p className="mt-0.5 truncate font-mono text-xs text-default-500">{forward.remoteAddress}</p>
-                      </div>
-                      <span className={`flex-shrink-0 text-xs font-medium ${forward.success ? 'text-success' : 'text-danger'}`}>{forward.success ? '可达' : '异常'}</span>
-                    </div>
-                    {forward.results.length > 0 ? (
-                      <div className="mt-2 space-y-1 text-xs text-default-600">
-                        {forward.results.map((result, index) => (
-                          <div key={index} className="flex items-center justify-between gap-2">
-                            <span className="truncate">{result.description || '链路检测'}</span>
-                            <span className={result.success ? 'text-success' : 'text-danger'}>
-                              {result.success ? `${Number(result.averageTime || 0).toFixed(0)} ms · 丢包 ${Number(result.packetLoss || 0).toFixed(0)}%` : (result.message || '不可达')}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    ) : !forward.success && <p className="mt-2 text-xs text-danger">{forward.message}</p>}
-                  </div>
-                ))}
-              </div>
-            </ModalBody>
-            <ModalFooter>
-              <Button variant="flat" onPress={() => setForwardPingModalOpen(false)} isDisabled={forwardPingLoading}>关闭</Button>
-            </ModalFooter>
-          </ModalContent>
-        </Modal>
 
         {/* 地址列表弹窗 */}
         <Modal isOpen={addressModalOpen} onClose={() => setAddressModalOpen(false)} size="2xl" 
