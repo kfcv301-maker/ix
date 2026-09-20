@@ -1,8 +1,8 @@
 #!/bin/sh
 set -eu
 
-# docker/compose is Alpine based and already includes Docker Compose. Git and
-# Python are installed at container start so this image stays small and the
-# updater script itself remains versioned with the panel source.
-apk add --no-cache git python3 >/dev/null
+# The official Docker CLI image is Alpine based. Install Git, Python and the
+# Compose v2 plugin at startup so the updater uses the same `docker compose`
+# command as the regular panel installer.
+apk add --no-cache git python3 docker-cli-compose >/dev/null
 exec python3 /workspace/updater/panel_updater.py

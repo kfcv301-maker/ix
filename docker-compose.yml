@@ -59,7 +59,9 @@ services:
   # Deliberately has no published port.  The backend can reach it only on the
   # Docker network and authenticates every request with PANEL_UPDATER_TOKEN.
   updater:
-    image: docker/compose:2.27.0
+    # docker/compose only publishes the legacy Compose v1 image. Use the
+    # official Docker CLI image and install the v2 Compose plugin at startup.
+    image: docker:27-cli
     restart: unless-stopped
     environment:
       PANEL_UPDATER_TOKEN: ${PANEL_UPDATER_TOKEN}
