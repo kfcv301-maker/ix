@@ -26,6 +26,11 @@ PROJECT_NAME = os.environ.get("PROJECT_NAME", "flux-panel-enhanced")
 REPO_URL = os.environ.get("REPO_URL", "https://github.com/kfcv301-maker/ix.git")
 BRANCH = os.environ.get("BRANCH", "main")
 TOKEN = os.environ.get("PANEL_UPDATER_TOKEN", "")
+# The updater runs inside this Compose project. Never include it in an
+# update-triggered `compose up`: Docker may recreate the updater container
+# while this request is still running, which kills the update worker before it
+# gets a chance to start the remaining services.
+PANEL_SERVICES = ("mysql", "backend", "frontend")
 STATE_LOCK = threading.RLock()
 STATE: dict[str, Any] = {
     "state": "idle",
@@ -126,7 +131,15 @@ def update_worker() -> None:
         if reset.returncode != 0:
             raise RuntimeError("切换新版本失败，现有容器仍在运行")
 
-        deploy = run(compose_command("up", "-d", "--build", "--remove-orphans"))
+        # Only rebuild and start the panel services. `updater` intentionally
+        # stays running so this worker survives the deployment it initiated.
+        # It will be refreshed by the next host-side deployment if its own
+        # image or startup contract changes.
+        deploy = run(
+            compose_command(
+                "up", "-d", "--build", "--remove-orphans", *PANEL_SERVICES,
+            )
+        )
         if deploy.returncode != 0:
             raise RuntimeError("新版本构建或启动失败；可使用本次数据库备份回滚")
 
