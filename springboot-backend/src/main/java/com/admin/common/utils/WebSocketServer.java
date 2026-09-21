@@ -457,23 +457,94 @@ public class WebSocketServer extends TextWebSocketHandler {
         }
     }
 
+    /**
+     * Publish an incremental traffic sample from one forwarding service.
+     *
+     * Administrators receive every tunnel sample so their browser can aggregate
+     * the current speed per tunnel. A regular user receives only samples for
+     * their own forwards in a tunnel granted to them. The authorization check
+     * runs here at the WebSocket boundary; neither the agent nor the browser
+     * is trusted to choose which data is visible.
+     */
+    public static void broadcastTunnelTraffic(Long tunnelId, Long userId, String tunnelName,
+                                              String sourceId, long uploadBytes, long downloadBytes) {
+        if (tunnelId == null || userId == null || StringUtils.isBlank(sourceId)
+                || uploadBytes < 0 || downloadBytes < 0) {
+            return;
+        }
+
+        JSONObject data = new JSONObject();
+        data.put("tunnelId", tunnelId);
+        data.put("tunnelName", StringUtils.defaultIfBlank(tunnelName, "未命名隧道"));
+        // sourceId is only an opaque baseline key for the browser. It allows
+        // multiple protocols and ingress nodes to be summed without treating
+        // every report as an independent tunnel.
+        data.put("sourceId", sourceId);
+        data.put("uploadBytes", uploadBytes);
+        data.put("downloadBytes", downloadBytes);
+        data.put("reportedAt", System.currentTimeMillis());
+
+        JSONObject event = new JSONObject();
+        event.put("type", "tunnel_traffic");
+        event.put("data", data);
+        String message = event.toJSONString();
+
+        for (WebSocketSession session : activeSessions) {
+            if (canViewTunnelTraffic(session, tunnelId, userId)) {
+                sendToUser(session, message);
+            }
+        }
+    }
+
     @SuppressWarnings("unchecked")
     private static boolean canViewNode(WebSocketSession session, Long nodeId) {
         if (session == null || nodeId == null || !session.isOpen()) {
             return false;
         }
 
-        Object roleValue = session.getAttributes().get("roleId");
-        if (roleValue instanceof Number && ((Number) roleValue).intValue() == 0) {
-            return true;
-        }
-        if ("0".equals(String.valueOf(roleValue))) {
+        if (isAdministrator(session)) {
             return true;
         }
 
         Object allowedValue = session.getAttributes().get("allowedNodeIds");
         return allowedValue instanceof Set
                 && ((Set<Long>) allowedValue).contains(nodeId);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static boolean canViewTunnelTraffic(WebSocketSession session, Long tunnelId, Long userId) {
+        if (session == null || tunnelId == null || userId == null || !session.isOpen()) {
+            return false;
+        }
+        if (isAdministrator(session)) {
+            return true;
+        }
+
+        Long sessionUserId = asLong(session.getAttributes().get("id"));
+        if (!Objects.equals(sessionUserId, userId)) {
+            return false;
+        }
+
+        Object allowedValue = session.getAttributes().get("allowedTunnelIds");
+        return allowedValue instanceof Set
+                && ((Set<Long>) allowedValue).contains(tunnelId);
+    }
+
+    private static boolean isAdministrator(WebSocketSession session) {
+        Object roleValue = session.getAttributes().get("roleId");
+        return (roleValue instanceof Number && ((Number) roleValue).intValue() == 0)
+                || "0".equals(String.valueOf(roleValue));
+    }
+
+    private static Long asLong(Object value) {
+        if (value instanceof Number) {
+            return ((Number) value).longValue();
+        }
+        try {
+            return value == null ? null : Long.valueOf(String.valueOf(value));
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
     }
 
 

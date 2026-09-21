@@ -36,6 +36,13 @@ public interface UserMapper extends BaseMapper<User> {
      * This is used by the monitoring WebSocket to enforce server-side isolation.
      */
     List<Long> getAccessibleNodeIds(@Param("userId") Long userId);
+
+    /**
+     * Return the tunnels a regular user may use. Real-time tunnel traffic is
+     * filtered with this list at the WebSocket boundary, rather than relying
+     * on the browser to hide rows it should not receive.
+     */
+    List<Long> getAccessibleTunnelIds(@Param("userId") Long userId);
     
     /**
      * 管理员查询所有隧道（流量和转发设置为99999）

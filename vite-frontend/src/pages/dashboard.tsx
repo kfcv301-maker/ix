@@ -77,6 +77,26 @@ interface RealtimeTrafficSample extends RealtimeTrafficSummary {
   timestamp: number;
 }
 
+interface RealtimeTunnelTrafficSource {
+  uploadSpeed: number;
+  downloadSpeed: number;
+  reportedAt: number;
+}
+
+interface RealtimeTunnelTrafficBucket {
+  tunnelName: string;
+  sources: Map<string, RealtimeTunnelTrafficSource>;
+}
+
+interface RealtimeTunnelTraffic {
+  tunnelId: number;
+  tunnelName: string;
+  uploadSpeed: number;
+  downloadSpeed: number;
+  reportingSources: number;
+  updatedAt?: number;
+}
+
 export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [userInfo, setUserInfo] = useState<UserInfo>({} as UserInfo);
@@ -90,9 +110,12 @@ export default function DashboardPage() {
     reportingNodes: 0
   });
   const [realtimeTrafficHistory, setRealtimeTrafficHistory] = useState<RealtimeTrafficSample[]>([]);
+  const [realtimeTunnelTraffic, setRealtimeTunnelTraffic] = useState<RealtimeTunnelTraffic[]>([]);
+  const [showTunnelTraffic, setShowTunnelTraffic] = useState(false);
   const realtimeSocketRef = useRef<WebSocket | null>(null);
   const realtimeReconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const realtimeTrafficByNodeRef = useRef<Map<number, RealtimeNodeTraffic>>(new Map());
+  const realtimeTunnelTrafficBySourceRef = useRef<Map<number, RealtimeTunnelTrafficBucket>>(new Map());
   
   const [addressModalOpen, setAddressModalOpen] = useState(false);
   const [addressModalTitle, setAddressModalTitle] = useState('');
@@ -235,6 +258,53 @@ export default function DashboardPage() {
         return next.filter(sample => now - sample.timestamp <= 120_000).slice(-60);
       });
     };
+    const publishTunnelTraffic = () => {
+      const now = Date.now();
+      const rows: RealtimeTunnelTraffic[] = [];
+
+      realtimeTunnelTrafficBySourceRef.current.forEach((bucket, tunnelId) => {
+        let uploadSpeed = 0;
+        let downloadSpeed = 0;
+        let reportingSources = 0;
+        let updatedAt: number | undefined;
+
+        bucket.sources.forEach((source, sourceId) => {
+          const age = now - source.reportedAt;
+          // A stale source no longer contributes to the current speed. Retain
+          // it briefly so a just-idle tunnel does not disappear immediately.
+          if (age > 120_000) {
+            bucket.sources.delete(sourceId);
+            return;
+          }
+          updatedAt = Math.max(updatedAt || 0, source.reportedAt);
+          if (age <= 15_000) {
+            uploadSpeed += source.uploadSpeed;
+            downloadSpeed += source.downloadSpeed;
+            reportingSources++;
+          }
+        });
+
+        if (bucket.sources.size === 0) {
+          realtimeTunnelTrafficBySourceRef.current.delete(tunnelId);
+          return;
+        }
+
+        rows.push({
+          tunnelId,
+          tunnelName: bucket.tunnelName,
+          uploadSpeed,
+          downloadSpeed,
+          reportingSources,
+          updatedAt
+        });
+      });
+
+      rows.sort((left, right) =>
+        (right.uploadSpeed + right.downloadSpeed) - (left.uploadSpeed + left.downloadSpeed)
+        || left.tunnelName.localeCompare(right.tunnelName, 'zh-CN')
+      );
+      setRealtimeTunnelTraffic(rows);
+    };
     const scheduleReconnect = () => {
       if (disposed || realtimeReconnectTimerRef.current) return;
       realtimeReconnectTimerRef.current = setTimeout(() => {
@@ -256,6 +326,44 @@ export default function DashboardPage() {
       socket.onmessage = (event) => {
         try {
           const message = JSON.parse(event.data);
+          if (message.type === 'tunnel_traffic') {
+            const tunnelSample = typeof message.data === 'string' ? JSON.parse(message.data) : message.data;
+            const tunnelId = Number(tunnelSample?.tunnelId);
+            const sourceId = String(tunnelSample?.sourceId || '');
+            const uploadBytes = Number(tunnelSample?.uploadBytes);
+            const downloadBytes = Number(tunnelSample?.downloadBytes);
+            if (!Number.isFinite(tunnelId) || tunnelId <= 0 || !sourceId
+                || !Number.isFinite(uploadBytes) || !Number.isFinite(downloadBytes)
+                || uploadBytes < 0 || downloadBytes < 0) {
+              return;
+            }
+
+            const now = Date.now();
+            const bucket = realtimeTunnelTrafficBySourceRef.current.get(tunnelId) || {
+              tunnelName: String(tunnelSample?.tunnelName || `隧道 #${tunnelId}`),
+              sources: new Map<string, RealtimeTunnelTrafficSource>()
+            };
+            const previous = bucket.sources.get(sourceId);
+            let uploadSpeed = 0;
+            let downloadSpeed = 0;
+            if (previous) {
+              const elapsed = (now - previous.reportedAt) / 1_000;
+              // The agent reports increments rather than lifetime counters.
+              // Ignore an implausibly old or out-of-order interval and use it
+              // only as the new baseline, just as node monitoring does.
+              if (elapsed > 0 && elapsed <= 30) {
+                uploadSpeed = uploadBytes / elapsed;
+                downloadSpeed = downloadBytes / elapsed;
+              }
+            }
+
+            bucket.tunnelName = String(tunnelSample?.tunnelName || bucket.tunnelName);
+            bucket.sources.set(sourceId, { uploadSpeed, downloadSpeed, reportedAt: now });
+            realtimeTunnelTrafficBySourceRef.current.set(tunnelId, bucket);
+            publishTunnelTraffic();
+            return;
+          }
+
           if (message.type !== 'info') return;
           const systemInfo = typeof message.data === 'string' ? JSON.parse(message.data) : message.data;
           const uploadTraffic = Number(systemInfo?.bytes_transmitted);
@@ -301,7 +409,10 @@ export default function DashboardPage() {
     };
 
     connect();
-    const summaryTimer = setInterval(publishSummary, 5_000);
+    const summaryTimer = setInterval(() => {
+      publishSummary();
+      publishTunnelTraffic();
+    }, 5_000);
     const recoverOnForeground = () => {
       if (document.hidden || disposed) return;
       if (realtimeReconnectTimerRef.current) {
@@ -322,7 +433,9 @@ export default function DashboardPage() {
       }
       closeSocket();
       realtimeTrafficByNodeRef.current.clear();
+      realtimeTunnelTrafficBySourceRef.current.clear();
       setRealtimeTrafficHistory([]);
+      setRealtimeTunnelTraffic([]);
     };
   }, []);
 
@@ -840,11 +953,22 @@ export default function DashboardPage() {
                    </svg>
                    <h2 className="text-lg lg:text-xl font-semibold text-foreground">{isAdmin ? '全节点实时流量' : '我的节点实时流量'}</h2>
                  </div>
-                 <div className="text-left text-xs text-default-500 sm:text-right">
-                   <p className="font-medium text-default-700">
-                     {realtimeTraffic.reportingNodes > 0 ? `${realtimeTraffic.reportingNodes} 个节点正在上报` : '等待节点上报'}
-                   </p>
-                   <p className="mt-0.5">{realtimeTraffic.updatedAt ? `更新于 ${new Date(realtimeTraffic.updatedAt).toLocaleTimeString()}` : '尚未收到实时样本'}</p>
+                 <div className="flex items-center gap-2 self-start sm:self-auto">
+                   <Button
+                     size="sm"
+                     color="primary"
+                     variant="flat"
+                     className="min-h-9"
+                     onPress={() => setShowTunnelTraffic(previous => !previous)}
+                   >
+                     {showTunnelTraffic ? '收起隧道明细' : '隧道实时明细'}
+                   </Button>
+                   <div className="text-left text-xs text-default-500 sm:text-right">
+                     <p className="font-medium text-default-700">
+                       {realtimeTraffic.reportingNodes > 0 ? `${realtimeTraffic.reportingNodes} 个节点正在上报` : '等待节点上报'}
+                     </p>
+                     <p className="mt-0.5">{realtimeTraffic.updatedAt ? `更新于 ${new Date(realtimeTraffic.updatedAt).toLocaleTimeString()}` : '尚未收到实时样本'}</p>
+                   </div>
                  </div>
                </div>
              </CardHeader>
@@ -897,6 +1021,64 @@ export default function DashboardPage() {
                  <span><i className="mr-1 inline-block h-2 w-2 rounded-full bg-success" />下行</span>
                  <span>首次上报仅建立基线，不会将累计流量误当作实时速率。</span>
                </div>
+               {showTunnelTraffic && (
+                 <div className="mt-4 border-t border-divider pt-4">
+                   <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+                     <div>
+                       <h3 className="text-base font-semibold text-foreground">按隧道实时流量</h3>
+                       <p className="mt-0.5 text-xs text-default-500">
+                         {isAdmin
+                           ? '仅汇总转发服务上报的实际流量，不包含节点上的其他系统流量。'
+                           : '仅显示你自己在已获授权隧道上的转发流量。'}
+                       </p>
+                     </div>
+                     <span className="text-xs text-default-500">{realtimeTunnelTraffic.length} 个最近有上报的隧道</span>
+                   </div>
+                   {realtimeTunnelTraffic.length === 0 ? (
+                     <div className="rounded-xl border border-dashed border-divider px-4 py-8 text-center text-sm text-default-500">
+                       等待隧道转发服务上报流量…
+                     </div>
+                   ) : (
+                     <div className="space-y-2">
+                       {realtimeTunnelTraffic.map((tunnel) => {
+                         const totalSpeed = tunnel.uploadSpeed + tunnel.downloadSpeed;
+                         const active = tunnel.reportingSources > 0;
+                         return (
+                           <div key={tunnel.tunnelId} className="rounded-xl border border-divider bg-default-50/60 p-3 dark:bg-default-100/10">
+                             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                               <div className="min-w-0">
+                                 <div className="flex items-center gap-2">
+                                   <h4 className="truncate font-medium text-foreground">{tunnel.tunnelName}</h4>
+                                   <span className={`shrink-0 rounded-full px-2 py-0.5 text-tiny font-medium ${active ? 'bg-success-100 text-success-700 dark:bg-success-100/20 dark:text-success-300' : 'bg-default-100 text-default-500 dark:bg-default-100/20'}`}>
+                                     {active ? `${tunnel.reportingSources} 个服务传输中` : '当前空闲'}
+                                   </span>
+                                 </div>
+                                 <p className="mt-1 text-tiny text-default-500">
+                                   {tunnel.updatedAt ? `最近上报于 ${new Date(tunnel.updatedAt).toLocaleTimeString()}` : '尚未收到样本'}
+                                 </p>
+                               </div>
+                               <div className="grid grid-cols-3 gap-2 text-right sm:min-w-[290px]">
+                                 <div>
+                                   <p className="text-tiny text-default-500">总吞吐</p>
+                                   <p className="mt-0.5 font-mono text-sm font-semibold text-foreground">{formatFlow(totalSpeed)}/s</p>
+                                 </div>
+                                 <div>
+                                   <p className="text-tiny text-primary-700 dark:text-primary-300">↑ 发送</p>
+                                   <p className="mt-0.5 font-mono text-sm font-semibold text-primary-700 dark:text-primary-300">{formatFlow(tunnel.uploadSpeed)}/s</p>
+                                 </div>
+                                 <div>
+                                   <p className="text-tiny text-success-700 dark:text-success-300">↓ 接收</p>
+                                   <p className="mt-0.5 font-mono text-sm font-semibold text-success-700 dark:text-success-300">{formatFlow(tunnel.downloadSpeed)}/s</p>
+                                 </div>
+                               </div>
+                             </div>
+                           </div>
+                         );
+                       })}
+                     </div>
+                   )}
+                 </div>
+               )}
              </CardBody>
            </Card>
 
