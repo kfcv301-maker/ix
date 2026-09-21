@@ -83,12 +83,6 @@ public class WebSocketInterceptor extends HttpSessionHandshakeInterceptor {
                         ? Collections.emptySet()
                         : Collections.unmodifiableSet(new HashSet<>(nodeIds));
                 attributes.put("allowedNodeIds", allowedNodeIds);
-
-                List<Long> tunnelIds = userMapper.getAccessibleTunnelIds(userId);
-                Set<Long> allowedTunnelIds = tunnelIds == null
-                        ? Collections.emptySet()
-                        : Collections.unmodifiableSet(new HashSet<>(tunnelIds));
-                attributes.put("allowedTunnelIds", allowedTunnelIds);
             }
         }
         attributes.put("type", type);

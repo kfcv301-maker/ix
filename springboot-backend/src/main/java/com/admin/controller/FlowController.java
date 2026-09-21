@@ -7,9 +7,7 @@ import com.admin.common.lang.R;
 import com.admin.common.task.CheckGostConfigAsync;
 import com.admin.common.utils.AESCrypto;
 import com.admin.common.utils.GostUtil;
-import com.admin.common.utils.WebSocketServer;
 import com.admin.entity.*;
-import com.admin.mapper.TunnelEntryNodeMapper;
 import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.JSONObject;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
@@ -67,9 +65,6 @@ public class FlowController extends BaseController {
 
     @Resource
     CheckGostConfigAsync checkGostConfigAsync;
-
-    @Resource
-    TunnelEntryNodeMapper tunnelEntryNodeMapper;
 
     /**
      * 加密消息包装器
@@ -156,8 +151,7 @@ public class FlowController extends BaseController {
                                  HttpServletRequest request) {
         String secret = getNodeToken(request, legacySecret);
         // 1. 验证节点权限
-        Node reportingNode = nodeService.getOne(new QueryWrapper<Node>().eq("secret", secret));
-        if (reportingNode == null) {
+        if (!isValidNode(secret)) {
             return SUCCESS_RESPONSE;
         }
 
@@ -166,14 +160,14 @@ public class FlowController extends BaseController {
 
         // 3. 解析为FlowDto列表
         FlowDto flowDataList = JSONObject.parseObject(decryptedData, FlowDto.class);
-        if (flowDataList == null || Objects.equals(flowDataList.getN(), "web_api")) {
+        if (Objects.equals(flowDataList.getN(), "web_api")) {
             return SUCCESS_RESPONSE;
         }
 
         // 记录日志
         log.info("节点上报流量数据{}", flowDataList);
         // 4. 处理流量数据
-        return processFlowData(flowDataList, reportingNode.getId());
+        return processFlowData(flowDataList);
     }
 
     /**
@@ -230,48 +224,24 @@ public class FlowController extends BaseController {
     /**
      * 处理流量数据的核心逻辑
      */
-    private String processFlowData(FlowDto flowDataList, Long reportingNodeId) {
-        if (flowDataList.getN() == null || flowDataList.getU() == null || flowDataList.getD() == null) {
-            return SUCCESS_RESPONSE;
-        }
+    private String processFlowData(FlowDto flowDataList) {
         String[] serviceIds = parseServiceName(flowDataList.getN());
-        if (serviceIds.length < 3) {
-            log.warn("忽略格式不正确的流量服务名: {}", flowDataList.getN());
-            return SUCCESS_RESPONSE;
-        }
         String forwardId = serviceIds[0];
         String userId = serviceIds[1];
         String userTunnelId = serviceIds[2];
 
         Forward forward = forwardService.getById(forwardId);
-        if (forward == null || forward.getTunnelId() == null || forward.getUserId() == null) {
-            return SUCCESS_RESPONSE;
-        }
-        Tunnel tunnel = tunnelService.getById(forward.getTunnelId());
-        if (tunnel == null) {
-            return SUCCESS_RESPONSE;
-        }
-
-        // Keep the live dashboard in physical transfer bytes, before billing
-        // multipliers or one-/two-way accounting are applied below.
-        long uploadBytes = Math.max(0L, flowDataList.getU());
-        long downloadBytes = Math.max(0L, flowDataList.getD());
 
         // 获取流量计费类型
-        int flowType = tunnel.getFlow();
+        int flowType = getFlowType(forward);
 
         //  处理流量倍率及单双向计算
-        FlowDto flowStats = filterFlowData(flowDataList, tunnel, flowType);
+        FlowDto flowStats = filterFlowData(flowDataList, forward, flowType);
 
         // 先更新所有流量统计 - 确保流量数据的一致性
         updateForwardFlow(forwardId, flowStats);
         updateUserFlow(userId, flowStats);
         updateUserTunnelFlow(userTunnelId, flowStats);
-
-        // A tunnel-forward service also exists on the remote egress node. Only
-        // the ingress service is published here, so a single logical stream is
-        // not counted twice in the real-time tunnel dashboard.
-        publishTunnelTraffic(tunnel, forward, reportingNodeId, flowDataList.getN(), uploadBytes, downloadBytes);
 
         // 7. 检查和服务暂停操作
         if (!Objects.equals(userTunnelId, DEFAULT_USER_TUNNEL_ID)) { // 非管理员的转发需要检测流量限制
@@ -360,50 +330,31 @@ public class FlowController extends BaseController {
         }
     }
 
-    private FlowDto filterFlowData(FlowDto flowDto, Tunnel tunnel, int flowType) {
-        BigDecimal trafficRatio = tunnel.getTrafficRatio() == null
-                ? BigDecimal.ONE
-                : tunnel.getTrafficRatio();
+    private FlowDto filterFlowData(FlowDto flowDto, Forward forward, int flowType) {
+        if (forward != null) {
+            Tunnel tunnel = tunnelService.getById(forward.getTunnelId());
+            if (tunnel != null) {
+                BigDecimal trafficRatio = tunnel.getTrafficRatio();
 
-        BigDecimal originalD = BigDecimal.valueOf(flowDto.getD());
-        BigDecimal originalU = BigDecimal.valueOf(flowDto.getU());
+                BigDecimal originalD = BigDecimal.valueOf(flowDto.getD());
+                BigDecimal originalU = BigDecimal.valueOf(flowDto.getU());
 
-        BigDecimal newD = originalD.multiply(trafficRatio);
-        BigDecimal newU = originalU.multiply(trafficRatio);
+                BigDecimal newD = originalD.multiply(trafficRatio);
+                BigDecimal newU = originalU.multiply(trafficRatio);
 
-        flowDto.setD(newD.longValue() * flowType);
-        flowDto.setU(newU.longValue() * flowType);
+                flowDto.setD(newD.longValue() * flowType);
+                flowDto.setU(newU.longValue() * flowType);
+            }
+        }
         return flowDto;
     }
 
-    private void publishTunnelTraffic(Tunnel tunnel, Forward forward, Long reportingNodeId,
-                                      String serviceName, long uploadBytes, long downloadBytes) {
-        if (uploadBytes == 0 && downloadBytes == 0
-                || reportingNodeId == null
-                || !isIngressNode(tunnel, reportingNodeId)) {
-            return;
-        }
-
-        String protocolSuffix = serviceName.substring(serviceName.lastIndexOf('_') + 1);
-        String sourceId = reportingNodeId + ":" + forward.getId() + ":" + protocolSuffix;
-        WebSocketServer.broadcastTunnelTraffic(
-                tunnel.getId(), forward.getUserId().longValue(), tunnel.getName(), sourceId,
-                uploadBytes, downloadBytes);
-    }
-
-    private boolean isIngressNode(Tunnel tunnel, Long nodeId) {
-        if (Objects.equals(tunnel.getInNodeId(), nodeId)) {
-            return true;
-        }
-        // The usual remote egress report is deliberately skipped without a
-        // database lookup. Only secondary ingress nodes need the relation-table
-        // check used for multi-ingress tunnels.
-        if (Objects.equals(tunnel.getOutNodeId(), nodeId)) {
-            return false;
-        }
-        return tunnelEntryNodeMapper.selectCount(new QueryWrapper<TunnelEntryNode>()
-                .eq("tunnel_id", tunnel.getId())
-                .eq("node_id", nodeId)) > 0;
+    private int getFlowType(Forward forward) {
+        int defaultFlowType = 2;
+        if (forward == null) return defaultFlowType;
+        Tunnel tunnel = tunnelService.getById(forward.getTunnelId());
+        if (tunnel == null) return defaultFlowType;
+        return tunnel.getFlow();
     }
 
     private void updateForwardFlow(String forwardId, FlowDto flowStats) {
@@ -456,6 +407,11 @@ public class FlowController extends BaseController {
 
     private Object getForwardLock(String forwardId) {
         return FORWARD_LOCKS.computeIfAbsent(forwardId, k -> new Object());
+    }
+
+    private boolean isValidNode(String secret) {
+        int nodeCount = nodeService.count(new QueryWrapper<Node>().eq("secret", secret));
+        return nodeCount > 0;
     }
 
     private String getNodeToken(HttpServletRequest request, String legacySecret) {

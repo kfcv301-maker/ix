@@ -73,14 +73,6 @@
         WHERE permitted.node_id IS NOT NULL
     </select>
 
-    <!-- 供实时隧道流量 WebSocket 使用。普通用户只能接收自己已获授权隧道的数据。 -->
-    <select id="getAccessibleTunnelIds" resultType="java.lang.Long">
-        SELECT DISTINCT ut.tunnel_id
-        FROM user_tunnel ut
-        WHERE ut.user_id = #{userId}
-          AND ut.tunnel_id IS NOT NULL
-    </select>
-
     <!-- 管理员查询所有隧道（流量和转发设置为99999） -->
     <select id="getAllTunnelsForAdmin" resultType="com.admin.common.dto.UserPackageDto$UserTunnelDetailDto">
         SELECT 
