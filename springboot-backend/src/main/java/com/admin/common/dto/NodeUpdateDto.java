@@ -38,6 +38,9 @@ public class NodeUpdateDto {
 
     /** Null keeps a legacy client's existing setting unchanged. */
     private String tcpTuningProfile;
+    private Boolean tcpTuningAutoEnabled;
+    private String tcpTuningProfileMin;
+    private String tcpTuningProfileMax;
     private Boolean ddnsEnabled;
     /** Empty keeps an existing encrypted token when DDNS remains enabled. */
     private String cfApiToken;

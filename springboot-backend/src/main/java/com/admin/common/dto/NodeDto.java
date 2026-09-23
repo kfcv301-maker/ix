@@ -32,6 +32,13 @@ public class NodeDto {
     /** tiny, small, balanced or standard; balanced is used when omitted. */
     private String tcpTuningProfile;
 
+    /** Enables node-local adaptive TCP limits after installation. */
+    private Boolean tcpTuningAutoEnabled;
+
+    private String tcpTuningProfileMin;
+
+    private String tcpTuningProfileMax;
+
     /** DDNS settings are saved with the node, not asked again when copying its command. */
     private Boolean ddnsEnabled;
 

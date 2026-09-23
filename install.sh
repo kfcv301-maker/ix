@@ -2,11 +2,13 @@
 # Lunaris Relay 节点 Agent 安装脚本。
 set -Eeuo pipefail
 
-REPO_RAW_BASE="${REPO_RAW_BASE:-https://raw.githubusercontent.com/kfcv301-maker/ix/main}"
+AGENT_RELEASE_BASE="${AGENT_RELEASE_BASE:-https://github.com/kfcv301-maker/ix/releases/latest/download}"
+LEGACY_AGENT_RAW_BASE="${LEGACY_AGENT_RAW_BASE:-https://raw.githubusercontent.com/kfcv301-maker/ix/main}"
 INSTALL_DIR="${INSTALL_DIR:-/etc/flux-panel-agent}"
 SERVICE_NAME="flux-panel-agent"
 DDNS_SERVICE_NAME="flux-panel-ddns"
 DDNS_TIMER_NAME="flux-panel-ddns.timer"
+TCP_GUARD_SERVICE_NAME="flux-panel-tcp-guard"
 SYSCTL_FILE="/etc/sysctl.d/99-flux-panel-network.conf"
 SYSCTL_BACKUP="/etc/sysctl.d/99-flux-panel-network.conf.before-flux-panel"
 SERVER_ADDR=""
@@ -16,6 +18,9 @@ CF_API_TOKEN=""
 CF_RECORD_NAME=""
 TUNE_TCP=1
 TCP_PROFILE_OVERRIDE=""
+TCP_PROFILE_MIN=""
+TCP_PROFILE_MAX=""
+TCP_AUTO_TUNE=0
 HOST_MEMORY_MB=0
 HOST_CPU_CORES=1
 SELECTED_CONGESTION_CONTROL=""
@@ -30,6 +35,9 @@ TCP_WMEM="4096 16384 12582912"
 SOMAXCONN=8192
 TCP_MAX_SYN_BACKLOG=4096
 NETDEV_MAX_BACKLOG=4096
+HOST_RECOMMENDED_PROFILE="balanced"
+EFFECTIVE_TCP_PROFILE_MIN=""
+EFFECTIVE_TCP_PROFILE_MAX=""
 INIT_SYSTEM=""
 
 info() { printf '\033[1;34m[INFO]\033[0m %s\n' "$*"; }
@@ -44,12 +52,14 @@ Lunaris Relay 节点 Agent 安装脚本
   install.sh --panel https://panel.example.com --token 节点独立密钥
   install.sh --panel https://panel.example.com --token 节点独立密钥 --skip-tcp-tuning
   install.sh --panel https://panel.example.com --token 节点独立密钥 --tcp-profile balanced
+  install.sh --panel https://panel.example.com --token 节点独立密钥 --tcp-auto-tune --tcp-profile-min small --tcp-profile-max standard
   install.sh --panel https://panel.example.com --token 节点独立密钥 --cf-api-token Cloudflare令牌 --cf-record node.example.com
   install.sh --panel https://panel.example.com --token 节点独立密钥 --disable-ddns
   install.sh --uninstall
 
 可选环境变量：
-  REPO_RAW_BASE=https://raw.githubusercontent.com/kfcv301-maker/ix/main
+  AGENT_RELEASE_BASE=https://github.com/kfcv301-maker/ix/releases/latest/download
+  LEGACY_AGENT_RAW_BASE=https://raw.githubusercontent.com/kfcv301-maker/ix/main
   INSTALL_DIR=/etc/flux-panel-agent
 EOF
 }
@@ -84,74 +94,86 @@ detect_host_profile() {
 }
 
 select_tuning_profile() {
+  # 16 MB / 16384 / 8192 是硬上限。内存小只向下收缩，绝不放大。
+  if (( HOST_MEMORY_MB > 0 && HOST_MEMORY_MB < 512 )); then
+    HOST_RECOMMENDED_PROFILE="tiny"
+  elif (( HOST_MEMORY_MB > 0 && HOST_MEMORY_MB < 1024 )); then
+    HOST_RECOMMENDED_PROFILE="small"
+  elif (( HOST_MEMORY_MB == 0 )) || (( HOST_MEMORY_MB < 2048 )) || (( HOST_CPU_CORES < 2 )); then
+    HOST_RECOMMENDED_PROFILE="balanced"
+  else
+    HOST_RECOMMENDED_PROFILE="standard"
+  fi
+
+  if (( TCP_AUTO_TUNE == 1 )); then
+    is_valid_tuning_profile "$TCP_PROFILE_MIN" || fail "TCP 动态调优下限无效：$TCP_PROFILE_MIN"
+    is_valid_tuning_profile "$TCP_PROFILE_MAX" || fail "TCP 动态调优上限无效：$TCP_PROFILE_MAX"
+    if (( $(tuning_profile_rank "$TCP_PROFILE_MIN") > $(tuning_profile_rank "$TCP_PROFILE_MAX") )); then
+      fail "TCP 动态调优下限不能高于上限"
+    fi
+    EFFECTIVE_TCP_PROFILE_MIN="$TCP_PROFILE_MIN"
+    EFFECTIVE_TCP_PROFILE_MAX="$TCP_PROFILE_MAX"
+    # 用户可设置区间，但不能让低内存机器越过本机安全上限。
+    if (( $(tuning_profile_rank "$EFFECTIVE_TCP_PROFILE_MAX") > $(tuning_profile_rank "$HOST_RECOMMENDED_PROFILE") )); then
+      EFFECTIVE_TCP_PROFILE_MAX="$HOST_RECOMMENDED_PROFILE"
+    fi
+    if (( $(tuning_profile_rank "$EFFECTIVE_TCP_PROFILE_MIN") > $(tuning_profile_rank "$EFFECTIVE_TCP_PROFILE_MAX") )); then
+      EFFECTIVE_TCP_PROFILE_MIN="$EFFECTIVE_TCP_PROFILE_MAX"
+    fi
+    set_tuning_profile "$EFFECTIVE_TCP_PROFILE_MAX"
+    info "启用动态 TCP 调优：${EFFECTIVE_TCP_PROFILE_MIN}–${EFFECTIVE_TCP_PROFILE_MAX}（当前从 $TUNING_PROFILE 开始）"
+    return
+  fi
+
   if [[ -n "$TCP_PROFILE_OVERRIDE" ]]; then
-    case "$TCP_PROFILE_OVERRIDE" in
-      tiny)
-        TUNING_PROFILE="tiny"; R_MEM_MAX=4194304; W_MEM_MAX=4194304
-        TCP_RMEM="4096 65536 4194304"; TCP_WMEM="4096 16384 4194304"
-        SOMAXCONN=2048; TCP_MAX_SYN_BACKLOG=1024; NETDEV_MAX_BACKLOG=2048
-        ;;
-      small)
-        TUNING_PROFILE="small"; R_MEM_MAX=8388608; W_MEM_MAX=8388608
-        TCP_RMEM="4096 98304 8388608"; TCP_WMEM="4096 16384 8388608"
-        SOMAXCONN=4096; TCP_MAX_SYN_BACKLOG=2048; NETDEV_MAX_BACKLOG=4096
-        ;;
-      balanced)
-        TUNING_PROFILE="balanced"; R_MEM_MAX=12582912; W_MEM_MAX=12582912
-        TCP_RMEM="4096 131072 12582912"; TCP_WMEM="4096 16384 12582912"
-        SOMAXCONN=8192; TCP_MAX_SYN_BACKLOG=4096; NETDEV_MAX_BACKLOG=4096
-        ;;
-      standard)
-        TUNING_PROFILE="standard"; R_MEM_MAX=16777216; W_MEM_MAX=16777216
-        TCP_RMEM="4096 131072 16777216"; TCP_WMEM="4096 16384 16777216"
-        SOMAXCONN=16384; TCP_MAX_SYN_BACKLOG=8192; NETDEV_MAX_BACKLOG=8192
-        ;;
-      *) fail "TCP 调优档位无效：$TCP_PROFILE_OVERRIDE" ;;
-    esac
+    is_valid_tuning_profile "$TCP_PROFILE_OVERRIDE" || fail "TCP 调优档位无效：$TCP_PROFILE_OVERRIDE"
+    set_tuning_profile "$TCP_PROFILE_OVERRIDE"
     info "使用面板选择的 TCP 档位：$TUNING_PROFILE（收发缓存上限 $((R_MEM_MAX / 1024 / 1024)) MB，接入队列 $SOMAXCONN）"
     return
   fi
 
-  # 你指定的 16 MB / 16384 / 8192 是硬上限。内存小只向下收缩，绝不放大。
-  if (( HOST_MEMORY_MB > 0 && HOST_MEMORY_MB < 512 )); then
-    TUNING_PROFILE="tiny"
-    R_MEM_MAX=4194304
-    W_MEM_MAX=4194304
-    TCP_RMEM="4096 65536 4194304"
-    TCP_WMEM="4096 16384 4194304"
-    SOMAXCONN=2048
-    TCP_MAX_SYN_BACKLOG=1024
-    NETDEV_MAX_BACKLOG=2048
-  elif (( HOST_MEMORY_MB > 0 && HOST_MEMORY_MB < 1024 )); then
-    TUNING_PROFILE="small"
-    R_MEM_MAX=8388608
-    W_MEM_MAX=8388608
-    TCP_RMEM="4096 98304 8388608"
-    TCP_WMEM="4096 16384 8388608"
-    SOMAXCONN=4096
-    TCP_MAX_SYN_BACKLOG=2048
-    NETDEV_MAX_BACKLOG=4096
-  elif (( HOST_MEMORY_MB == 0 )) || (( HOST_MEMORY_MB < 2048 )) || (( HOST_CPU_CORES < 2 )); then
-    TUNING_PROFILE="balanced"
-    R_MEM_MAX=12582912
-    W_MEM_MAX=12582912
-    TCP_RMEM="4096 131072 12582912"
-    TCP_WMEM="4096 16384 12582912"
-    SOMAXCONN=8192
-    TCP_MAX_SYN_BACKLOG=4096
-    NETDEV_MAX_BACKLOG=4096
-  else
-    # 内存不少于 2 GB 且至少双核，才使用你给出的完整上限。
-    TUNING_PROFILE="standard"
-    R_MEM_MAX=16777216
-    W_MEM_MAX=16777216
-    TCP_RMEM="4096 131072 16777216"
-    TCP_WMEM="4096 16384 16777216"
-    SOMAXCONN=16384
-    TCP_MAX_SYN_BACKLOG=8192
-    NETDEV_MAX_BACKLOG=8192
-  fi
+  set_tuning_profile "$HOST_RECOMMENDED_PROFILE"
   info "自动选择 TCP 档位：$TUNING_PROFILE（收发缓存上限 $((R_MEM_MAX / 1024 / 1024)) MB，接入队列 $SOMAXCONN）"
+}
+
+tuning_profile_rank() {
+  case "$1" in
+    tiny) printf '1' ;;
+    small) printf '2' ;;
+    balanced) printf '3' ;;
+    standard) printf '4' ;;
+    *) return 1 ;;
+  esac
+}
+
+is_valid_tuning_profile() {
+  tuning_profile_rank "$1" >/dev/null 2>&1
+}
+
+set_tuning_profile() {
+  case "$1" in
+    tiny)
+      TUNING_PROFILE="tiny"; R_MEM_MAX=4194304; W_MEM_MAX=4194304
+      TCP_RMEM="4096 65536 4194304"; TCP_WMEM="4096 16384 4194304"
+      SOMAXCONN=2048; TCP_MAX_SYN_BACKLOG=1024; NETDEV_MAX_BACKLOG=2048
+      ;;
+    small)
+      TUNING_PROFILE="small"; R_MEM_MAX=8388608; W_MEM_MAX=8388608
+      TCP_RMEM="4096 98304 8388608"; TCP_WMEM="4096 16384 8388608"
+      SOMAXCONN=4096; TCP_MAX_SYN_BACKLOG=2048; NETDEV_MAX_BACKLOG=4096
+      ;;
+    balanced)
+      TUNING_PROFILE="balanced"; R_MEM_MAX=12582912; W_MEM_MAX=12582912
+      TCP_RMEM="4096 131072 12582912"; TCP_WMEM="4096 16384 12582912"
+      SOMAXCONN=8192; TCP_MAX_SYN_BACKLOG=4096; NETDEV_MAX_BACKLOG=4096
+      ;;
+    standard)
+      TUNING_PROFILE="standard"; R_MEM_MAX=16777216; W_MEM_MAX=16777216
+      TCP_RMEM="4096 131072 16777216"; TCP_WMEM="4096 16384 16777216"
+      SOMAXCONN=16384; TCP_MAX_SYN_BACKLOG=8192; NETDEV_MAX_BACKLOG=8192
+      ;;
+    *) return 1 ;;
+  esac
 }
 
 select_tcp_capabilities() {
@@ -266,11 +288,279 @@ EOF
   fi
 }
 
+write_tcp_tuning_guard() {
+  cat > "$INSTALL_DIR/tcp-tuning-guard.sh" <<'EOF'
+#!/usr/bin/env bash
+# Local memory-pressure guard for Lunaris Relay TCP settings. It only changes
+# future socket growth limits; it never restarts GOST or closes connections.
+set -Eeuo pipefail
+
+BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
+CONFIG_FILE="$BASE_DIR/tcp-tuning.env"
+RUNTIME_FILE="$BASE_DIR/tcp-tuning-runtime.env"
+STATUS_FILE="$BASE_DIR/tcp-tuning-status.json"
+
+[[ -r "$CONFIG_FILE" ]] || exit 0
+# The installer creates these root-owned 0600 files. Do not make them writable
+# by non-root users, because this service runs with root privileges.
+source "$CONFIG_FILE"
+[[ -r "$RUNTIME_FILE" ]] && source "$RUNTIME_FILE"
+
+CURRENT_PROFILE="${CURRENT_PROFILE:-$MAX_PROFILE}"
+LOW_SAMPLES="${LOW_SAMPLES:-0}"
+HEALTHY_SAMPLES="${HEALTHY_SAMPLES:-0}"
+LAST_REASON="${LAST_REASON:-启动后等待首次采样}"
+
+rank() {
+  case "$1" in
+    tiny) printf '1' ;;
+    small) printf '2' ;;
+    balanced) printf '3' ;;
+    standard) printf '4' ;;
+    *) return 1 ;;
+  esac
+}
+
+profile_from_rank() {
+  case "$1" in
+    1) printf 'tiny' ;;
+    2) printf 'small' ;;
+    3) printf 'balanced' ;;
+    4) printf 'standard' ;;
+    *) return 1 ;;
+  esac
+}
+
+profile_values() {
+  case "$1" in
+    tiny)
+      R_MEM_MAX=4194304; W_MEM_MAX=4194304; TCP_RMEM="4096 65536 4194304"; TCP_WMEM="4096 16384 4194304"; SOMAXCONN=2048; TCP_MAX_SYN_BACKLOG=1024; NETDEV_MAX_BACKLOG=2048 ;;
+    small)
+      R_MEM_MAX=8388608; W_MEM_MAX=8388608; TCP_RMEM="4096 98304 8388608"; TCP_WMEM="4096 16384 8388608"; SOMAXCONN=4096; TCP_MAX_SYN_BACKLOG=2048; NETDEV_MAX_BACKLOG=4096 ;;
+    balanced)
+      R_MEM_MAX=12582912; W_MEM_MAX=12582912; TCP_RMEM="4096 131072 12582912"; TCP_WMEM="4096 16384 12582912"; SOMAXCONN=8192; TCP_MAX_SYN_BACKLOG=4096; NETDEV_MAX_BACKLOG=4096 ;;
+    standard)
+      R_MEM_MAX=16777216; W_MEM_MAX=16777216; TCP_RMEM="4096 131072 16777216"; TCP_WMEM="4096 16384 16777216"; SOMAXCONN=16384; TCP_MAX_SYN_BACKLOG=8192; NETDEV_MAX_BACKLOG=8192 ;;
+    *) return 1 ;;
+  esac
+}
+
+write_runtime() {
+  local temporary
+  temporary="$(mktemp "${RUNTIME_FILE}.XXXXXX")"
+  cat > "$temporary" <<EOF_RUNTIME
+CURRENT_PROFILE='$CURRENT_PROFILE'
+LOW_SAMPLES=$LOW_SAMPLES
+HEALTHY_SAMPLES=$HEALTHY_SAMPLES
+LAST_REASON='$LAST_REASON'
+EOF_RUNTIME
+  chmod 600 "$temporary"
+  mv -f "$temporary" "$RUNTIME_FILE"
+
+  temporary="$(mktemp "${STATUS_FILE}.XXXXXX")"
+  printf '{"mode":"auto","minimum":"%s","maximum":"%s","current":"%s","reason":"%s"}\n' \
+    "$MIN_PROFILE" "$MAX_PROFILE" "$CURRENT_PROFILE" "$LAST_REASON" > "$temporary"
+  chmod 644 "$temporary"
+  mv -f "$temporary" "$STATUS_FILE"
+}
+
+replace_profile_settings() {
+  local profile="$1" temporary persisted
+  profile_values "$profile" || return 1
+  temporary="$(mktemp)"
+  : > "$temporary"
+  for pair in \
+    "net.core.rmem_max=$R_MEM_MAX" \
+    "net.core.wmem_max=$W_MEM_MAX" \
+    "net.ipv4.tcp_rmem=$TCP_RMEM" \
+    "net.ipv4.tcp_wmem=$TCP_WMEM" \
+    "net.core.somaxconn=$SOMAXCONN" \
+    "net.ipv4.tcp_max_syn_backlog=$TCP_MAX_SYN_BACKLOG" \
+    "net.core.netdev_max_backlog=$NETDEV_MAX_BACKLOG"; do
+    local key="${pair%%=*}" value="${pair#*=}"
+    if sysctl -n "$key" >/dev/null 2>&1; then
+      printf '%s = %s\n' "$key" "$value" >> "$temporary"
+    fi
+  done
+  if ! sysctl -p "$temporary" >/dev/null; then
+    rm -f "$temporary"
+    return 1
+  fi
+  rm -f "$temporary"
+
+  # The main file was created by this installer. Replace only the seven
+  # profile-dependent keys and preserve BBR/FQ and all other safe settings.
+  if [[ -r "$SYSCTL_FILE" ]]; then
+    persisted="$(mktemp "${SYSCTL_FILE}.XXXXXX")"
+    awk -v rmem="$R_MEM_MAX" -v wmem="$W_MEM_MAX" -v trmem="$TCP_RMEM" -v twmem="$TCP_WMEM" \
+      -v somaxconn="$SOMAXCONN" -v syn="$TCP_MAX_SYN_BACKLOG" -v netdev="$NETDEV_MAX_BACKLOG" '
+      $1 == "net.core.rmem_max" { print "net.core.rmem_max = " rmem; next }
+      $1 == "net.core.wmem_max" { print "net.core.wmem_max = " wmem; next }
+      $1 == "net.ipv4.tcp_rmem" { print "net.ipv4.tcp_rmem = " trmem; next }
+      $1 == "net.ipv4.tcp_wmem" { print "net.ipv4.tcp_wmem = " twmem; next }
+      $1 == "net.core.somaxconn" { print "net.core.somaxconn = " somaxconn; next }
+      $1 == "net.ipv4.tcp_max_syn_backlog" { print "net.ipv4.tcp_max_syn_backlog = " syn; next }
+      $1 == "net.core.netdev_max_backlog" { print "net.core.netdev_max_backlog = " netdev; next }
+      { print }
+    ' "$SYSCTL_FILE" > "$persisted"
+    chmod 644 "$persisted"
+    mv -f "$persisted" "$SYSCTL_FILE"
+  fi
+}
+
+sample_once() {
+  local total_kb available_kb total_mb available_mb critical_mb low_mb recovery_mb current_rank min_rank max_rank target_rank target
+  total_kb="$(awk '/^MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || true)"
+  available_kb="$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo 2>/dev/null || true)"
+  [[ "$total_kb" =~ ^[0-9]+$ && "$available_kb" =~ ^[0-9]+$ && "$total_kb" -gt 0 ]] || {
+    LAST_REASON="无法读取 MemAvailable，保持当前档位"
+    write_runtime
+    return 0
+  }
+
+  total_mb=$(( total_kb / 1024 ))
+  available_mb=$(( available_kb / 1024 ))
+  critical_mb=$(( total_mb * 12 / 100 )); (( critical_mb < 96 )) && critical_mb=96
+  low_mb=$(( total_mb * 20 / 100 )); (( low_mb < 160 )) && low_mb=160
+  recovery_mb=$(( total_mb * 40 / 100 ))
+  current_rank="$(rank "$CURRENT_PROFILE")"
+  min_rank="$(rank "$MIN_PROFILE")"
+  max_rank="$(rank "$MAX_PROFILE")"
+  target_rank="$current_rank"
+
+  if (( available_mb <= critical_mb )); then
+    LOW_SAMPLES=0
+    HEALTHY_SAMPLES=0
+    if (( current_rank > min_rank )); then
+      target_rank=$(( current_rank - 1 ))
+      LAST_REASON="可用内存 ${available_mb} MB，低于紧急阈值 ${critical_mb} MB"
+    else
+      LAST_REASON="可用内存 ${available_mb} MB，已处于用户允许的最低档"
+    fi
+  elif (( available_mb <= low_mb )); then
+    LOW_SAMPLES=$(( LOW_SAMPLES + 1 ))
+    HEALTHY_SAMPLES=0
+    LAST_REASON="可用内存 ${available_mb} MB，低于压力阈值 ${low_mb} MB（连续 ${LOW_SAMPLES}/3 次）"
+    if (( LOW_SAMPLES >= 3 && current_rank > min_rank )); then
+      target_rank=$(( current_rank - 1 ))
+      LOW_SAMPLES=0
+    fi
+  else
+    LOW_SAMPLES=0
+    if (( available_mb >= recovery_mb )); then
+      HEALTHY_SAMPLES=$(( HEALTHY_SAMPLES + 1 ))
+      LAST_REASON="可用内存 ${available_mb} MB，恢复观察 ${HEALTHY_SAMPLES}/10 次"
+      if (( HEALTHY_SAMPLES >= 10 && current_rank < max_rank )); then
+        target_rank=$(( current_rank + 1 ))
+        HEALTHY_SAMPLES=0
+      fi
+    else
+      HEALTHY_SAMPLES=0
+      LAST_REASON="可用内存 ${available_mb} MB，保持当前档位"
+    fi
+  fi
+
+  target="$(profile_from_rank "$target_rank")"
+  if [[ "$target" != "$CURRENT_PROFILE" ]]; then
+    if replace_profile_settings "$target"; then
+      CURRENT_PROFILE="$target"
+      LAST_REASON="${LAST_REASON}，已切换至 ${CURRENT_PROFILE}"
+    else
+      LAST_REASON="${LAST_REASON}，切换 ${target} 失败，保持 ${CURRENT_PROFILE}"
+    fi
+  fi
+  write_runtime
+}
+
+if [[ "${1:-}" == "--watch" ]]; then
+  while true; do
+    sample_once || true
+    sleep 60
+  done
+else
+  sample_once
+fi
+EOF
+  chmod 700 "$INSTALL_DIR/tcp-tuning-guard.sh"
+}
+
+configure_tcp_tuning_guard() {
+  if (( TCP_AUTO_TUNE == 0 )); then
+    if [[ "$INIT_SYSTEM" == "systemd" ]]; then
+      systemctl disable --now "${TCP_GUARD_SERVICE_NAME}.timer" 2>/dev/null || true
+      rm -f "/etc/systemd/system/${TCP_GUARD_SERVICE_NAME}.service" "/etc/systemd/system/${TCP_GUARD_SERVICE_NAME}.timer"
+      systemctl daemon-reload
+    else
+      rc-service "$TCP_GUARD_SERVICE_NAME" stop 2>/dev/null || true
+      rc-update del "$TCP_GUARD_SERVICE_NAME" default 2>/dev/null || true
+      rm -f "/etc/init.d/$TCP_GUARD_SERVICE_NAME"
+    fi
+    rm -f "$INSTALL_DIR/tcp-tuning-guard.sh" "$INSTALL_DIR/tcp-tuning.env" "$INSTALL_DIR/tcp-tuning-runtime.env" "$INSTALL_DIR/tcp-tuning-status.json"
+    return
+  fi
+
+  cat > "$INSTALL_DIR/tcp-tuning.env" <<EOF
+MIN_PROFILE='$EFFECTIVE_TCP_PROFILE_MIN'
+MAX_PROFILE='$EFFECTIVE_TCP_PROFILE_MAX'
+SYSCTL_FILE='$SYSCTL_FILE'
+EOF
+  chmod 600 "$INSTALL_DIR/tcp-tuning.env"
+  write_tcp_tuning_guard
+
+  if [[ "$INIT_SYSTEM" == "systemd" ]]; then
+    cat > "/etc/systemd/system/${TCP_GUARD_SERVICE_NAME}.service" <<EOF
+[Unit]
+Description=Lunaris Relay adaptive TCP memory guard
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=$INSTALL_DIR/tcp-tuning-guard.sh
+EOF
+    cat > "/etc/systemd/system/${TCP_GUARD_SERVICE_NAME}.timer" <<EOF
+[Unit]
+Description=Run Lunaris Relay adaptive TCP memory guard every minute
+
+[Timer]
+OnBootSec=90s
+OnUnitActiveSec=1min
+AccuracySec=10s
+Persistent=true
+Unit=${TCP_GUARD_SERVICE_NAME}.service
+
+[Install]
+WantedBy=timers.target
+EOF
+    systemctl daemon-reload
+    systemctl enable --now "${TCP_GUARD_SERVICE_NAME}.timer" >/dev/null
+    systemctl start "${TCP_GUARD_SERVICE_NAME}.service"
+  else
+    cat > "/etc/init.d/$TCP_GUARD_SERVICE_NAME" <<EOF
+#!/sbin/openrc-run
+description="Lunaris Relay adaptive TCP memory guard"
+command="$INSTALL_DIR/tcp-tuning-guard.sh"
+command_args="--watch"
+command_user="root"
+supervisor="supervise-daemon"
+respawn_delay=3
+respawn_max=0
+EOF
+    chmod 755 "/etc/init.d/$TCP_GUARD_SERVICE_NAME"
+    rc-update add "$TCP_GUARD_SERVICE_NAME" default >/dev/null
+    rc-service "$TCP_GUARD_SERVICE_NAME" restart >/dev/null 2>&1 || rc-service "$TCP_GUARD_SERVICE_NAME" start >/dev/null
+  fi
+  ok "动态 TCP 内存保护已启用（每分钟采样；不重启 Agent、不主动断开转发）"
+}
+
 download_agent() {
-  local arch url checksum_url temp_bin temp_checksum expected actual
+  local arch url checksum_url fallback_url fallback_checksum_url temp_bin temp_checksum expected actual
   arch="$(architecture)"
-  url="$REPO_RAW_BASE/artifacts/flux-panel-agent-linux-$arch"
+  # Release assets are immutable. The script path remains stable on main, but
+  # a node install must not silently fetch an old tracked binary from Git.
+  url="$AGENT_RELEASE_BASE/flux-panel-agent-linux-$arch"
   checksum_url="$url.sha256"
+  fallback_url="$LEGACY_AGENT_RAW_BASE/artifacts/flux-panel-agent-linux-$arch"
+  fallback_checksum_url="$fallback_url.sha256"
   temp_bin="$(mktemp)"
   temp_checksum="$(mktemp)"
   # RETURN trap 会在局部变量销毁后执行；在注册时展开临时路径，避免 set -u 触发未绑定变量。
@@ -278,7 +568,14 @@ download_agent() {
 
   command -v curl >/dev/null 2>&1 || fail "请先安装 curl。"
   info "下载 Linux/$arch 节点 Agent"
-  curl --fail --location --retry 3 --connect-timeout 15 "$url" -o "$temp_bin"
+  if ! curl --fail --location --retry 3 --connect-timeout 15 "$url" -o "$temp_bin"; then
+    # A just-pushed main commit may briefly precede its GitHub Release. Keep
+    # historical installs working during that window, still with a checksum.
+    info "最新 Release Agent 暂不可用，回退到仓库中的兼容 Agent。"
+    url="$fallback_url"
+    checksum_url="$fallback_checksum_url"
+    curl --fail --location --retry 3 --connect-timeout 15 "$url" -o "$temp_bin"
+  fi
   curl --fail --location --retry 3 --connect-timeout 15 "$checksum_url" -o "$temp_checksum"
 
   expected="$(awk '{print $1}' "$temp_checksum")"
@@ -627,11 +924,19 @@ install_agent() {
     [[ -n "$CF_API_TOKEN" && -n "$CF_RECORD_NAME" ]] || fail "启用 DDNS 时必须同时提供 --cf-api-token 和 --cf-record。"
     [[ "$CF_API_TOKEN" != *$'\n'* && "$CF_RECORD_NAME" != *$'\n'* ]] || fail "DDNS 参数不能包含换行符。"
   fi
+  if (( TCP_AUTO_TUNE == 1 )); then
+    (( TUNE_TCP == 1 )) || fail "动态 TCP 调优不能与 --skip-tcp-tuning 同时使用。"
+    [[ -z "$TCP_PROFILE_OVERRIDE" ]] || fail "动态 TCP 调优请使用 --tcp-profile-min/--tcp-profile-max，不要同时传 --tcp-profile。"
+    [[ -n "$TCP_PROFILE_MIN" && -n "$TCP_PROFILE_MAX" ]] || fail "动态 TCP 调优必须同时指定 --tcp-profile-min 和 --tcp-profile-max。"
+  elif [[ -n "$TCP_PROFILE_MIN$TCP_PROFILE_MAX" ]]; then
+    fail "指定 TCP 调优上下限时还需要 --tcp-auto-tune。"
+  fi
 
   apply_tcp_tuning
   mkdir -p "$INSTALL_DIR"
   download_agent
   write_config
+  configure_tcp_tuning_guard
   write_service
 
   sleep 1
@@ -660,7 +965,13 @@ uninstall_agent() {
   stop_agent_service
   if [[ "$INIT_SYSTEM" == "systemd" ]]; then
     systemctl disable --now "$DDNS_TIMER_NAME" 2>/dev/null || true
-    rm -f "/etc/systemd/system/${DDNS_SERVICE_NAME}.service" "/etc/systemd/system/${DDNS_TIMER_NAME}"
+    systemctl disable --now "${TCP_GUARD_SERVICE_NAME}.timer" 2>/dev/null || true
+    rm -f "/etc/systemd/system/${DDNS_SERVICE_NAME}.service" "/etc/systemd/system/${DDNS_TIMER_NAME}" \
+      "/etc/systemd/system/${TCP_GUARD_SERVICE_NAME}.service" "/etc/systemd/system/${TCP_GUARD_SERVICE_NAME}.timer"
+  else
+    rc-service "$TCP_GUARD_SERVICE_NAME" stop 2>/dev/null || true
+    rc-update del "$TCP_GUARD_SERVICE_NAME" default 2>/dev/null || true
+    rm -f "/etc/init.d/$TCP_GUARD_SERVICE_NAME"
   fi
   rm -rf "$INSTALL_DIR"
   if [[ -f "$SYSCTL_BACKUP" ]]; then
@@ -683,6 +994,9 @@ while [[ $# -gt 0 ]]; do
     --cf-record) CF_RECORD_NAME="${2:-}"; DDNS_MODE="enabled"; shift 2 ;;
     --disable-ddns) DDNS_MODE="disabled"; shift ;;
     --tcp-profile) TCP_PROFILE_OVERRIDE="${2:-}"; shift 2 ;;
+    --tcp-profile-min) TCP_PROFILE_MIN="${2:-}"; shift 2 ;;
+    --tcp-profile-max) TCP_PROFILE_MAX="${2:-}"; shift 2 ;;
+    --tcp-auto-tune) TCP_AUTO_TUNE=1; shift ;;
     --skip-tcp-tuning) TUNE_TCP=0; shift ;;
     --uninstall) uninstall_agent; exit 0 ;;
     --help|-h) usage; exit 0 ;;

@@ -52,6 +52,11 @@ type SystemInfo struct {
 	Load1            *float64 `json:"load_1,omitempty"`
 	TCPConnections   *uint64  `json:"tcp_connections,omitempty"`
 	UDPConnections   *uint64  `json:"udp_connections,omitempty"`
+	TCPTuningMode    *string  `json:"tcp_tuning_mode,omitempty"`
+	TCPTuningMinimum *string  `json:"tcp_tuning_minimum,omitempty"`
+	TCPTuningMaximum *string  `json:"tcp_tuning_maximum,omitempty"`
+	TCPTuningCurrent *string  `json:"tcp_tuning_current,omitempty"`
+	TCPTuningReason  *string  `json:"tcp_tuning_reason,omitempty"`
 }
 
 // NetworkStats 网络统计信息
@@ -74,22 +79,27 @@ type MemoryInfo struct {
 // CPU and traffic counters. It is cached for a short period so a busy node is
 // not forced to rescan sockets and process data on every heartbeat.
 type ExtendedSystemInfo struct {
-	MemoryTotal     uint64
-	MemoryUsed      *uint64
-	MemoryAvailable *uint64
-	MemoryCached    *uint64
-	SwapUsed        *uint64
-	SwapTotal       *uint64
-	CPUCores        int
-	DiskTotal       uint64
-	DiskUsed        *uint64
-	DiskUsedPercent *float64
-	Load1           *float64
-	AgentRSS        *uint64
-	AgentHeapAlloc  *uint64
-	Goroutines      *uint64
-	TCPConnections  *uint64
-	UDPConnections  *uint64
+	MemoryTotal      uint64
+	MemoryUsed       *uint64
+	MemoryAvailable  *uint64
+	MemoryCached     *uint64
+	SwapUsed         *uint64
+	SwapTotal        *uint64
+	CPUCores         int
+	DiskTotal        uint64
+	DiskUsed         *uint64
+	DiskUsedPercent  *float64
+	Load1            *float64
+	AgentRSS         *uint64
+	AgentHeapAlloc   *uint64
+	Goroutines       *uint64
+	TCPConnections   *uint64
+	UDPConnections   *uint64
+	TCPTuningMode    *string
+	TCPTuningMinimum *string
+	TCPTuningMaximum *string
+	TCPTuningCurrent *string
+	TCPTuningReason  *string
 }
 
 var extendedSystemInfoCache struct {
@@ -447,6 +457,11 @@ func (w *WebSocketReporter) collectSystemInfo() SystemInfo {
 		Load1:            extendedInfo.Load1,
 		TCPConnections:   extendedInfo.TCPConnections,
 		UDPConnections:   extendedInfo.UDPConnections,
+		TCPTuningMode:    extendedInfo.TCPTuningMode,
+		TCPTuningMinimum: extendedInfo.TCPTuningMinimum,
+		TCPTuningMaximum: extendedInfo.TCPTuningMaximum,
+		TCPTuningCurrent: extendedInfo.TCPTuningCurrent,
+		TCPTuningReason:  extendedInfo.TCPTuningReason,
 	}
 }
 
@@ -1225,6 +1240,7 @@ func getExtendedSystemInfo() ExtendedSystemInfo {
 		}
 	}
 	info.TCPConnections, info.UDPConnections = getAgentConnectionCounts()
+	info.TCPTuningMode, info.TCPTuningMinimum, info.TCPTuningMaximum, info.TCPTuningCurrent, info.TCPTuningReason = getTCPTuningStatus()
 
 	extendedSystemInfoCache.value = info
 	extendedSystemInfoCache.collectedAt = time.Now()
@@ -1266,6 +1282,36 @@ func uint64Ptr(value uint64) *uint64 {
 
 func float64Ptr(value float64) *float64 {
 	return &value
+}
+
+// getTCPTuningStatus reads only the small status file written by the optional
+// installer-side memory guard. Missing data is normal for old agents and for
+// nodes using a fixed TCP profile, so callers receive nil instead of fake zero
+// values. This function runs through the existing five-second metric cache.
+func getTCPTuningStatus() (*string, *string, *string, *string, *string) {
+	data, err := os.ReadFile("tcp-tuning-status.json")
+	if err != nil {
+		return nil, nil, nil, nil, nil
+	}
+	var status struct {
+		Mode    string `json:"mode"`
+		Minimum string `json:"minimum"`
+		Maximum string `json:"maximum"`
+		Current string `json:"current"`
+		Reason  string `json:"reason"`
+	}
+	if err := json.Unmarshal(data, &status); err != nil {
+		return nil, nil, nil, nil, nil
+	}
+	stringOrNil := func(value string) *string {
+		if strings.TrimSpace(value) == "" {
+			return nil
+		}
+		copy := value
+		return &copy
+	}
+	return stringOrNil(status.Mode), stringOrNil(status.Minimum), stringOrNil(status.Maximum),
+		stringOrNil(status.Current), stringOrNil(status.Reason)
 }
 
 // StartWebSocketReporterWithConfig 使用配置字段启动WebSocket报告器

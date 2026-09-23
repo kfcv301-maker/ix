@@ -121,7 +121,7 @@ func main() {
 
 	// 用独立版本标记让面板可以识别本增强版 Agent，便于重装后的规则恢复与排查。
 	service.SetHTTPReportURL(config.Addr, config.Secret)
-	wsReporter := socket.StartWebSocketReporterWithConfig(config.Addr, config.Secret, config.Http, config.Tls, config.Socks, "1.2.7-enhanced")
+	wsReporter := socket.StartWebSocketReporterWithConfig(config.Addr, config.Secret, config.Http, config.Tls, config.Socks, "1.2.8-enhanced")
 	// The HTTP reporting endpoint must be ready before the first WSS connection
 	// succeeds. Otherwise a panel restart can leave the Agent online but wait
 	// for the ten-minute periodic report before its forwarding rules recover.

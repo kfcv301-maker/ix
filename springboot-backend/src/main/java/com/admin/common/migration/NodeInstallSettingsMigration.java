@@ -20,6 +20,9 @@ public class NodeInstallSettingsMigration {
     @PostConstruct
     public void migrate() {
         addColumnIfMissing("tcp_tuning_profile", "VARCHAR(20) NOT NULL DEFAULT 'balanced'");
+        addColumnIfMissing("tcp_tuning_auto_enabled", "TINYINT NOT NULL DEFAULT 0");
+        addColumnIfMissing("tcp_tuning_profile_min", "VARCHAR(20) NULL");
+        addColumnIfMissing("tcp_tuning_profile_max", "VARCHAR(20) NULL");
         addColumnIfMissing("ddns_enabled", "TINYINT NOT NULL DEFAULT 0");
         addColumnIfMissing("ddns_token", "LONGTEXT NULL");
         addColumnIfMissing("ddns_record_name", "VARCHAR(253) NULL");

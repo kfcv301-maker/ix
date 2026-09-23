@@ -39,6 +39,9 @@ interface Node {
   systemInfo?: NodeSystemInfo | null;
   copyLoading?: boolean;
   tcpTuningProfile?: TcpTuningProfile;
+  tcpTuningAutoEnabled?: number;
+  tcpTuningProfileMin?: TcpTuningProfile;
+  tcpTuningProfileMax?: TcpTuningProfile;
   ddnsEnabled?: number;
   ddnsRecordName?: string;
 }
@@ -68,6 +71,11 @@ interface NodeSystemInfo {
     load1?: number;
     tcpConnections?: number;
     udpConnections?: number;
+    tcpTuningMode?: string;
+    tcpTuningMinimum?: string;
+    tcpTuningMaximum?: string;
+    tcpTuningCurrent?: string;
+    tcpTuningReason?: string;
 }
 
 interface MetricSample {
@@ -78,6 +86,11 @@ interface MetricSample {
   downloadSpeed: number;
   tcpConnections?: number;
   udpConnections?: number;
+  tcpTuningMode?: string;
+  tcpTuningMinimum?: string;
+  tcpTuningMaximum?: string;
+  tcpTuningCurrent?: string;
+  tcpTuningReason?: string;
   memoryAvailable?: number;
   agentRss?: number;
 }
@@ -119,6 +132,9 @@ interface NodeForm {
   tls: number;  // 0 关 1 开
   socks: number; // 0 关 1 开
   tcpTuningProfile: TcpTuningProfile;
+  tcpTuningAutoEnabled: boolean;
+  tcpTuningProfileMin: TcpTuningProfile;
+  tcpTuningProfileMax: TcpTuningProfile;
   ddnsEnabled: boolean;
   cfApiToken: string;
   cfRecordName: string;
@@ -151,7 +167,10 @@ export default function NodePage() {
     http: 0,
     tls: 0,
     socks: 0,
-    tcpTuningProfile: 'balanced',
+    tcpTuningProfile: 'standard',
+    tcpTuningAutoEnabled: true,
+    tcpTuningProfileMin: 'small',
+    tcpTuningProfileMax: 'standard',
     ddnsEnabled: false,
     cfApiToken: '',
     cfRecordName: ''
@@ -312,6 +331,11 @@ export default function NodePage() {
               const numberValue = Number(value);
               return Number.isFinite(numberValue) && numberValue >= 0 ? numberValue : undefined;
             };
+            const toOptionalString = (value: unknown): string | undefined => {
+              if (typeof value !== 'string') return undefined;
+              const trimmed = value.trim();
+              return trimmed ? trimmed : undefined;
+            };
             const toPercentage = (value: unknown): number => Math.min(100, toFiniteNumber(value));
             const currentUpload = toFiniteNumber(systemInfo.bytes_transmitted);
             const currentDownload = toFiniteNumber(systemInfo.bytes_received);
@@ -374,6 +398,11 @@ export default function NodePage() {
               load1: toOptionalNumber(systemInfo.load_1),
               tcpConnections: toOptionalNumber(systemInfo.tcp_connections),
               udpConnections: toOptionalNumber(systemInfo.udp_connections),
+              tcpTuningMode: toOptionalString(systemInfo.tcp_tuning_mode),
+              tcpTuningMinimum: toOptionalString(systemInfo.tcp_tuning_minimum),
+              tcpTuningMaximum: toOptionalString(systemInfo.tcp_tuning_maximum),
+              tcpTuningCurrent: toOptionalString(systemInfo.tcp_tuning_current),
+              tcpTuningReason: toOptionalString(systemInfo.tcp_tuning_reason),
             };
 
             appendMetricSample(node.id, {
@@ -587,6 +616,13 @@ export default function NodePage() {
       newErrors.portEnd = '结束端口不能小于起始端口';
     }
 
+    if (form.tcpTuningAutoEnabled) {
+      const profileRank: Record<TcpTuningProfile, number> = { tiny: 1, small: 2, balanced: 3, standard: 4 };
+      if (profileRank[form.tcpTuningProfileMin] > profileRank[form.tcpTuningProfileMax]) {
+        newErrors.tcpTuning = '动态 TCP 调优的最低档位不能高于最高档位';
+      }
+    }
+
     if (form.ddnsEnabled) {
       if (!form.cfRecordName.trim()) {
         newErrors.cfRecordName = '启用 DDNS 时请填写记录域名';
@@ -624,7 +660,10 @@ export default function NodePage() {
       http: typeof node.http === 'number' ? node.http : 1,
       tls: typeof node.tls === 'number' ? node.tls : 1,
       socks: typeof node.socks === 'number' ? node.socks : 1,
-      tcpTuningProfile: node.tcpTuningProfile || 'balanced',
+      tcpTuningProfile: node.tcpTuningProfileMax || node.tcpTuningProfile || 'balanced',
+      tcpTuningAutoEnabled: node.tcpTuningAutoEnabled === 1,
+      tcpTuningProfileMin: node.tcpTuningProfileMin || 'small',
+      tcpTuningProfileMax: node.tcpTuningProfileMax || node.tcpTuningProfile || 'standard',
       ddnsEnabled: node.ddnsEnabled === 1,
       // 出于安全考虑，后端从不回传令牌。留空保存会保留已加密的旧令牌。
       cfApiToken: '',
@@ -742,6 +781,9 @@ export default function NodePage() {
       tls: form.tls,
       socks: form.socks,
       tcpTuningProfile: form.tcpTuningProfile,
+      tcpTuningAutoEnabled: form.tcpTuningAutoEnabled,
+      tcpTuningProfileMin: form.tcpTuningAutoEnabled ? form.tcpTuningProfileMin : undefined,
+      tcpTuningProfileMax: form.tcpTuningAutoEnabled ? form.tcpTuningProfileMax : undefined,
       ddnsEnabled: form.ddnsEnabled,
       cfApiToken: form.cfApiToken.trim(),
       cfRecordName: form.cfRecordName.trim()
@@ -765,6 +807,9 @@ export default function NodePage() {
               tls: form.tls,
               socks: form.socks,
               tcpTuningProfile: form.tcpTuningProfile,
+              tcpTuningAutoEnabled: form.tcpTuningAutoEnabled ? 1 : 0,
+              tcpTuningProfileMin: form.tcpTuningAutoEnabled ? form.tcpTuningProfileMin : undefined,
+              tcpTuningProfileMax: form.tcpTuningAutoEnabled ? form.tcpTuningProfileMax : undefined,
               ddnsEnabled: form.ddnsEnabled ? 1 : 0,
               ddnsRecordName: form.ddnsEnabled ? form.cfRecordName.trim() : ''
             } : n
@@ -794,7 +839,10 @@ export default function NodePage() {
       http: 0,
       tls: 0,
       socks: 0,
-      tcpTuningProfile: 'balanced',
+      tcpTuningProfile: 'standard',
+      tcpTuningAutoEnabled: true,
+      tcpTuningProfileMin: 'small',
+      tcpTuningProfileMax: 'standard',
       ddnsEnabled: false,
       cfApiToken: '',
       cfRecordName: ''
@@ -1142,6 +1190,17 @@ export default function NodePage() {
                     <div><div className="text-default-500">Go 堆</div><div className="mt-1 font-mono">{formatOptionalCapacity(monitorNode.systemInfo.agentHeapAlloc)}</div></div>
                     <div><div className="text-default-500">goroutine / 负载</div><div className="mt-1 font-mono">{formatOptionalNumber(monitorNode.systemInfo.goroutines)} / {formatOptionalNumber(monitorNode.systemInfo.load1, 2)}</div></div>
                   </div>
+                  {monitorNode.systemInfo.tcpTuningMode && (
+                    <div className="rounded-lg border border-primary-200 bg-primary-50/50 p-3 text-sm dark:border-primary-700 dark:bg-primary-900/20">
+                      <div className="font-medium text-primary-700 dark:text-primary-300">
+                        动态 TCP 内存保护 · {monitorNode.systemInfo.tcpTuningCurrent || '--'}
+                      </div>
+                      <div className="mt-1 text-default-600">
+                        范围：{monitorNode.systemInfo.tcpTuningMinimum || '--'} – {monitorNode.systemInfo.tcpTuningMaximum || '--'}
+                      </div>
+                      {monitorNode.systemInfo.tcpTuningReason && <div className="mt-1 text-xs text-default-500">{monitorNode.systemInfo.tcpTuningReason}</div>}
+                    </div>
+                  )}
                 </>
               )}
 
@@ -1309,23 +1368,73 @@ export default function NodePage() {
                 </div>
 
                 <div className="rounded-lg border border-default-200 bg-default-50 p-3">
-                  <label className="block text-sm font-medium text-default-700" htmlFor="node-tcp-tuning-profile">
-                    TCP 调优档位
-                  </label>
-                  <select
-                    id="node-tcp-tuning-profile"
-                    value={form.tcpTuningProfile}
-                    onChange={(event) => setForm(prev => ({ ...prev, tcpTuningProfile: event.target.value as TcpTuningProfile }))}
-                    className="mt-2 w-full rounded-lg border border-default-300 bg-background px-3 py-2 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
+                  <Switch
+                    isSelected={form.tcpTuningAutoEnabled}
+                    onValueChange={(value) => setForm(prev => ({ ...prev, tcpTuningAutoEnabled: value }))}
                   >
-                    <option value="tiny">轻量：适合 512 MB 以下（缓存上限 4 MB）</option>
-                    <option value="small">小型：适合 512 MB–1 GB（缓存上限 8 MB）</option>
-                    <option value="balanced">均衡：适合 1–2 GB 或单核（缓存上限 12 MB）</option>
-                    <option value="standard">高性能：建议 2 GB+ 且双核以上（缓存上限 16 MB）</option>
-                  </select>
+                    <span className="font-medium">动态 TCP 内存保护</span>
+                  </Switch>
                   <p className="mt-1 text-xs text-default-500">
-                    安装命令会使用此设置；脚本仍会检测 CPU、内存及内核能力，BBR/FQ 不受档位影响。
+                    启用后，节点每分钟只读取一次可用内存；内存持续紧张时在你指定范围内降档，稳定恢复后再逐级升档。不会重启 Agent，也不会主动断开转发。
                   </p>
+
+                  {form.tcpTuningAutoEnabled ? (
+                    <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <label className="text-sm text-default-700" htmlFor="node-tcp-tuning-min">
+                        最低档位
+                        <select
+                          id="node-tcp-tuning-min"
+                          value={form.tcpTuningProfileMin}
+                          onChange={(event) => setForm(prev => ({ ...prev, tcpTuningProfileMin: event.target.value as TcpTuningProfile }))}
+                          className="mt-1.5 w-full rounded-lg border border-default-300 bg-background px-3 py-2 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
+                        >
+                          <option value="tiny">轻量（4 MB）</option>
+                          <option value="small">小型（8 MB）</option>
+                          <option value="balanced">均衡（12 MB）</option>
+                          <option value="standard">高性能（16 MB）</option>
+                        </select>
+                      </label>
+                      <label className="text-sm text-default-700" htmlFor="node-tcp-tuning-max">
+                        最高档位
+                        <select
+                          id="node-tcp-tuning-max"
+                          value={form.tcpTuningProfileMax}
+                          onChange={(event) => setForm(prev => ({
+                            ...prev,
+                            tcpTuningProfileMax: event.target.value as TcpTuningProfile,
+                            tcpTuningProfile: event.target.value as TcpTuningProfile
+                          }))}
+                          className="mt-1.5 w-full rounded-lg border border-default-300 bg-background px-3 py-2 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
+                        >
+                          <option value="tiny">轻量（4 MB）</option>
+                          <option value="small">小型（8 MB）</option>
+                          <option value="balanced">均衡（12 MB）</option>
+                          <option value="standard">高性能（16 MB）</option>
+                        </select>
+                      </label>
+                    </div>
+                  ) : (
+                    <>
+                      <label className="mt-3 block text-sm font-medium text-default-700" htmlFor="node-tcp-tuning-profile">
+                        固定 TCP 调优档位
+                      </label>
+                      <select
+                        id="node-tcp-tuning-profile"
+                        value={form.tcpTuningProfile}
+                        onChange={(event) => setForm(prev => ({ ...prev, tcpTuningProfile: event.target.value as TcpTuningProfile }))}
+                        className="mt-2 w-full rounded-lg border border-default-300 bg-background px-3 py-2 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
+                      >
+                        <option value="tiny">轻量：适合 512 MB 以下（缓存上限 4 MB）</option>
+                        <option value="small">小型：适合 512 MB–1 GB（缓存上限 8 MB）</option>
+                        <option value="balanced">均衡：适合 1–2 GB 或单核（缓存上限 12 MB）</option>
+                        <option value="standard">高性能：建议 2 GB+ 且双核以上（缓存上限 16 MB）</option>
+                      </select>
+                    </>
+                  )}
+                  <p className="mt-2 text-xs text-default-500">
+                    安装脚本仍会校验 CPU、内存和内核能力；低内存机器不会被提升到不安全的档位。BBR/FQ 始终保持，不参与动态切换。
+                  </p>
+                  {errors.tcpTuning && <p className="mt-1 text-xs text-danger">{errors.tcpTuning}</p>}
                 </div>
 
                 <div className="rounded-lg border border-default-200 bg-default-50 p-3">

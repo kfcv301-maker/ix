@@ -42,6 +42,15 @@ public class Node extends BaseEntity {
     /** TCP tuning preset selected when the node is created or edited. */
     private String tcpTuningProfile;
 
+    /** Enables the node-local memory guard within the administrator's bounds. */
+    private Integer tcpTuningAutoEnabled;
+
+    /** Lowest TCP tuning preset that the node-local memory guard may apply. */
+    private String tcpTuningProfileMin;
+
+    /** Highest TCP tuning preset that the node-local memory guard may apply. */
+    private String tcpTuningProfileMax;
+
     /** Whether the generated node installation command should configure DDNS. */
     private Integer ddnsEnabled;
 

@@ -102,6 +102,22 @@ public class SystemInfoDto {
 
     @JsonProperty("udp_connections")
     private Long udpConnections;
+
+    /** Optional status reported by the node-local adaptive TCP memory guard. */
+    @JsonProperty("tcp_tuning_mode")
+    private String tcpTuningMode;
+
+    @JsonProperty("tcp_tuning_minimum")
+    private String tcpTuningMinimum;
+
+    @JsonProperty("tcp_tuning_maximum")
+    private String tcpTuningMaximum;
+
+    @JsonProperty("tcp_tuning_current")
+    private String tcpTuningCurrent;
+
+    @JsonProperty("tcp_tuning_reason")
+    private String tcpTuningReason;
     
     /**
      * 上报时间戳

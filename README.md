@@ -11,7 +11,7 @@ Lunaris Relay 是一个面向自建基础设施的高性能流量转发控制面
 - **链路可观测性与诊断**：节点页展示 CPU、内存、磁盘和上下行实时指标；隧道支持一键 PING，汇总检测其下所有转发的入口、出口和目标连通性。
 - **流量与权限管理**：集中管理用户、隧道和转发规则，提供限速、配额、流量统计和节点在线状态。
 - **Cloudflare DDNS**：节点可按公网 IPv4/IPv6 变化自动校验并更新 DNS 记录，减少换机或网络变更后的人工处理。
-- **VPS 托管与在线运维**：用户可托管自己的 VPS，管理员也可托管库存 VPS 并分配给用户；面板提供自动 SSH 可达性检测、网页终端和受限的一键部署模板。
+- **VPS 托管与在线运维**：用户可托管自己的 VPS，管理员也可托管库存 VPS 并分配给用户；SSH 状态只在手动检测、打开网页终端或执行受限部署时更新，不会按分钟扫描全部 VPS。
 - **可切换控制台主题**：在不影响默认界面的前提下提供额外主题选择，适配不同的控制台使用偏好。
 - **可维护的部署方式**：面板与 Agent 均提供本仓库的一键安装脚本；面板更新会保留数据库卷和环境配置，并先创建本机备份。
 
@@ -22,7 +22,7 @@ Lunaris Relay 是一个面向自建基础设施的高性能流量转发控制面
 - 节点、用户、隧道及转发规则管理
 - 转发限速、配额与流量统计
 - 节点在线状态、系统资源监控与隧道一键连通性检测
-- VPS 托管、自动 SSH 检测、在线 SSH 终端与 Docker / 面板一键部署
+- VPS 托管、按需 SSH 检测、在线 SSH 终端与 Docker / 面板一键部署
 - 基于 GOST 的 Agent 生命周期与转发服务管理
 
 ## 项目结构
@@ -57,6 +57,8 @@ curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/panel_install
 默认使用前端端口 `6366`、后端端口 `6365`，数据库密码与 JWT 密钥在服务器本机的 `/opt/flux-panel-enhanced/.env` 自动生成，脚本不会把它们上传到 GitHub。需要自定义端口时：
 
 前端默认只监听 `127.0.0.1:6366`，适合由宿主机 Nginx/Caddy 反向代理并管理 HTTPS；确需直接暴露前端端口时，在 `.env` 设置 `FRONTEND_BIND_ADDRESS=0.0.0.0` 后重新执行更新。
+
+网页终端默认只接受与面板同源的浏览器请求。若前端和 API 刻意部署在不同域名，需在服务器 `.env` 设置 `VPS_TERMINAL_ALLOWED_ORIGINS=https://你的前端域名`；普通用户托管的 SSH 地址始终只允许公网地址。管理员确有内网库存 VPS 需求时，才可显式设置 `VPS_ALLOW_PRIVATE_ADMIN_TARGETS=true`。
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/panel_install.sh | sudo env FRONTEND_PORT=8080 BACKEND_PORT=6365 bash
@@ -96,11 +98,11 @@ curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/upgrade_from_
 curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/install.sh | sudo bash -s -- --panel 'https://panel.example.com' --token '节点独立密钥'
 ```
 
-脚本会根据服务器架构下载 `amd64` 或 `arm64` Agent，并在写入 `/etc/flux-panel-agent/gost` 前校验 SHA-256。它会创建 `flux-panel-agent.service` 并立即启动；重新安装 Agent 会短暂重启该节点进程，但不会修改面板数据库中的节点与转发记录。
+脚本会根据服务器架构从当前稳定 Release 下载 `amd64` 或 `arm64` Agent，并在写入 `/etc/flux-panel-agent/gost` 前校验 SHA-256；发布刚完成前若 Release 资源短暂不可用，才回退到仓库中保留的兼容 Agent。它会创建 `flux-panel-agent.service` 并立即启动；重新安装 Agent 会短暂重启该节点进程，但不会修改面板数据库中的节点与转发记录。
 
 安装命令自动读取管理员当前浏览器的面板域名。例如从 `https://panel.example.com` 打开面板时，Agent 使用 `wss://panel.example.com/system-info` 保持通信，并通过 `https://panel.example.com/flow/*` 上报数据；不再要求管理员在网站配置填写 IP 或后端端口。新 Agent 将独立节点密钥放在 `Authorization: Bearer` 请求头中；后端仍接受旧 Agent 的 URL 密钥参数，已有节点无需重装。域名的反向代理须把 `/system-info`（WebSocket）、`/flow/upload` 与 `/flow/config` 转到后端，并使用有效 HTTPS 证书。
 
-节点安装时会先检测内核版本、CPU、内存、默认出口网卡以及 BBR/FQ 支持，再做 TCP 调优，最后才下载和启动 Agent。调优写入 `/etc/sysctl.d/99-flux-panel-network.conf`，不需要额外确认。管理员在“新增/编辑节点”时选定下面四档，之后点击“安装”只会直接生成命令；未传档位的旧命令仍会按机器配置自动选择。
+节点安装时会先检测内核版本、CPU、内存、默认出口网卡以及 BBR/FQ 支持，再做 TCP 调优，最后才下载和启动 Agent。调优写入 `/etc/sysctl.d/99-flux-panel-network.conf`，不需要额外确认。管理员在“新增/编辑节点”时可选固定档位，也可启用“动态 TCP 内存保护”并设定最低/最高档位；未传档位的旧命令仍会按机器配置自动选择。
 
 | 档位 | 建议机器配置 | 单连接收发缓存上限 | 接入 / SYN / 收包队列 |
 | --- | --- | --- | --- |
@@ -114,6 +116,8 @@ curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/install.sh | 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/install.sh | sudo bash -s -- --panel 'https://panel.example.com' --token '节点独立密钥' --skip-tcp-tuning
 ```
+
+启用动态 TCP 内存保护后，节点本机每分钟读取一次 Linux 的 `MemAvailable`（不会把文件缓存误判为不可用内存）。可用内存处于紧急区间时立即降一档；处于压力区间连续三次采样才降档；资源稳定十分钟后才逐级恢复，且永远不会超过管理员设定的最高档位或低于最低档位。它只限制后续 TCP socket 的缓存增长与队列上限，不会重启 Agent、删除规则或主动断开现有转发。低内存机器还会自动把可用最高档位压到安全范围。运行状态会随节点监控上报；旧 Agent 和固定档位节点显示为 `--`。
 
 ### VPS 托管与网页 SSH
 

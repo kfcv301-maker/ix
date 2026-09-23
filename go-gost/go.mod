@@ -10,6 +10,11 @@ require (
 	github.com/judwhite/go-svc v1.2.1
 )
 
+// The panel's Agent extends x with its encrypted panel protocol, traffic
+// reporting and monitoring fields. Release builds must compile that local
+// module instead of silently downloading the unmodified upstream version.
+replace github.com/go-gost/x => ./x
+
 require (
 	github.com/aead/chacha20 v0.0.0-20180709150244-8b13a72661da // indirect
 	github.com/alecthomas/units v0.0.0-20211218093645-b94a6e3cc137 // indirect

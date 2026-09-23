@@ -101,6 +101,7 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
     public R createNode(NodeDto nodeDto) {
         Node node = buildNewNode(nodeDto);
         R installSettings = applyInstallSettings(node, null, nodeDto.getTcpTuningProfile(),
+                nodeDto.getTcpTuningAutoEnabled(), nodeDto.getTcpTuningProfileMin(), nodeDto.getTcpTuningProfileMax(),
                 nodeDto.getDdnsEnabled(), nodeDto.getCfApiToken(), nodeDto.getCfRecordName());
         if (installSettings.getCode() != 0) {
             return installSettings;
@@ -164,6 +165,7 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
         // 2. 构建更新对象并执行更新
         Node updateNode = buildUpdateNode(nodeUpdateDto);
         R installSettings = applyInstallSettings(updateNode, node, nodeUpdateDto.getTcpTuningProfile(),
+                nodeUpdateDto.getTcpTuningAutoEnabled(), nodeUpdateDto.getTcpTuningProfileMin(), nodeUpdateDto.getTcpTuningProfileMax(),
                 nodeUpdateDto.getDdnsEnabled(), nodeUpdateDto.getCfApiToken(), nodeUpdateDto.getCfRecordName());
         if (installSettings.getCode() != 0) {
             return installSettings;
@@ -309,6 +311,7 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
      * table and API responses never contain the plaintext Cloudflare token.
      */
     private R applyInstallSettings(Node target, Node existing, String requestedProfile,
+                                   Boolean requestedAutoEnabled, String requestedProfileMin, String requestedProfileMax,
                                    Boolean requestedDdnsEnabled, String requestedToken,
                                    String requestedRecordName) {
         String profile = requestedProfile == null
@@ -319,6 +322,33 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
             return R.err("TCP 调优档位无效");
         }
         target.setTcpTuningProfile(profile);
+
+        boolean autoEnabled = requestedAutoEnabled != null
+                ? requestedAutoEnabled
+                : existing != null && Integer.valueOf(1).equals(existing.getTcpTuningAutoEnabled());
+        target.setTcpTuningAutoEnabled(autoEnabled ? 1 : 0);
+        if (autoEnabled) {
+            String minProfile = normalizeTcpTuningProfile(requestedProfileMin == null
+                    ? (existing == null ? null : existing.getTcpTuningProfileMin())
+                    : requestedProfileMin);
+            String maxProfile = normalizeTcpTuningProfile(requestedProfileMax == null
+                    ? (existing == null ? null : existing.getTcpTuningProfileMax())
+                    : requestedProfileMax);
+            if (minProfile == null || maxProfile == null) {
+                return R.err("启用动态 TCP 调优时必须选择有效的最低和最高档位");
+            }
+            if (tuningProfileRank(minProfile) > tuningProfileRank(maxProfile)) {
+                return R.err("动态 TCP 调优的最低档位不能高于最高档位");
+            }
+            // The fixed value remains a safe fallback for older installation
+            // commands and when an administrator later disables dynamic mode.
+            target.setTcpTuningProfile(maxProfile);
+            target.setTcpTuningProfileMin(minProfile);
+            target.setTcpTuningProfileMax(maxProfile);
+        } else {
+            target.setTcpTuningProfileMin(null);
+            target.setTcpTuningProfileMax(null);
+        }
 
         boolean enabled = requestedDdnsEnabled != null
                 ? requestedDdnsEnabled
@@ -369,6 +399,22 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
             return normalized;
         }
         return null;
+    }
+
+    private int tuningProfileRank(String profile) {
+        if ("tiny".equals(profile)) {
+            return 1;
+        }
+        if ("small".equals(profile)) {
+            return 2;
+        }
+        if ("balanced".equals(profile)) {
+            return 3;
+        }
+        if ("standard".equals(profile)) {
+            return 4;
+        }
+        return 0;
     }
 
     private AESCrypto getDdnsCrypto() {
@@ -512,8 +558,19 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
                .append(" --token ").append(shellQuote(node.getSecret()));
 
         String tcpTuningProfile = normalizeTcpTuningProfile(node.getTcpTuningProfile());
-        command.append(" --tcp-profile ").append(shellQuote(
-                tcpTuningProfile == null ? DEFAULT_TCP_TUNING_PROFILE : tcpTuningProfile));
+        if (Integer.valueOf(1).equals(node.getTcpTuningAutoEnabled())) {
+            String minProfile = normalizeTcpTuningProfile(node.getTcpTuningProfileMin());
+            String maxProfile = normalizeTcpTuningProfile(node.getTcpTuningProfileMax());
+            if (minProfile == null || maxProfile == null || tuningProfileRank(minProfile) > tuningProfileRank(maxProfile)) {
+                return R.err("该节点的动态 TCP 调优上下限无效，请编辑节点后重新保存");
+            }
+            command.append(" --tcp-auto-tune")
+                    .append(" --tcp-profile-min ").append(shellQuote(minProfile))
+                    .append(" --tcp-profile-max ").append(shellQuote(maxProfile));
+        } else {
+            command.append(" --tcp-profile ").append(shellQuote(
+                    tcpTuningProfile == null ? DEFAULT_TCP_TUNING_PROFILE : tcpTuningProfile));
+        }
 
         if (Integer.valueOf(1).equals(node.getDdnsEnabled())) {
             String token = decryptDdnsToken(node.getDdnsToken());
