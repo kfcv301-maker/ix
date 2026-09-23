@@ -69,6 +69,11 @@ interface Forward {
 interface Tunnel {
   id: number;
   name: string;
+  /** Effective address returned for the current user, or the raw address for admins. */
+  ip?: string;
+  originalIp?: string;
+  entryAddressMode?: 'NONE' | 'DEFAULT' | 'CUSTOM';
+  entryDomain?: string;
   inNodePortSta?: number;
   inNodePortEnd?: number;
 }
@@ -218,6 +223,18 @@ export default function ForwardPage() {
   // 表单验证错误
   const [errors, setErrors] = useState<{[key: string]: string}>({});
   const [selectedTunnel, setSelectedTunnel] = useState<Tunnel | null>(null);
+
+  const isAdministrator = JwtUtil.getRoleIdFromToken() === 0;
+
+  /**
+   * For ordinary users, overlay the persisted forwarding record with the one
+   * address assigned to their tunnel permission. Admins keep the raw record
+   * address because they can review forwards belonging to several users.
+   */
+  const getForwardEntryAddress = (forward: Forward): string => {
+    if (isAdministrator) return forward.inIp;
+    return tunnels.find(tunnel => tunnel.id === forward.tunnelId)?.ip || forward.inIp;
+  };
 
   useEffect(() => {
     loadData();
@@ -925,9 +942,10 @@ export default function ForwardPage() {
         return;
       }
       
-      // 格式化导出数据：remoteAddr|name|inPort
+      // The fourth column makes the current user's assigned entry visible.
+      // Import keeps accepting the original first three columns and ignores it.
       const exportLines = forwardsToExport.map(forward => {
-        return `${forward.remoteAddr}|${forward.name}|${forward.inPort}`;
+        return `${forward.remoteAddr}|${forward.name}|${forward.inPort}|${formatInAddress(getForwardEntryAddress(forward), forward.inPort)}`;
       });
       
       const exportText = exportLines.join('\n');
@@ -1255,6 +1273,7 @@ export default function ForwardPage() {
   const renderForwardCard = (forward: Forward, listeners?: any) => {
     const statusDisplay = getStatusDisplay(forward.status);
     const strategyDisplay = getStrategyDisplay(forward.strategy);
+    const entryAddress = getForwardEntryAddress(forward);
     
     return (
       <Card key={forward.id} className="group shadow-sm border border-divider hover:shadow-md transition-shadow duration-200">
@@ -1305,19 +1324,19 @@ export default function ForwardPage() {
             <div className="space-y-1">
               <div 
                 className={`cursor-pointer px-2 py-1 bg-default-50 dark:bg-default-100/50 rounded border border-default-200 dark:border-default-300 transition-colors duration-200 ${
-                  hasMultipleAddresses(forward.inIp) ? 'hover:bg-default-100 dark:hover:bg-default-200/50' : ''
+                  hasMultipleAddresses(entryAddress) ? 'hover:bg-default-100 dark:hover:bg-default-200/50' : ''
                 }`}
-                onClick={() => showAddressModal(forward.inIp, forward.inPort, '入口端口')}
-                title={formatInAddress(forward.inIp, forward.inPort)}
+                onClick={() => showAddressModal(entryAddress, forward.inPort, '入口端口')}
+                title={formatInAddress(entryAddress, forward.inPort)}
               >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-1.5 min-w-0 flex-1">
                     <span className="text-xs font-medium text-default-600 flex-shrink-0">入口:</span>
                     <code className="text-xs font-mono text-foreground truncate min-w-0">
-                      {formatInAddress(forward.inIp, forward.inPort)}
+                      {formatInAddress(entryAddress, forward.inPort)}
                     </code>
                   </div>
-                  {hasMultipleAddresses(forward.inIp) && (
+                  {hasMultipleAddresses(entryAddress) && (
                     <svg className="w-3 h-3 text-default-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
                     </svg>
@@ -1682,10 +1701,26 @@ export default function ForwardPage() {
                     >
                       {tunnels.map((tunnel) => (
                         <SelectItem key={tunnel.id} >
-                          {tunnel.name}
+                          {tunnel.name}{tunnel.ip ? ` · ${tunnel.ip}` : ''}
                         </SelectItem>
                       ))}
                     </Select>
+
+                    {selectedTunnel && (
+                      <Input
+                        label="你的入口地址"
+                        value={selectedTunnel.ip || '原始入口地址'}
+                        isReadOnly
+                        variant="flat"
+                        description={
+                          selectedTunnel.entryAddressMode === 'CUSTOM'
+                            ? '管理员为你指定的解析域名；新建后的转发会使用同一入口端口。'
+                            : selectedTunnel.entryAddressMode === 'DEFAULT'
+                              ? '该隧道的默认解析域名；新建后的转发会使用同一入口端口。'
+                              : '管理员未分配解析域名，使用隧道原始入口地址。'
+                        }
+                      />
+                    )}
                     
                     <Input
                       label="入口端口"
@@ -1855,7 +1890,7 @@ export default function ForwardPage() {
             <ModalHeader className="flex flex-col gap-1">
               <h2 className="text-xl font-bold">导出转发数据</h2>
               <p className="text-small text-default-500">
-                格式：目标地址|转发名称|入口端口
+                格式：目标地址|转发名称|入口端口|当前用户入口地址
               </p>
             </ModalHeader>
             <ModalBody className="pb-6">
@@ -1978,10 +2013,10 @@ export default function ForwardPage() {
             <ModalHeader className="flex flex-col gap-1">
               <h2 className="text-xl font-bold">导入转发数据</h2>
               <p className="text-small text-default-500">
-                格式：目标地址|转发名称|入口端口，每行一个，入口端口留空将自动分配可用端口
+                格式：目标地址|转发名称|入口端口（可附带导出的第 4 列入口地址），每行一个
               </p>
               <p className="text-small text-default-400">
-                目标地址支持单个地址(如：example.com:8080)或多个地址用逗号分隔(如：3.3.3.3:3,4.4.4.4:4)
+                入口地址由当前用户的隧道权限决定；导入时第 4 列仅作展示会被忽略。目标地址支持单个地址(如：example.com:8080)或多个地址用逗号分隔(如：3.3.3.3:3,4.4.4.4:4)
               </p>
             </ModalHeader>
             <ModalBody className="pb-6">

@@ -11,6 +11,7 @@ import UserPage from "@/pages/user";
 import ProfilePage from "@/pages/profile";
 import LimitPage from "@/pages/limit";
 import ConfigPage from "@/pages/config";
+import VpsPage from "@/pages/vps";
 import { SettingsPage } from "@/pages/settings";
 
 import AdminLayout from "@/layouts/admin";
@@ -188,6 +189,14 @@ function App() {
             <NodePage />
           </ProtectedRoute>
         } 
+      />
+      <Route
+        path="/vps"
+        element={
+          <ProtectedRoute>
+            <VpsPage />
+          </ProtectedRoute>
+        }
       />
       <Route 
         path="/user" 

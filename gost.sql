@@ -144,6 +144,22 @@ CREATE TABLE `tunnel_entry_node` (
   KEY `idx_tunnel_entry_node_node` (`node_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+--
+-- 管理员维护的隧道解析域名池。仅决定面板显示/用户入口分配，
+-- 不创建或修改 DDNS、DNS 记录及节点配置。
+--
+CREATE TABLE `tunnel_entry_domain` (
+  `id` bigint(20) NOT NULL,
+  `tunnel_id` int(10) NOT NULL,
+  `domain` varchar(253) NOT NULL,
+  `is_default` tinyint(1) NOT NULL DEFAULT '0',
+  `created_time` bigint(20) NOT NULL,
+  `updated_time` bigint(20) DEFAULT NULL,
+  `status` int(10) NOT NULL DEFAULT '1',
+  UNIQUE KEY `uk_tunnel_entry_domain` (`tunnel_id`,`domain`),
+  KEY `idx_tunnel_entry_domain_tunnel` (`tunnel_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- --------------------------------------------------------
 
 --
@@ -190,7 +206,10 @@ CREATE TABLE `user_tunnel` (
   `out_flow` bigint(20) NOT NULL DEFAULT '0',
   `flow_reset_time` bigint(20) NOT NULL,
   `exp_time` bigint(20) NOT NULL,
-  `status` int(10) NOT NULL
+  `status` int(10) NOT NULL,
+  `entry_address_mode` varchar(16) NOT NULL DEFAULT 'NONE',
+  `entry_domain_id` bigint(20) DEFAULT NULL,
+  KEY `idx_user_tunnel_entry_domain` (`entry_domain_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- --------------------------------------------------------
@@ -204,6 +223,47 @@ CREATE TABLE `vite_config` (
   `name` varchar(200) NOT NULL,
   `value` varchar(200) NOT NULL,
   `time` bigint(20) NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- --------------------------------------------------------
+
+--
+-- VPS 托管：SSH 凭据仅保存 AES-GCM 密文，浏览器接口不会返回该字段。
+-- USER 来源归用户自己与全部管理员管理；ADMIN 来源可分配给一个用户使用。
+--
+CREATE TABLE `vps_host` (
+  `id` bigint(20) NOT NULL,
+  `name` varchar(100) NOT NULL,
+  `host` varchar(255) NOT NULL,
+  `ssh_port` int(10) NOT NULL DEFAULT '22',
+  `ssh_username` varchar(100) NOT NULL,
+  `ssh_password` longtext NOT NULL,
+  `origin` varchar(16) NOT NULL,
+  `owner_user_id` bigint(20) DEFAULT NULL,
+  `assigned_user_id` bigint(20) DEFAULT NULL,
+  `remark` varchar(1000) DEFAULT NULL,
+  `ssh_fingerprint` varchar(255) DEFAULT NULL,
+  `health_status` varchar(32) NOT NULL DEFAULT 'unknown',
+  `last_check_time` bigint(20) DEFAULT NULL,
+  `last_check_message` varchar(500) DEFAULT NULL,
+  `last_latency_ms` bigint(20) DEFAULT NULL,
+  `created_time` bigint(20) NOT NULL,
+  `updated_time` bigint(20) DEFAULT NULL,
+  `status` int(10) NOT NULL DEFAULT '1'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE `vps_deployment_task` (
+  `id` bigint(20) NOT NULL,
+  `vps_id` bigint(20) NOT NULL,
+  `requested_by_user_id` bigint(20) NOT NULL,
+  `task_type` varchar(64) NOT NULL,
+  `task_status` varchar(32) NOT NULL,
+  `output_log` mediumtext DEFAULT NULL,
+  `started_time` bigint(20) DEFAULT NULL,
+  `finished_time` bigint(20) DEFAULT NULL,
+  `created_time` bigint(20) NOT NULL,
+  `updated_time` bigint(20) DEFAULT NULL,
+  `status` int(10) NOT NULL DEFAULT '1'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 --
@@ -254,6 +314,12 @@ ALTER TABLE `tunnel_entry_node`
   ADD PRIMARY KEY (`id`);
 
 --
+-- 表的索引 `tunnel_entry_domain`
+--
+ALTER TABLE `tunnel_entry_domain`
+  ADD PRIMARY KEY (`id`);
+
+--
 -- 表的索引 `user`
 --
 ALTER TABLE `user`
@@ -271,6 +337,17 @@ ALTER TABLE `user_tunnel`
 ALTER TABLE `vite_config`
   ADD PRIMARY KEY (`id`),
   ADD UNIQUE KEY `name` (`name`);
+
+ALTER TABLE `vps_host`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_vps_host_owner` (`owner_user_id`),
+  ADD KEY `idx_vps_host_assigned` (`assigned_user_id`),
+  ADD KEY `idx_vps_host_status` (`status`);
+
+ALTER TABLE `vps_deployment_task`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_vps_task_vps` (`vps_id`),
+  ADD KEY `idx_vps_task_status` (`task_status`);
 
 --
 -- 在导出的表使用AUTO_INCREMENT
@@ -313,6 +390,12 @@ ALTER TABLE `tunnel_entry_node`
   MODIFY `id` bigint(20) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
 
 --
+-- 使用表AUTO_INCREMENT `tunnel_entry_domain`
+--
+ALTER TABLE `tunnel_entry_domain`
+  MODIFY `id` bigint(20) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
+
+--
 -- 使用表AUTO_INCREMENT `user`
 --
 ALTER TABLE `user`
@@ -329,6 +412,12 @@ ALTER TABLE `user_tunnel`
 --
 ALTER TABLE `vite_config`
   MODIFY `id` int(10) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
+
+ALTER TABLE `vps_host`
+  MODIFY `id` bigint(20) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
+
+ALTER TABLE `vps_deployment_task`
+  MODIFY `id` bigint(20) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
 COMMIT;
 
 /*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;

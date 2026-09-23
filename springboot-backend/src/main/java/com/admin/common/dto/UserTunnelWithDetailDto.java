@@ -85,4 +85,16 @@ public class UserTunnelWithDetailDto {
 
     private Integer status;
 
-} 
+    /** The stored assignment mode: NONE, DEFAULT, or CUSTOM. */
+    private String entryAddressMode;
+
+    /** The selected domain row when CUSTOM is used. */
+    private Long entryDomainId;
+
+    /** The effective domain visible to this permission, if one is assigned. */
+    private String entryDomain;
+
+    /** The legacy/raw tunnel ingress used when no domain is assigned. */
+    private String originalEntryAddress;
+
+}

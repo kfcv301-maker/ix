@@ -48,6 +48,16 @@ public class UserTunnel implements Serializable {
 
     private Integer num;
 
+    /**
+     * NONE shows the tunnel's original ingress address, DEFAULT resolves the
+     * tunnel's current default domain, and CUSTOM uses entryDomainId.
+     */
+    private String entryAddressMode;
+
+    /** A tunnel_entry_domain ID when entryAddressMode is CUSTOM. */
+    @TableField(updateStrategy = FieldStrategy.IGNORED)
+    private Long entryDomainId;
+
     private Integer status;
 
 }

@@ -10,15 +10,18 @@ import com.admin.common.utils.WebSocketServer;
 import com.admin.entity.Forward;
 import com.admin.entity.Node;
 import com.admin.entity.Tunnel;
+import com.admin.entity.TunnelEntryDomain;
 import com.admin.entity.TunnelEntryNode;
 import com.admin.entity.User;
 import com.admin.entity.UserTunnel;
 import com.admin.mapper.TunnelMapper;
+import com.admin.mapper.TunnelEntryDomainMapper;
 import com.admin.mapper.TunnelEntryNodeMapper;
 import com.admin.mapper.UserTunnelMapper;
 import com.admin.service.ForwardService;
 import com.admin.service.NodeService;
 import com.admin.service.TunnelService;
+import com.admin.service.TunnelEntryDomainService;
 import com.admin.service.UserTunnelService;
 import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.JSONArray;
@@ -98,6 +101,12 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
     private TunnelEntryNodeMapper tunnelEntryNodeMapper;
 
     @Resource
+    private TunnelEntryDomainMapper tunnelEntryDomainMapper;
+
+    @Resource
+    private TunnelEntryDomainService tunnelEntryDomainService;
+
+    @Resource
     NodeService nodeService;
     
     @Resource
@@ -127,6 +136,11 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
         R entryAddressValidation = validateMultiIngressAddress(entryNodeIds, entryDomain, legacyEntryIps);
         if (entryAddressValidation.getCode() != 0) {
             return entryAddressValidation;
+        }
+        R accessDomainValidation = tunnelEntryDomainService.validateInitialDomains(
+                tunnelDto.getAccessDomains(), tunnelDto.getDefaultAccessDomain());
+        if (accessDomainValidation.getCode() != 0) {
+            return accessDomainValidation;
         }
         // Keep the first entry in the legacy column. Existing integrations keep
         // working while the relation table is the source of truth for fan-out.
@@ -171,6 +185,8 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
         if (!saveEntryNodes(tunnel.getId(), entryNodeIds)) {
             throw new IllegalStateException("保存多入口节点关联失败");
         }
+        tunnelEntryDomainService.createInitialDomains(
+                tunnel.getId(), tunnelDto.getAccessDomains(), tunnelDto.getDefaultAccessDomain());
         tunnel.setEntryNodeIds(entryNodeIds);
         return R.ok(SUCCESS_CREATE_MSG);
     }
@@ -280,6 +296,7 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
             // Keep the relation table in step with the legacy tunnel row. This
             // prevents a deleted tunnel from keeping a node falsely "in use".
             tunnelEntryNodeMapper.delete(new QueryWrapper<TunnelEntryNode>().eq("tunnel_id", id));
+            tunnelEntryDomainMapper.delete(new QueryWrapper<TunnelEntryDomain>().eq("tunnel_id", id));
         }
         return result ? R.ok(SUCCESS_DELETE_MSG) : R.err(ERROR_DELETE_MSG);
     }
@@ -299,6 +316,9 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
         
         // 转换为DTO并返回
         List<TunnelListDto> tunnelDtos = convertToTunnelListDtos(tunnelEntities);
+        if (currentUser.getRoleId() != ADMIN_ROLE_ID) {
+            applyUserEntryAddresses(tunnelDtos, currentUser.getUserId());
+        }
         return R.ok(tunnelDtos);
     }
 
@@ -779,6 +799,8 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
         dto.setId(tunnel.getId().intValue());
         dto.setName(tunnel.getName());
         dto.setIp(tunnel.getInIp());
+        dto.setOriginalIp(tunnel.getInIp());
+        dto.setEntryAddressMode(TunnelEntryDomainService.ENTRY_ADDRESS_MODE_NONE);
         dto.setType(tunnel.getType());
         dto.setProtocol(tunnel.getProtocol());
         
@@ -792,6 +814,39 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
         }
         
         return dto;
+    }
+
+    /**
+     * Normal users receive only the address assigned to their own permission.
+     * Administrators keep the raw tunnel address in this endpoint so they do
+     * not accidentally see one user's private allocation while managing all
+     * forwards.
+     */
+    private void applyUserEntryAddresses(List<TunnelListDto> tunnelDtos, Integer userId) {
+        if (tunnelDtos.isEmpty()) {
+            return;
+        }
+        Map<Integer, UserTunnel> assignments = userTunnelMapper.selectList(
+                        new QueryWrapper<UserTunnel>().eq("user_id", userId))
+                .stream()
+                .collect(Collectors.toMap(UserTunnel::getTunnelId, value -> value, (first, ignored) -> first));
+
+        for (TunnelListDto tunnelDto : tunnelDtos) {
+            UserTunnel assignment = assignments.get(tunnelDto.getId());
+            if (assignment == null) {
+                continue;
+            }
+            String mode = StringUtils.isBlank(assignment.getEntryAddressMode())
+                    ? TunnelEntryDomainService.ENTRY_ADDRESS_MODE_NONE
+                    : assignment.getEntryAddressMode().trim().toUpperCase(Locale.ROOT);
+            tunnelDto.setEntryAddressMode(mode);
+            tunnelDto.setEntryDomainId(assignment.getEntryDomainId());
+            String assignedDomain = tunnelEntryDomainService.resolveAssignedDomain(assignment);
+            if (StringUtils.isNotBlank(assignedDomain)) {
+                tunnelDto.setEntryDomain(assignedDomain);
+                tunnelDto.setIp(assignedDomain);
+            }
+        }
     }
 
     /**

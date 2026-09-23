@@ -18,8 +18,13 @@ import {
   deleteTunnel,
   getNodeList,
   diagnoseTunnel,
-  diagnoseTunnelForwards
+  diagnoseTunnelForwards,
+  getTunnelEntryDomains,
+  createTunnelEntryDomain,
+  setDefaultTunnelEntryDomain,
+  deleteTunnelEntryDomain
 } from "@/api";
+import type { TunnelEntryDomain } from "@/types";
 
 interface Tunnel {
   id: number;
@@ -53,6 +58,9 @@ interface TunnelForm {
   inNodeId: number | null;
   entryNodeIds: number[];
   entryDomain: string;
+  accessDomains: string[];
+  defaultAccessDomain: string;
+  accessDomainDraft: string;
   outNodeId?: number | null;
   protocol: string;
   tcpListenAddr: string;
@@ -119,6 +127,12 @@ export default function TunnelPage() {
   const [diagnosisResult, setDiagnosisResult] = useState<DiagnosisResult | null>(null);
   const [currentPingTunnel, setCurrentPingTunnel] = useState<Tunnel | null>(null);
   const [forwardPingResult, setForwardPingResult] = useState<TunnelForwardDiagnosisResult | null>(null);
+  const [entryDomainModalOpen, setEntryDomainModalOpen] = useState(false);
+  const [domainTunnel, setDomainTunnel] = useState<Tunnel | null>(null);
+  const [managedDomains, setManagedDomains] = useState<TunnelEntryDomain[]>([]);
+  const [managedDomainsLoading, setManagedDomainsLoading] = useState(false);
+  const [newManagedDomain, setNewManagedDomain] = useState('');
+  const [domainActionLoading, setDomainActionLoading] = useState(false);
   
   // 表单状态
   const [form, setForm] = useState<TunnelForm>({
@@ -127,6 +141,9 @@ export default function TunnelPage() {
     inNodeId: null,
     entryNodeIds: [],
     entryDomain: '',
+    accessDomains: [],
+    defaultAccessDomain: '',
+    accessDomainDraft: '',
     outNodeId: null,
     protocol: 'tls',
     tcpListenAddr: '[::]',
@@ -186,9 +203,16 @@ export default function TunnelPage() {
       newErrors.inNodeId = '请选择入口节点';
     }
 
+    const domainPattern = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i;
+    if (!isEdit && form.accessDomains.some(domain => !domainPattern.test(domain))) {
+      newErrors.accessDomains = '解析域名格式无效，例如 game.example.com';
+    }
+    if (!isEdit && form.defaultAccessDomain && !form.accessDomains.includes(form.defaultAccessDomain)) {
+      newErrors.accessDomains = '默认解析域名必须在已添加的域名中';
+    }
+
     if (!isEdit && form.entryNodeIds.length > 1) {
       const entryDomain = form.entryDomain.trim();
-      const domainPattern = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i;
       if (!domainPattern.test(entryDomain)) {
         newErrors.entryDomain = '请输入有效的对外访问域名，例如 game.example.com';
       }
@@ -232,6 +256,9 @@ export default function TunnelPage() {
       inNodeId: null,
       entryNodeIds: [],
       entryDomain: '',
+      accessDomains: [],
+      defaultAccessDomain: '',
+      accessDomainDraft: '',
       outNodeId: null,
       protocol: 'tls',
       tcpListenAddr: '[::]',
@@ -257,6 +284,9 @@ export default function TunnelPage() {
       // Existing tunnels keep their saved inIp unchanged during edit. The
       // domain field only participates when creating a new multi-ingress tunnel.
       entryDomain: '',
+      accessDomains: [],
+      defaultAccessDomain: '',
+      accessDomainDraft: '',
       outNodeId: tunnel.outNodeId || null,
       protocol: tunnel.protocol || 'tls',
       tcpListenAddr: tunnel.tcpListenAddr || '[::]',
@@ -308,13 +338,45 @@ export default function TunnelPage() {
     }));
   };
 
+  const addAccessDomainToForm = () => {
+    const domain = form.accessDomainDraft.trim().toLowerCase().replace(/\.+$/, '');
+    if (!domain) {
+      toast.error('请输入解析域名');
+      return;
+    }
+    if (form.accessDomains.some(item => item.toLowerCase() === domain)) {
+      toast.error('该解析域名已在列表中');
+      return;
+    }
+    setForm(prev => ({
+      ...prev,
+      accessDomains: [...prev.accessDomains, domain],
+      defaultAccessDomain: prev.defaultAccessDomain || domain,
+      accessDomainDraft: ''
+    }));
+  };
+
+  const removeAccessDomainFromForm = (domain: string) => {
+    setForm(prev => {
+      const accessDomains = prev.accessDomains.filter(item => item !== domain);
+      return {
+        ...prev,
+        accessDomains,
+        defaultAccessDomain: prev.defaultAccessDomain === domain ? (accessDomains[0] || '') : prev.defaultAccessDomain
+      };
+    });
+  };
+
   // 提交表单
   const handleSubmit = async () => {
     if (!validateForm()) return;
     
     setSubmitLoading(true);
     try {
-      const data = { ...form, inNodeId: form.entryNodeIds[0] };
+      const { accessDomainDraft, accessDomains, defaultAccessDomain, ...baseForm } = form;
+      const data = isEdit
+        ? { ...baseForm, inNodeId: form.entryNodeIds[0] }
+        : { ...baseForm, accessDomains, defaultAccessDomain, inNodeId: form.entryNodeIds[0] };
       
       const response = isEdit 
         ? await updateTunnel(data)
@@ -459,6 +521,101 @@ export default function TunnelPage() {
   const getEntryNodeNames = (tunnel: Tunnel): string => {
     const entryNodeIds = tunnel.entryNodeIds?.length ? tunnel.entryNodeIds : [tunnel.inNodeId];
     return entryNodeIds.map(getNodeName).join('、');
+  };
+
+  const loadManagedDomains = async (tunnelId: number) => {
+    setManagedDomainsLoading(true);
+    try {
+      const response = await getTunnelEntryDomains(tunnelId);
+      if (response.code === 0) {
+        setManagedDomains(response.data || []);
+      } else {
+        setManagedDomains([]);
+        toast.error(response.msg || '获取解析域名失败');
+      }
+    } catch (error) {
+      setManagedDomains([]);
+      toast.error('获取解析域名失败');
+    } finally {
+      setManagedDomainsLoading(false);
+    }
+  };
+
+  const handleManageEntryDomains = (tunnel: Tunnel) => {
+    setDomainTunnel(tunnel);
+    setManagedDomains([]);
+    setNewManagedDomain('');
+    setEntryDomainModalOpen(true);
+    loadManagedDomains(tunnel.id);
+  };
+
+  const handleCreateManagedDomain = async () => {
+    if (!domainTunnel) return;
+    const domain = newManagedDomain.trim();
+    if (!domain) {
+      toast.error('请输入解析域名');
+      return;
+    }
+    setDomainActionLoading(true);
+    try {
+      const response = await createTunnelEntryDomain({
+        tunnelId: domainTunnel.id,
+        domain,
+        defaultDomain: managedDomains.length === 0
+      });
+      if (response.code === 0) {
+        toast.success(managedDomains.length === 0 ? '已添加并设为默认解析域名' : '解析域名已添加');
+        setNewManagedDomain('');
+        await loadManagedDomains(domainTunnel.id);
+      } else {
+        toast.error(response.msg || '添加解析域名失败');
+      }
+    } catch (error) {
+      toast.error('添加解析域名失败');
+    } finally {
+      setDomainActionLoading(false);
+    }
+  };
+
+  const handleSetDefaultManagedDomain = async (domain: TunnelEntryDomain) => {
+    if (!domainTunnel || domain.defaultDomain) return;
+    setDomainActionLoading(true);
+    try {
+      const response = await setDefaultTunnelEntryDomain(domain.id);
+      if (response.code === 0) {
+        toast.success('默认解析域名已更新');
+        await loadManagedDomains(domainTunnel.id);
+      } else {
+        toast.error(response.msg || '设置默认解析域名失败');
+      }
+    } catch (error) {
+      toast.error('设置默认解析域名失败');
+    } finally {
+      setDomainActionLoading(false);
+    }
+  };
+
+  const handleDeleteManagedDomain = async (domain: TunnelEntryDomain) => {
+    if (!domainTunnel) return;
+    const confirmed = window.confirm(
+      `删除解析域名“${domain.domain}”？\n\n若它已分配给用户，系统会阻止删除，需先在用户权限中重新分配入口。`
+    );
+    if (!confirmed) return;
+
+    setDomainActionLoading(true);
+    try {
+      const response = await deleteTunnelEntryDomain(domain.id);
+      if (response.code === 0) {
+        toast.success('解析域名已删除');
+        await loadManagedDomains(domainTunnel.id);
+      } else {
+        toast.error(response.msg || '删除解析域名失败');
+      }
+    } catch (error) {
+      toast.error('删除解析域名失败');
+    } finally {
+      setDomainActionLoading(false);
+    }
   };
 
   // 获取状态显示
@@ -631,7 +788,22 @@ export default function TunnelPage() {
 
                     </div>
                     
-                    <div className="flex gap-1.5 mt-3">
+                    <div className="grid grid-cols-2 gap-1.5 mt-3">
+                      <Button
+                        size="sm"
+                        variant="flat"
+                        color="secondary"
+                        onPress={() => handleManageEntryDomains(tunnel)}
+                        className="min-h-8"
+                        startContent={
+                          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M3 10l9-7 9 7v10a1 1 0 01-1 1H4a1 1 0 01-1-1V10z" />
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M9 21v-6h6v6" />
+                          </svg>
+                        }
+                      >
+                        解析域名
+                      </Button>
                       <Button
                         size="sm"
                         variant="flat"
@@ -857,6 +1029,63 @@ export default function TunnelPage() {
                       />
                     )}
 
+                    {!isEdit && (
+                      <div className="rounded-lg border border-divider bg-default-50/60 p-3 space-y-3">
+                        <div>
+                          <p className="text-sm font-medium">供用户分配的解析域名</p>
+                          <p className="text-xs text-default-500 mt-1">
+                            可添加多个已自行解析的域名。它们仅用于给不同用户显示不同入口，不会创建 DNS/DDNS 记录，也不会改动节点配置。
+                          </p>
+                        </div>
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+                          <Input
+                            label="解析域名"
+                            placeholder="user-a.example.com"
+                            value={form.accessDomainDraft}
+                            onChange={(event) => setForm(prev => ({ ...prev, accessDomainDraft: event.target.value }))}
+                            isInvalid={!!errors.accessDomains}
+                            errorMessage={errors.accessDomains}
+                            variant="bordered"
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter') {
+                                event.preventDefault();
+                                addAccessDomainToForm();
+                              }
+                            }}
+                          />
+                          <Button color="secondary" variant="flat" onPress={addAccessDomainToForm}>
+                            添加域名
+                          </Button>
+                        </div>
+                        {form.accessDomains.length > 0 ? (
+                          <div className="space-y-2">
+                            {form.accessDomains.map(domain => (
+                              <div key={domain} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-divider bg-content1 px-2 py-2">
+                                <div className="flex min-w-0 items-center gap-2">
+                                  <code className="truncate text-xs">{domain}</code>
+                                  {form.defaultAccessDomain === domain && (
+                                    <Chip size="sm" color="primary" variant="flat">默认</Chip>
+                                  )}
+                                </div>
+                                <div className="flex items-center gap-1">
+                                  {form.defaultAccessDomain !== domain && (
+                                    <Button size="sm" variant="light" color="primary" onPress={() => setForm(prev => ({ ...prev, defaultAccessDomain: domain }))}>
+                                      设为默认
+                                    </Button>
+                                  )}
+                                  <Button size="sm" variant="light" color="danger" onPress={() => removeAccessDomainFromForm(domain)}>
+                                    移除
+                                  </Button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="text-xs text-default-500">不添加也可以：用户将显示原始入口 IP/地址。</p>
+                        )}
+                      </div>
+                    )}
+
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <Input
                         label="TCP监听地址"
@@ -1012,6 +1241,108 @@ export default function TunnelPage() {
                   >
                     {submitLoading ? (isEdit ? '更新中...' : '创建中...') : (isEdit ? '更新' : '创建')}
                   </Button>
+                </ModalFooter>
+              </>
+            )}
+          </ModalContent>
+        </Modal>
+
+        {/* 隧道解析域名池：独立于 DDNS，仅控制用户可见入口地址。 */}
+        <Modal
+          isOpen={entryDomainModalOpen}
+          onOpenChange={setEntryDomainModalOpen}
+          size="2xl"
+          scrollBehavior="outside"
+          backdrop="blur"
+          placement="center"
+        >
+          <ModalContent>
+            {(onClose) => (
+              <>
+                <ModalHeader className="flex flex-col gap-1">
+                  <h2 className="text-xl font-bold">解析域名池</h2>
+                  <p className="text-small text-default-500">
+                    {domainTunnel?.name || '隧道'} · 仅用于用户入口分配，不会改动 DDNS、DNS 记录、节点或 GOST。
+                  </p>
+                </ModalHeader>
+                <ModalBody>
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+                    <Input
+                      label="添加已解析的域名"
+                      placeholder="user-a.example.com"
+                      value={newManagedDomain}
+                      onChange={(event) => setNewManagedDomain(event.target.value)}
+                      variant="bordered"
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                          event.preventDefault();
+                          handleCreateManagedDomain();
+                        }
+                      }}
+                    />
+                    <Button
+                      color="primary"
+                      onPress={handleCreateManagedDomain}
+                      isLoading={domainActionLoading}
+                      isDisabled={!domainTunnel}
+                    >
+                      添加
+                    </Button>
+                  </div>
+
+                  <p className="text-xs text-default-500">
+                    首个域名会自动成为默认域名。删除已分配的域名时，系统会要求先在用户权限中重新分配入口。
+                  </p>
+
+                  {managedDomainsLoading ? (
+                    <div className="flex items-center justify-center py-10">
+                      <Spinner size="sm" />
+                    </div>
+                  ) : managedDomains.length > 0 ? (
+                    <div className="space-y-2 py-1">
+                      {managedDomains.map(domain => (
+                        <div key={domain.id} className="flex flex-col gap-2 rounded-lg border border-divider p-3 sm:flex-row sm:items-center sm:justify-between">
+                          <div className="min-w-0">
+                            <code className="block truncate text-sm text-foreground">{domain.domain}</code>
+                            {domain.defaultDomain ? (
+                              <Chip size="sm" color="primary" variant="flat" className="mt-1">默认解析域名</Chip>
+                            ) : (
+                              <span className="text-xs text-default-500">可指定给单独用户</span>
+                            )}
+                          </div>
+                          <div className="flex shrink-0 items-center gap-2">
+                            {!domain.defaultDomain && (
+                              <Button
+                                size="sm"
+                                variant="flat"
+                                color="primary"
+                                onPress={() => handleSetDefaultManagedDomain(domain)}
+                                isDisabled={domainActionLoading}
+                              >
+                                设为默认
+                              </Button>
+                            )}
+                            <Button
+                              size="sm"
+                              variant="flat"
+                              color="danger"
+                              onPress={() => handleDeleteManagedDomain(domain)}
+                              isDisabled={domainActionLoading}
+                            >
+                              删除
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="rounded-lg border border-dashed border-divider py-10 text-center text-sm text-default-500">
+                      暂无解析域名。用户当前会看到隧道的原始入口地址。
+                    </div>
+                  )}
+                </ModalBody>
+                <ModalFooter>
+                  <Button variant="light" onPress={onClose}>关闭</Button>
                 </ModalFooter>
               </>
             )}

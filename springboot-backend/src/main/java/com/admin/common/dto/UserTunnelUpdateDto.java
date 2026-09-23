@@ -37,4 +37,12 @@ public class UserTunnelUpdateDto {
      * 限速规则ID（可选，null表示不限速）
      */
     private Integer speedId;
-} 
+
+    /**
+     * Optional on update for backwards compatibility. When supplied it must
+     * be NONE, DEFAULT, or CUSTOM and is validated against the tunnel pool.
+     */
+    private String entryAddressMode;
+
+    private Long entryDomainId;
+}

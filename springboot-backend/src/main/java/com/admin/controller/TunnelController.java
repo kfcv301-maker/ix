@@ -3,6 +3,9 @@ package com.admin.controller;
 import com.admin.common.aop.LogAnnotation;
 import com.admin.common.annotation.RequireRole;
 import com.admin.common.dto.TunnelDto;
+import com.admin.common.dto.TunnelEntryDomainDto;
+import com.admin.common.dto.TunnelEntryDomainIdDto;
+import com.admin.common.dto.TunnelEntryDomainQueryDto;
 import com.admin.common.dto.TunnelUpdateDto;
 
 import com.admin.common.dto.UserTunnelDto;
@@ -10,6 +13,7 @@ import com.admin.common.dto.UserTunnelQueryDto;
 import com.admin.common.dto.UserTunnelUpdateDto;
 import com.admin.common.lang.R;
 import com.admin.service.TunnelService;
+import com.admin.service.TunnelEntryDomainService;
 import com.admin.service.UserTunnelService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.validation.annotation.Validated;
@@ -35,6 +39,9 @@ public class TunnelController extends BaseController {
     
     @Autowired
     private UserTunnelService userTunnelService;
+
+    @Autowired
+    private TunnelEntryDomainService tunnelEntryDomainService;
 
     @LogAnnotation
     @RequireRole
@@ -63,6 +70,36 @@ public class TunnelController extends BaseController {
     public R delete(@RequestBody Map<String, Object> params) {
         Long id = Long.valueOf(params.get("id").toString());
         return tunnelService.deleteTunnel(id);
+    }
+
+    // ============ 隧道解析域名池（仅面板显示与分配，不修改 DDNS） ============
+
+    @LogAnnotation
+    @RequireRole
+    @PostMapping("/domain/list")
+    public R getEntryDomains(@Validated @RequestBody TunnelEntryDomainQueryDto queryDto) {
+        return tunnelEntryDomainService.getTunnelEntryDomains(queryDto.getTunnelId());
+    }
+
+    @LogAnnotation
+    @RequireRole
+    @PostMapping("/domain/create")
+    public R createEntryDomain(@Validated @RequestBody TunnelEntryDomainDto dto) {
+        return tunnelEntryDomainService.createTunnelEntryDomain(dto);
+    }
+
+    @LogAnnotation
+    @RequireRole
+    @PostMapping("/domain/set-default")
+    public R setDefaultEntryDomain(@Validated @RequestBody TunnelEntryDomainIdDto dto) {
+        return tunnelEntryDomainService.setDefaultTunnelEntryDomain(dto.getId());
+    }
+
+    @LogAnnotation
+    @RequireRole
+    @PostMapping("/domain/delete")
+    public R deleteEntryDomain(@Validated @RequestBody TunnelEntryDomainIdDto dto) {
+        return tunnelEntryDomainService.deleteTunnelEntryDomain(dto.getId());
     }
 
     // ============ 用户隧道权限管理相关方法 ============

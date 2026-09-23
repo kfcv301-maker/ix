@@ -16,16 +16,32 @@
             ut.exp_time as expTime,
             ut.speed_id as speedId,
             ut.status as status,
+            ut.entry_address_mode as entryAddressMode,
+            ut.entry_domain_id as entryDomainId,
             t.name as tunnelName,
             t.flow as tunnelFlow,
             t.in_ip as inIp,
+            t.in_ip as originalEntryAddress,
             t.out_ip as outIp,
             t.type,
             t.protocol,
+            CASE
+                WHEN ut.entry_address_mode = 'CUSTOM' THEN selected_domain.domain
+                WHEN ut.entry_address_mode = 'DEFAULT' THEN default_domain.domain
+                ELSE NULL
+            END as entryDomain,
             sl.name as speedLimitName,
             sl.speed
         FROM user_tunnel ut
         LEFT JOIN tunnel t ON ut.tunnel_id = t.id
+        LEFT JOIN tunnel_entry_domain selected_domain
+            ON selected_domain.id = ut.entry_domain_id
+            AND selected_domain.tunnel_id = ut.tunnel_id
+            AND selected_domain.status = 1
+        LEFT JOIN tunnel_entry_domain default_domain
+            ON default_domain.tunnel_id = ut.tunnel_id
+            AND default_domain.is_default = 1
+            AND default_domain.status = 1
         LEFT JOIN speed_limit sl ON ut.speed_id = sl.id
         WHERE ut.user_id = #{userId}
         ORDER BY ut.id

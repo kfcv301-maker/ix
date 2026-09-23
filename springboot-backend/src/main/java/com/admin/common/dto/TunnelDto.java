@@ -37,6 +37,15 @@ public class TunnelDto {
      */
     private String entryDomain;
 
+    /**
+     * Optional per-tunnel domain pool. These are only panel display addresses;
+     * DNS/DDNS records and node configuration are intentionally untouched.
+     */
+    private List<String> accessDomains;
+
+    /** One item from accessDomains. When omitted, the first domain is default. */
+    private String defaultAccessDomain;
+
     // 出口节点ID，当type=1时可以为空，会自动设置为入口节点ID
     private Long outNodeId;
     

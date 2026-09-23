@@ -47,6 +47,10 @@ export interface UserTunnel {
   inFlow?: number; // 下载流量(字节)
   outFlow?: number; // 上传流量(字节)
   tunnelFlow?: number; // 隧道流量计算类型(1-单向, 2-双向)
+  entryAddressMode?: 'NONE' | 'DEFAULT' | 'CUSTOM';
+  entryDomainId?: number | null;
+  entryDomain?: string | null;
+  originalEntryAddress?: string | null;
 }
 
 export interface UserTunnelForm {
@@ -56,6 +60,15 @@ export interface UserTunnelForm {
   expTime: Date | null;
   flowResetTime: number;
   speedId: number | null;
+  entryAddressMode: 'NONE' | 'DEFAULT' | 'CUSTOM';
+  entryDomainId: number | null;
+}
+
+export interface TunnelEntryDomain {
+  id: number;
+  tunnelId: number;
+  domain: string;
+  defaultDomain: boolean;
 }
 
 export interface Tunnel {

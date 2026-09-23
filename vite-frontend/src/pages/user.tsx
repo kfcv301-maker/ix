@@ -32,6 +32,7 @@ import {
   UserTunnel, 
   UserTunnelForm, 
   Tunnel, 
+  TunnelEntryDomain,
   SpeedLimit, 
   Pagination as PaginationType 
 } from '@/types';
@@ -46,6 +47,7 @@ import {
   removeUserTunnel,
   updateUserTunnel,
   getSpeedLimitList,
+  getTunnelEntryDomains,
   resetUserFlow
 } from '@/api';
 import { SearchIcon, EditIcon, DeleteIcon, UserIcon, SettingsIcon } from '@/components/icons';
@@ -140,14 +142,20 @@ export default function UserPage() {
     num: 10,
     expTime: null,
     flowResetTime: 0,
-    speedId: null
+    speedId: null,
+    entryAddressMode: 'NONE',
+    entryDomainId: null
   });
   const [assignLoading, setAssignLoading] = useState(false);
+  const [assignEntryDomains, setAssignEntryDomains] = useState<TunnelEntryDomain[]>([]);
+  const [assignEntryDomainsLoading, setAssignEntryDomainsLoading] = useState(false);
 
   // 编辑隧道权限相关状态
   const { isOpen: isEditTunnelModalOpen, onOpen: onEditTunnelModalOpen, onClose: onEditTunnelModalClose } = useDisclosure();
   const [editTunnelForm, setEditTunnelForm] = useState<UserTunnel | null>(null);
   const [editTunnelLoading, setEditTunnelLoading] = useState(false);
+  const [editEntryDomains, setEditEntryDomains] = useState<TunnelEntryDomain[]>([]);
+  const [editEntryDomainsLoading, setEditEntryDomainsLoading] = useState(false);
 
   // 删除确认相关状态
   const { isOpen: isDeleteModalOpen, onOpen: onDeleteModalOpen, onClose: onDeleteModalClose } = useDisclosure();
@@ -236,6 +244,42 @@ export default function UserPage() {
       toast.error('获取隧道权限列表失败');
     } finally {
       setTunnelListLoading(false);
+    }
+  };
+
+  const loadAssignEntryDomains = async (tunnelId: number) => {
+    setAssignEntryDomainsLoading(true);
+    try {
+      const response = await getTunnelEntryDomains(tunnelId);
+      if (response.code === 0) {
+        setAssignEntryDomains(response.data || []);
+      } else {
+        setAssignEntryDomains([]);
+        toast.error(response.msg || '获取解析域名失败');
+      }
+    } catch (error) {
+      setAssignEntryDomains([]);
+      toast.error('获取解析域名失败');
+    } finally {
+      setAssignEntryDomainsLoading(false);
+    }
+  };
+
+  const loadEditEntryDomains = async (tunnelId: number) => {
+    setEditEntryDomainsLoading(true);
+    try {
+      const response = await getTunnelEntryDomains(tunnelId);
+      if (response.code === 0) {
+        setEditEntryDomains(response.data || []);
+      } else {
+        setEditEntryDomains([]);
+        toast.error(response.msg || '获取解析域名失败');
+      }
+    } catch (error) {
+      setEditEntryDomains([]);
+      toast.error('获取解析域名失败');
+    } finally {
+      setEditEntryDomainsLoading(false);
     }
   };
 
@@ -340,8 +384,11 @@ export default function UserPage() {
       num: 10,
       expTime: null,
       flowResetTime: 0,
-      speedId: null
+      speedId: null,
+      entryAddressMode: 'NONE',
+      entryDomainId: null
     });
+    setAssignEntryDomains([]);
     onTunnelModalOpen();
     loadUserTunnels(user.id);
   };
@@ -361,7 +408,9 @@ export default function UserPage() {
         num: tunnelForm.num,
         expTime: tunnelForm.expTime.getTime(),
         flowResetTime: tunnelForm.flowResetTime,
-        speedId: tunnelForm.speedId
+        speedId: tunnelForm.speedId,
+        entryAddressMode: tunnelForm.entryAddressMode,
+        entryDomainId: tunnelForm.entryDomainId
       });
 
       if (response.code === 0) {
@@ -372,8 +421,11 @@ export default function UserPage() {
           num: 10,
           expTime: null,
           flowResetTime: 0,
-          speedId: null
+          speedId: null,
+          entryAddressMode: 'NONE',
+          entryDomainId: null
         });
+        setAssignEntryDomains([]);
         loadUserTunnels(currentUser.id);
       } else {
         toast.error(response.msg || '分配失败');
@@ -388,8 +440,12 @@ export default function UserPage() {
   const handleEditTunnel = (userTunnel: UserTunnel) => {
     setEditTunnelForm({
       ...userTunnel,
-      expTime: userTunnel.expTime
+      expTime: userTunnel.expTime,
+      entryAddressMode: userTunnel.entryAddressMode || 'NONE',
+      entryDomainId: userTunnel.entryDomainId ?? null
     });
+    setEditEntryDomains([]);
+    loadEditEntryDomains(userTunnel.tunnelId);
     onEditTunnelModalOpen();
   };
 
@@ -405,7 +461,9 @@ export default function UserPage() {
         expTime: editTunnelForm.expTime,
         flowResetTime: editTunnelForm.flowResetTime,
         speedId: editTunnelForm.speedId,
-        status: editTunnelForm.status
+        status: editTunnelForm.status,
+        entryAddressMode: editTunnelForm.entryAddressMode || 'NONE',
+        entryDomainId: editTunnelForm.entryDomainId ?? null
       });
 
       if (response.code === 0) {
@@ -525,6 +583,16 @@ export default function UserPage() {
   const editAvailableSpeedLimits = speedLimits.filter(
     speedLimit => speedLimit.tunnelId === editTunnelForm?.tunnelId
   );
+
+  const getEntryAddressLabel = (userTunnel: UserTunnel) => {
+    if (userTunnel.entryAddressMode === 'DEFAULT') {
+      return userTunnel.entryDomain ? `默认：${userTunnel.entryDomain}` : '默认解析域名';
+    }
+    if (userTunnel.entryAddressMode === 'CUSTOM') {
+      return userTunnel.entryDomain ? `指定：${userTunnel.entryDomain}` : '指定解析域名';
+    }
+    return userTunnel.originalEntryAddress ? `原始：${userTunnel.originalEntryAddress}` : '原始入口';
+  };
 
   return (
     
@@ -884,7 +952,18 @@ export default function UserPage() {
                       selectedKeys={tunnelForm.tunnelId ? [tunnelForm.tunnelId.toString()] : []}
                       onSelectionChange={(keys) => {
                         const value = Array.from(keys)[0] as string;
-                        setTunnelForm(prev => ({ ...prev, tunnelId: Number(value) || null, speedId: null }));
+                        const tunnelId = Number(value) || null;
+                        setTunnelForm(prev => ({
+                          ...prev,
+                          tunnelId,
+                          speedId: null,
+                          entryAddressMode: 'NONE',
+                          entryDomainId: null
+                        }));
+                        setAssignEntryDomains([]);
+                        if (tunnelId) {
+                          loadAssignEntryDomains(tunnelId);
+                        }
                       }}
                     >
                       {availableTunnels.map(tunnel => (
@@ -972,7 +1051,55 @@ export default function UserPage() {
                       className="cursor-pointer"
                     />
                   </div>
-                  
+
+                  <div className="rounded-lg border border-divider bg-default-50/60 p-3 space-y-3">
+                    <div>
+                      <p className="text-sm font-medium">用户可见入口地址</p>
+                      <p className="text-xs text-default-500 mt-1">
+                        仅影响该用户在转发页看到、复制的入口地址；不会修改 DDNS、节点或转发规则。
+                      </p>
+                    </div>
+                    <RadioGroup
+                      value={tunnelForm.entryAddressMode}
+                      onValueChange={(value) => setTunnelForm(prev => ({
+                        ...prev,
+                        entryAddressMode: value as UserTunnelForm['entryAddressMode'],
+                        entryDomainId: value === 'CUSTOM' ? prev.entryDomainId : null
+                      }))}
+                      isDisabled={!tunnelForm.tunnelId || assignEntryDomainsLoading}
+                      classNames={{ wrapper: 'gap-2' }}
+                    >
+                      <Radio value="NONE">不分配解析域名（显示原始入口）</Radio>
+                      <Radio value="DEFAULT" isDisabled={!assignEntryDomains.some(domain => domain.defaultDomain)}>
+                        使用默认解析域名{assignEntryDomains.find(domain => domain.defaultDomain)?.domain
+                          ? `：${assignEntryDomains.find(domain => domain.defaultDomain)?.domain}`
+                          : ''}
+                      </Radio>
+                      <Radio value="CUSTOM" isDisabled={assignEntryDomains.length === 0}>指定解析域名</Radio>
+                    </RadioGroup>
+                    {tunnelForm.entryAddressMode === 'CUSTOM' && (
+                      <Select
+                        label="为该用户指定解析域名"
+                        placeholder={assignEntryDomainsLoading ? '正在加载域名…' : '请选择解析域名'}
+                        selectedKeys={tunnelForm.entryDomainId ? [tunnelForm.entryDomainId.toString()] : []}
+                        onSelectionChange={(keys) => {
+                          const value = Array.from(keys)[0] as string;
+                          setTunnelForm(prev => ({ ...prev, entryDomainId: Number(value) || null }));
+                        }}
+                        isDisabled={assignEntryDomainsLoading || assignEntryDomains.length === 0}
+                      >
+                        {assignEntryDomains.map(domain => (
+                          <SelectItem key={domain.id.toString()} textValue={domain.domain}>
+                            {domain.domain}{domain.defaultDomain ? '（默认）' : ''}
+                          </SelectItem>
+                        ))}
+                      </Select>
+                    )}
+                    {tunnelForm.tunnelId && !assignEntryDomainsLoading && assignEntryDomains.length === 0 && (
+                      <p className="text-xs text-warning">该隧道还没有解析域名；目前只能给用户显示原始入口。</p>
+                    )}
+                  </div>
+
                   <Button
                     color="primary"
                     onPress={handleAssignTunnel}
@@ -995,6 +1122,7 @@ export default function UserPage() {
                 >
                   <TableHeader>
                     <TableColumn>隧道名称</TableColumn>
+                    <TableColumn>用户入口</TableColumn>
                     <TableColumn>流量统计</TableColumn>
                     <TableColumn>转发数量</TableColumn>
                     <TableColumn>状态</TableColumn>
@@ -1012,6 +1140,15 @@ export default function UserPage() {
                     {(userTunnel) => (
                       <TableRow key={userTunnel.id}>
                         <TableCell>{userTunnel.tunnelName}</TableCell>
+                        <TableCell>
+                          <Chip
+                            size="sm"
+                            variant="flat"
+                            color={userTunnel.entryAddressMode === 'NONE' || !userTunnel.entryAddressMode ? 'default' : 'primary'}
+                          >
+                            {getEntryAddressLabel(userTunnel)}
+                          </Chip>
+                        </TableCell>
                         <TableCell>
                           <div className="flex flex-col gap-1">
                             <div className="flex justify-between text-small">
@@ -1191,6 +1328,54 @@ export default function UserPage() {
                     className="cursor-pointer"
                     isRequired
                   />
+                </div>
+
+                <div className="rounded-lg border border-divider bg-default-50/60 p-3 space-y-3 mt-4">
+                  <div>
+                    <p className="text-sm font-medium">用户可见入口地址</p>
+                    <p className="text-xs text-default-500 mt-1">
+                      修改后，用户只会在自己的转发页看到所选地址；现有转发规则与 DDNS 不变。
+                    </p>
+                  </div>
+                  <RadioGroup
+                    value={editTunnelForm.entryAddressMode || 'NONE'}
+                    onValueChange={(value) => setEditTunnelForm(prev => prev ? ({
+                      ...prev,
+                      entryAddressMode: value as UserTunnelForm['entryAddressMode'],
+                      entryDomainId: value === 'CUSTOM' ? prev.entryDomainId ?? null : null
+                    }) : null)}
+                    isDisabled={editEntryDomainsLoading}
+                    classNames={{ wrapper: 'gap-2' }}
+                  >
+                    <Radio value="NONE">不分配解析域名（显示原始入口）</Radio>
+                    <Radio value="DEFAULT" isDisabled={!editEntryDomains.some(domain => domain.defaultDomain)}>
+                      使用默认解析域名{editEntryDomains.find(domain => domain.defaultDomain)?.domain
+                        ? `：${editEntryDomains.find(domain => domain.defaultDomain)?.domain}`
+                        : ''}
+                    </Radio>
+                    <Radio value="CUSTOM" isDisabled={editEntryDomains.length === 0}>指定解析域名</Radio>
+                  </RadioGroup>
+                  {(editTunnelForm.entryAddressMode || 'NONE') === 'CUSTOM' && (
+                    <Select
+                      label="为该用户指定解析域名"
+                      placeholder={editEntryDomainsLoading ? '正在加载域名…' : '请选择解析域名'}
+                      selectedKeys={editTunnelForm.entryDomainId ? [editTunnelForm.entryDomainId.toString()] : []}
+                      onSelectionChange={(keys) => {
+                        const value = Array.from(keys)[0] as string;
+                        setEditTunnelForm(prev => prev ? { ...prev, entryDomainId: Number(value) || null } : null);
+                      }}
+                      isDisabled={editEntryDomainsLoading || editEntryDomains.length === 0}
+                    >
+                      {editEntryDomains.map(domain => (
+                        <SelectItem key={domain.id.toString()} textValue={domain.domain}>
+                          {domain.domain}{domain.defaultDomain ? '（默认）' : ''}
+                        </SelectItem>
+                      ))}
+                    </Select>
+                  )}
+                  {!editEntryDomainsLoading && editEntryDomains.length === 0 && (
+                    <p className="text-xs text-warning">该隧道没有解析域名；可保留或改为原始入口。</p>
+                  )}
                 </div>
                 
                 <RadioGroup
@@ -1450,4 +1635,4 @@ export default function UserPage() {
       </div>
     
   );
-} 
+}

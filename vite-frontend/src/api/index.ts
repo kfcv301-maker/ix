@@ -23,6 +23,17 @@ export const updateUser = (data: any) => Network.post("/user/update", data);
 export const deleteUser = (id: number) => Network.post("/user/delete", { id });
 export const getUserPackageInfo = () => Network.post("/user/package");
 
+// VPS 托管：后端按当前登录用户的归属与分配权限过滤数据。
+export const getVpsHosts = () => Network.post("/vps/list");
+export const createVpsHost = (data: any) => Network.post("/vps/create", data);
+export const updateVpsHost = (data: any) => Network.post("/vps/update", data);
+export const deleteVpsHost = (id: number) => Network.post("/vps/delete", { id });
+export const checkVpsHost = (id: number) => Network.post("/vps/check", { id });
+export const resetVpsHostFingerprint = (id: number) => Network.post("/vps/reset-fingerprint", { id });
+export const getVpsAssignableUsers = () => Network.post("/vps/assignable-users");
+export const deployVpsTemplate = (id: number, taskType: 'docker' | 'flux_panel') => Network.post("/vps/deploy", { id, taskType });
+export const getVpsDeploymentTasks = (id: number) => Network.post("/vps/tasks", { id });
+
 // 节点CRUD操作 - 全部使用POST请求
 export const createNode = (data: any) => Network.post("/node/create", data);
 export const getNodeList = () => Network.post("/node/list");
@@ -54,6 +65,13 @@ export const updateTunnel = (data: any) => Network.post("/tunnel/update", data);
 export const deleteTunnel = (id: number) => Network.post("/tunnel/delete", { id });
 export const diagnoseTunnel = (tunnelId: number) => Network.post("/tunnel/diagnose", { tunnelId });
 export const diagnoseTunnelForwards = (tunnelId: number) => Network.post("/tunnel/diagnose-forwards", { tunnelId });
+
+// 隧道解析域名池：仅管理用户可见入口地址，不会修改 DDNS 或节点配置。
+export const getTunnelEntryDomains = (tunnelId: number) => Network.post("/tunnel/domain/list", { tunnelId });
+export const createTunnelEntryDomain = (data: { tunnelId: number; domain: string; defaultDomain?: boolean }) =>
+  Network.post("/tunnel/domain/create", data);
+export const setDefaultTunnelEntryDomain = (id: number) => Network.post("/tunnel/domain/set-default", { id });
+export const deleteTunnelEntryDomain = (id: number) => Network.post("/tunnel/domain/delete", { id });
 
 // 用户隧道权限管理操作 - 全部使用POST请求
 export const assignUserTunnel = (data: any) => Network.post("/tunnel/user/assign", data);

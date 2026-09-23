@@ -13,6 +13,17 @@ public class TunnelListDto {
      * 入口IP
      */
     private String ip;
+
+    /** The original tunnel ingress, retained when a user receives a domain. */
+    private String originalIp;
+
+    /** A normal user only receives their own NONE / DEFAULT / CUSTOM choice. */
+    private String entryAddressMode;
+
+    private Long entryDomainId;
+
+    /** The effective assigned domain; null means the raw ingress is used. */
+    private String entryDomain;
     
     /**
      * 入口节点端口起始范围

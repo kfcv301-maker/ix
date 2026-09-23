@@ -37,4 +37,10 @@ public class UserTunnelDto {
      * 限速规则ID（可选，null表示不限速）
      */
     private Integer speedId;
-} 
+
+    /** NONE / DEFAULT / CUSTOM. Omitted values remain compatible as NONE. */
+    private String entryAddressMode;
+
+    /** Required only when entryAddressMode is CUSTOM. */
+    private Long entryDomainId;
+}

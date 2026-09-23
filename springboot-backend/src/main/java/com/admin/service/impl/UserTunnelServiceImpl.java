@@ -12,6 +12,7 @@ import com.admin.service.TunnelService;
 import com.admin.service.UserTunnelService;
 import com.admin.service.ForwardService;
 import com.admin.service.NodeService;
+import com.admin.service.TunnelEntryDomainService;
 import com.admin.common.utils.GostUtil;
 import com.admin.entity.Forward;
 import com.admin.entity.Tunnel;
@@ -24,10 +25,12 @@ import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
+import org.apache.commons.lang3.StringUtils;
 
 import javax.annotation.Resource;
 import java.util.List;
 import java.util.Map;
+import java.util.Locale;
 
 /**
  * <p>
@@ -71,6 +74,9 @@ public class UserTunnelServiceImpl extends ServiceImpl<UserTunnelMapper, UserTun
     @Autowired
     private NodeService nodeService;
 
+    @Autowired
+    private TunnelEntryDomainService tunnelEntryDomainService;
+
     // ========== 公共接口实现 ==========
 
     /**
@@ -87,8 +93,18 @@ public class UserTunnelServiceImpl extends ServiceImpl<UserTunnelMapper, UserTun
             return R.err(ERROR_PERMISSION_EXISTS);
         }
         
-        // 2. 创建用户隧道权限实体并保存
+        // 2. 创建用户隧道权限实体并验证其可见入口地址。
+        // This only changes panel display/authorization data; forwarding and
+        // node-side configuration are deliberately not touched.
         UserTunnel userTunnel = buildUserTunnelEntity(userTunnelDto);
+        R entryAddressResult = applyEntryAddressAssignment(
+                userTunnel,
+                userTunnelDto.getTunnelId(),
+                userTunnelDto.getEntryAddressMode(),
+                userTunnelDto.getEntryDomainId());
+        if (entryAddressResult.getCode() != 0) {
+            return entryAddressResult;
+        }
         // 设置默认状态为启用
         userTunnel.setStatus(1);
         boolean success = this.save(userTunnel);
@@ -155,6 +171,19 @@ public class UserTunnelServiceImpl extends ServiceImpl<UserTunnelMapper, UserTun
         if (existingUserTunnel == null) {
             return R.err(ERROR_USER_TUNNEL_NOT_EXISTS);
         }
+
+        // Older API clients may omit these two fields; in that case retain
+        // their existing entry selection instead of silently changing it.
+        if (StringUtils.isNotBlank(updateDto.getEntryAddressMode())) {
+            R entryAddressResult = applyEntryAddressAssignment(
+                    existingUserTunnel,
+                    existingUserTunnel.getTunnelId(),
+                    updateDto.getEntryAddressMode(),
+                    updateDto.getEntryDomainId());
+            if (entryAddressResult.getCode() != 0) {
+                return entryAddressResult;
+            }
+        }
         
         // 2. 检查是否更新了限速规则
         boolean speedChanged = hasSpeedChanged(existingUserTunnel.getSpeedId(), updateDto.getSpeedId());
@@ -203,6 +232,25 @@ public class UserTunnelServiceImpl extends ServiceImpl<UserTunnelMapper, UserTun
         UserTunnel userTunnel = new UserTunnel();
         BeanUtils.copyProperties(userTunnelDto, userTunnel);
         return userTunnel;
+    }
+
+    /**
+     * Normalizes the three allowed display choices and verifies that a custom
+     * or default domain belongs to the selected tunnel before persisting it.
+     */
+    private R applyEntryAddressAssignment(UserTunnel userTunnel, Integer tunnelId,
+                                          String requestedMode, Long requestedDomainId) {
+        String mode = StringUtils.isBlank(requestedMode)
+                ? TunnelEntryDomainService.ENTRY_ADDRESS_MODE_NONE
+                : requestedMode.trim().toUpperCase(Locale.ROOT);
+        R validation = tunnelEntryDomainService.validateUserEntryAssignment(tunnelId, mode, requestedDomainId);
+        if (validation.getCode() != 0) {
+            return validation;
+        }
+        userTunnel.setEntryAddressMode(mode);
+        userTunnel.setEntryDomainId(TunnelEntryDomainService.ENTRY_ADDRESS_MODE_CUSTOM.equals(mode)
+                ? requestedDomainId : null);
+        return R.ok();
     }
 
     /**

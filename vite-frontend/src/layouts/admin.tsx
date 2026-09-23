@@ -95,6 +95,16 @@ export default function AdminLayout({
       adminOnly: true
     },
     {
+      path: '/vps',
+      label: 'VPS 托管',
+      group: 'management',
+      icon: (
+        <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+          <path fillRule="evenodd" d="M3 4a1 1 0 011-1h14a1 1 0 011 1v8a1 1 0 01-1 1h-3v2h1a1 1 0 110 2H4a1 1 0 010-2h1v-2H2a1 1 0 01-1-1V4a1 1 0 011-1h2zm2 9v2h6v-2H5zm-2-8v6h14V5H3z" clipRule="evenodd" />
+        </svg>
+      )
+    },
+    {
       path: '/limit',
       label: '限速管理',
       group: 'management',
