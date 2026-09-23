@@ -173,6 +173,7 @@ CREATE TABLE `user` (
   `id` int(10) NOT NULL,
   `user` varchar(100) NOT NULL,
   `pwd` varchar(100) NOT NULL,
+  `token_version` int(10) NOT NULL DEFAULT '0',
   `role_id` int(10) NOT NULL,
   `exp_time` bigint(20) NOT NULL,
   `flow` bigint(20) NOT NULL,
@@ -189,8 +190,8 @@ CREATE TABLE `user` (
 -- 转存表中的数据 `user`
 --
 
-INSERT INTO `user` (`id`, `user`, `pwd`, `role_id`, `exp_time`, `flow`, `in_flow`, `out_flow`, `flow_reset_time`, `num`, `created_time`, `updated_time`, `status`) VALUES
-(1, 'admin_user', '3c85cdebade1c51cf64ca9f3c09d182d', 0, 2727251700000, 99999, 0, 0, 1, 99999, 1748914865000, 1754011744252, 1);
+INSERT INTO `user` (`id`, `user`, `pwd`, `token_version`, `role_id`, `exp_time`, `flow`, `in_flow`, `out_flow`, `flow_reset_time`, `num`, `created_time`, `updated_time`, `status`) VALUES
+(1, 'admin_user', '3c85cdebade1c51cf64ca9f3c09d182d', 0, 0, 2727251700000, 99999, 0, 0, 1, 99999, 1748914865000, 1754011744252, 1);
 
 -- --------------------------------------------------------
 

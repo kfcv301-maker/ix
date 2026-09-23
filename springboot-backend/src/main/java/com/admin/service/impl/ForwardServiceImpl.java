@@ -49,6 +49,7 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
     private static final int FORWARD_STATUS_PAUSED = 0;
     private static final int FORWARD_STATUS_ERROR = -1;
     private static final int TUNNEL_STATUS_ACTIVE = 1;
+    private static final int USER_STATUS_ACTIVE = 1;
 
     private static final long BYTES_TO_GB = 1024L * 1024L * 1024L;
 
@@ -159,63 +160,22 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
             return R.err("隧道已禁用，无法更新转发");
         }
         boolean tunnelChanged = isTunnelChanged(existForward, forwardUpdateDto);
-        // 4. 检查权限和限制
-        UserPermissionResult permissionResult = null;
-        if (tunnelChanged) {
-            if (currentUser.getRoleId() == ADMIN_ROLE_ID) {
-                // 管理员操作自己的转发时，不需要检查权限限制
-                if (Objects.equals(currentUser.getUserId(), existForward.getUserId())) {
-                    permissionResult = UserPermissionResult.success(null, null);
-                } else {
-                    // 管理员操作用户转发时，需要检查原用户是否有新隧道权限
-                    // 获取原转发用户的信息
-                    User originalUser = userService.getById(existForward.getUserId());
-                    if (originalUser == null) {
-                        return R.err("用户不存在");
-                    }
 
-                    // 检查原用户是否有新隧道权限
-                    UserTunnel userTunnel = getUserTunnel(existForward.getUserId(), tunnel.getId().intValue());
-                    if (userTunnel == null) {
-                        return R.err("用户没有该隧道权限");
-                    }
-
-                    if (userTunnel.getStatus() != 1) {
-                        return R.err("隧道被禁用");
-                    }
-
-                    // 检查隧道权限到期时间
-                    if (userTunnel.getExpTime() != null && userTunnel.getExpTime() <= System.currentTimeMillis()) {
-                        return R.err("用户的该隧道权限已到期");
-                    }
-
-                    // 检查原用户的流量和转发数量限制
-                    R quotaCheckResult = checkForwardQuota(existForward.getUserId(), tunnel.getId().intValue(), userTunnel, originalUser, forwardUpdateDto.getId());
-                    if (quotaCheckResult.getCode() != 0) {
-                        return R.err("用户" + quotaCheckResult.getMsg());
-                    }
-
-                    permissionResult = UserPermissionResult.success(userTunnel.getSpeedId(), userTunnel);
-                }
-            } else {
-                // 普通用户检查自己的权限
-                permissionResult = checkUserPermissions(currentUser, tunnel, forwardUpdateDto.getId());
-                if (permissionResult.isHasError()) {
-                    return R.err(permissionResult.getErrorMessage());
-                }
-            }
+        // 4. Every save recreates the GOST service, even when its tunnel does
+        // not change. Recheck the forward owner's effective permission on every
+        // edit so an expired, disabled or exhausted assignment cannot be
+        // revived by changing an unrelated field. The result also carries the
+        // speed limiter that must be preserved on an in-place update.
+        UserPermissionResult permissionResult = checkForwardOwnerPermissions(
+                currentUser, existForward, tunnel, forwardUpdateDto.getId());
+        if (permissionResult.isHasError()) {
+            return R.err(permissionResult.getErrorMessage());
         }
 
-        // 5. 获取UserTunnel（即使隧道未变化也需要获取，用于构建服务名称）
-        UserTunnel userTunnel = null;
-        if (currentUser.getRoleId() != ADMIN_ROLE_ID) {
-            userTunnel = getUserTunnel(currentUser.getUserId(), tunnel.getId().intValue());
-            if (userTunnel == null) {
-                return R.err("你没有该隧道权限");
-            }
-        } else {
-            // 管理员用户也需要获取UserTunnel（如果存在的话），用于构建正确的服务名称
-            // 通过forward记录获取原始的用户ID
+        // 5. Keep the existing service-name convention for administrator-owned
+        // forwards while using the validated assignment for regular users.
+        UserTunnel userTunnel = permissionResult.getUserTunnel();
+        if (userTunnel == null) {
             userTunnel = getUserTunnel(existForward.getUserId(), tunnel.getId().intValue());
         }
 
@@ -232,10 +192,11 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
         R gostResult;
         if (tunnelChanged) {
             // 隧道变化时：先删除原配置，再创建新配置
-            gostResult = updateGostServicesWithTunnelChange(existForward, updatedForward, tunnel, permissionResult != null ? permissionResult.getLimiter() : null, nodeInfo, userTunnel);
+            gostResult = updateGostServicesWithTunnelChange(existForward, updatedForward, tunnel,
+                    permissionResult.getLimiter(), nodeInfo, userTunnel);
         } else {
             // 隧道未变化时：直接更新配置
-            gostResult = updateGostServices(updatedForward, tunnel, permissionResult != null ? permissionResult.getLimiter() : null, nodeInfo, userTunnel);
+            gostResult = updateGostServices(updatedForward, tunnel, permissionResult.getLimiter(), nodeInfo, userTunnel);
         }
 
         if (gostResult.getCode() != 0) {
@@ -801,6 +762,27 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
     }
 
     /**
+     * Resolve the forward owner before an edit. Administrators may continue to
+     * manage their own infrastructure without an assignment, but an
+     * administrator editing somebody else's forward must be subject to exactly
+     * the same entitlement checks as that forward owner.
+     */
+    private UserPermissionResult checkForwardOwnerPermissions(UserInfo operator, Forward forward,
+                                                               Tunnel tunnel, Long excludeForwardId) {
+        if (operator.getRoleId() == ADMIN_ROLE_ID
+                && Objects.equals(operator.getUserId(), forward.getUserId())) {
+            return UserPermissionResult.success(null, null);
+        }
+
+        User owner = userService.getById(forward.getUserId());
+        if (owner == null) {
+            return UserPermissionResult.error("转发归属用户不存在");
+        }
+        return checkUserPermissions(new UserInfo(owner.getId().intValue(), owner.getRoleId(), owner.getUser()),
+                tunnel, excludeForwardId);
+    }
+
+    /**
      * 检查用户权限和限制
      */
     private UserPermissionResult checkUserPermissions(UserInfo currentUser, Tunnel tunnel, Long excludeForwardId) {
@@ -810,6 +792,12 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
 
         // 获取用户信息
         User userInfo = userService.getById(currentUser.getUserId());
+        if (userInfo == null) {
+            return UserPermissionResult.error("用户不存在");
+        }
+        if (!Objects.equals(userInfo.getStatus(), USER_STATUS_ACTIVE)) {
+            return UserPermissionResult.error("用户已到期或被禁用");
+        }
         if (userInfo.getExpTime() != null && userInfo.getExpTime() <= System.currentTimeMillis()) {
             return UserPermissionResult.error("当前账号已到期");
         }
@@ -829,11 +817,15 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
             return UserPermissionResult.error("该隧道权限已到期");
         }
 
-        // 流量限制检查
-        if (userInfo.getFlow() <= 0) {
+        // Flow is stored as a quota in GB and the used counters are stored in
+        // bytes. Checking only whether a quota was configured allowed an edit
+        // to restart a forward after its quota had already been consumed.
+        if (userInfo.getFlow() == null || userInfo.getFlow() <= 0
+                || userInfo.getFlow() * BYTES_TO_GB <= userInfo.getInFlow() + userInfo.getOutFlow()) {
             return UserPermissionResult.error("用户总流量已用完");
         }
-        if (userTunnel.getFlow() <= 0) {
+        if (userTunnel.getFlow() == null || userTunnel.getFlow() <= 0
+                || userTunnel.getFlow() * BYTES_TO_GB <= userTunnel.getInFlow() + userTunnel.getOutFlow()) {
             return UserPermissionResult.error("该隧道流量已用完");
         }
 
@@ -851,7 +843,11 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
      */
     private R checkForwardQuota(Integer userId, Integer tunnelId, UserTunnel userTunnel, User userInfo, Long excludeForwardId) {
         // 检查用户总转发数量限制
-        long userForwardCount = this.count(new QueryWrapper<Forward>().eq("user_id", userId));
+        QueryWrapper<Forward> userQuery = new QueryWrapper<Forward>().eq("user_id", userId);
+        if (excludeForwardId != null) {
+            userQuery.ne("id", excludeForwardId);
+        }
+        long userForwardCount = this.count(userQuery);
         if (userForwardCount >= userInfo.getNum()) {
             return R.err("用户总转发数量已达上限，当前限制：" + userInfo.getNum() + "个");
         }

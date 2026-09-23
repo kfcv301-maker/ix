@@ -3,8 +3,10 @@ package com.admin.common.task;
 import com.admin.common.utils.GostUtil;
 import com.admin.entity.Forward;
 import com.admin.entity.Tunnel;
+import com.admin.entity.TunnelEntryNode;
 import com.admin.entity.User;
 import com.admin.entity.UserTunnel;
+import com.admin.mapper.TunnelEntryNodeMapper;
 import com.admin.service.ForwardService;
 import com.admin.service.TunnelService;
 import com.admin.service.UserService;
@@ -19,7 +21,9 @@ import org.springframework.scheduling.annotation.Scheduled;
 import javax.annotation.Resource;
 import java.time.LocalDate;
 import java.util.Date;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 @Slf4j
 @Configuration
@@ -37,6 +41,9 @@ public class ResetFlowAsync {
 
     @Resource
     TunnelService tunnelService;
+
+    @Resource
+    TunnelEntryNodeMapper tunnelEntryNodeMapper;
 
     /**
      * 每天0点执行流量重置任务
@@ -231,10 +238,30 @@ public class ResetFlowAsync {
         Tunnel tunnel = tunnelService.getById(forward.getTunnelId());
         if (tunnel == null) return;
 
-        GostUtil.PauseService(tunnel.getInNodeId(), buildServiceName(forward.getId(), forward.getUserId(), userTunnelId));
-        if (tunnel.getType() == 2){
-            GostUtil.PauseRemoteService(tunnel.getOutNodeId(), buildServiceName(forward.getId(), forward.getUserId(), userTunnelId));
+        String serviceName = buildServiceName(forward.getId(), forward.getUserId(), userTunnelId);
+        for (Long entryNodeId : getIngressNodeIds(tunnel)) {
+            GostUtil.PauseService(entryNodeId, serviceName);
         }
+        if (tunnel.getType() == 2){
+            GostUtil.PauseRemoteService(tunnel.getOutNodeId(), serviceName);
+        }
+    }
+
+    private Set<Long> getIngressNodeIds(Tunnel tunnel) {
+        Set<Long> nodeIds = new LinkedHashSet<>();
+        if (tunnel.getId() != null) {
+            List<TunnelEntryNode> entries = tunnelEntryNodeMapper.selectList(
+                    new QueryWrapper<TunnelEntryNode>().eq("tunnel_id", tunnel.getId()).orderByAsc("id"));
+            for (TunnelEntryNode entry : entries) {
+                if (entry.getNodeId() != null) {
+                    nodeIds.add(entry.getNodeId());
+                }
+            }
+        }
+        if (nodeIds.isEmpty() && tunnel.getInNodeId() != null) {
+            nodeIds.add(tunnel.getInNodeId());
+        }
+        return nodeIds;
     }
 
 

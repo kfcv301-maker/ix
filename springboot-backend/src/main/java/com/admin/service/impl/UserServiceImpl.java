@@ -209,7 +209,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     @Override
     public R updateUser(UserUpdateDto userUpdateDto) {
         // 1. 验证用户是否存在
-        if (!isUserExists(userUpdateDto.getId())) {
+        User existingUser = this.getById(userUpdateDto.getId());
+        if (existingUser == null) {
             return R.err(ERROR_USER_NOT_FOUND);
         }
 
@@ -226,7 +227,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         }
 
         // 4. 构建更新实体并保存
-        User updateUser = buildUpdateUserEntity(userUpdateDto);
+        User updateUser = buildUpdateUserEntity(userUpdateDto, existingUser);
         boolean result = this.updateById(updateUser);
         
         if (result) {
@@ -332,6 +333,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             updateUser.setId(user.getId());
             updateUser.setUser(changePasswordDto.getNewUsername());
             updateUser.setPwd(Md5Util.md5(changePasswordDto.getNewPassword()));
+            updateUser.setTokenVersion(nextTokenVersion(user.getTokenVersion()));
             updateUser.setUpdatedTime(System.currentTimeMillis());
             
             boolean result = this.updateById(updateUser);
@@ -432,6 +434,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         
         // 设置加密密码
         user.setPwd(Md5Util.md5(userDto.getPwd()));
+        user.setTokenVersion(0);
         
         // 设置默认属性
         user.setStatus(userDto.getStatus() != null ? userDto.getStatus() : USER_STATUS_ACTIVE);
@@ -463,13 +466,16 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
      * @param userUpdateDto 用户更新DTO
      * @return 构建完成的更新对象
      */
-    private User buildUpdateUserEntity(UserUpdateDto userUpdateDto) {
+    private User buildUpdateUserEntity(UserUpdateDto userUpdateDto, User existingUser) {
         User user = new User();
         BeanUtils.copyProperties(userUpdateDto, user);
         
-        // 处理密码更新
+        // A password reset by an administrator must invalidate the target
+        // user's existing browser and WebSocket JWTs just like self-service
+        // password changes do.
         if (StrUtil.isNotBlank(userUpdateDto.getPwd())) {
             user.setPwd(Md5Util.md5(userUpdateDto.getPwd()));
+            user.setTokenVersion(nextTokenVersion(existingUser.getTokenVersion()));
         } else {
             user.setPwd(null); // 不更新密码字段
         }
@@ -478,6 +484,10 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         user.setUpdatedTime(System.currentTimeMillis());
         
         return user;
+    }
+
+    private Integer nextTokenVersion(Integer currentVersion) {
+        return currentVersion == null ? 1 : currentVersion + 1;
     }
 
     /**

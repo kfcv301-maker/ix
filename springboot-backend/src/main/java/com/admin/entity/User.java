@@ -45,6 +45,9 @@ public class User extends BaseEntity {
 
     private String pwd;
 
+    /** Incremented whenever a password is changed to invalidate old JWTs. */
+    private Integer tokenVersion;
+
     private Integer roleId;
 
     private Long expTime;

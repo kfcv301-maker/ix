@@ -8,6 +8,7 @@ import com.admin.common.task.CheckGostConfigAsync;
 import com.admin.common.utils.AESCrypto;
 import com.admin.common.utils.GostUtil;
 import com.admin.entity.*;
+import com.admin.mapper.TunnelEntryNodeMapper;
 import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.JSONObject;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
@@ -19,8 +20,10 @@ import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
 import java.math.BigDecimal;
 import java.util.Date;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
@@ -65,6 +68,9 @@ public class FlowController extends BaseController {
 
     @Resource
     CheckGostConfigAsync checkGostConfigAsync;
+
+    @Resource
+    private TunnelEntryNodeMapper tunnelEntryNodeMapper;
 
     /**
      * 加密消息包装器
@@ -320,7 +326,12 @@ public class FlowController extends BaseController {
                 int userTunnelId = userTunnel == null ? 0 : userTunnel.getId();
                 String serviceName = forward.getId() + "_" + forward.getUserId() + "_" + userTunnelId;
 
-                GostUtil.PauseService(tunnel.getInNodeId(), serviceName);
+                // A tunnel can publish the same forward on several ingress
+                // nodes. Pausing only the legacy primary in_node_id leaves the
+                // other entry services live while the database says paused.
+                for (Long entryNodeId : getIngressNodeIds(tunnel)) {
+                    GostUtil.PauseService(entryNodeId, serviceName);
+                }
                 if (tunnel.getType() == 2){
                     GostUtil.PauseRemoteService(tunnel.getOutNodeId(), serviceName);
                 }
@@ -328,6 +339,24 @@ public class FlowController extends BaseController {
             forward.setStatus(0);
             forwardService.updateById(forward);
         }
+    }
+
+    private Set<Long> getIngressNodeIds(Tunnel tunnel) {
+        Set<Long> nodeIds = new LinkedHashSet<>();
+        if (tunnel != null && tunnel.getId() != null) {
+            List<TunnelEntryNode> entries = tunnelEntryNodeMapper.selectList(
+                    new QueryWrapper<TunnelEntryNode>().eq("tunnel_id", tunnel.getId()).orderByAsc("id"));
+            for (TunnelEntryNode entry : entries) {
+                if (entry.getNodeId() != null) {
+                    nodeIds.add(entry.getNodeId());
+                }
+            }
+        }
+        // Older deployments only have the primary ingress column.
+        if (nodeIds.isEmpty() && tunnel != null && tunnel.getInNodeId() != null) {
+            nodeIds.add(tunnel.getInNodeId());
+        }
+        return nodeIds;
     }
 
     private FlowDto filterFlowData(FlowDto flowDto, Forward forward, int flowType) {
