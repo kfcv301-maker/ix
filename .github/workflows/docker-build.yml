@@ -23,6 +23,9 @@ jobs:
   prepare:
     name: Prepare release decision
     runs-on: ubuntu-latest
+    env:
+      DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }}
+      DOCKER_HUB_TOKEN: ${{ secrets.DOCKER_HUB_TOKEN }}
     outputs:
       version: ${{ env.VERSION }}
       publish_release: ${{ steps.release.outputs.publish_release }}
@@ -38,6 +41,16 @@ jobs:
           if [[ "${GITHUB_EVENT_NAME}" != "push" || "${GITHUB_REF}" != "refs/heads/main" ]]; then
             echo "publish_release=false" >> "$GITHUB_OUTPUT"
             echo "Verification-only run: ${GITHUB_EVENT_NAME} on ${GITHUB_REF}"
+            exit 0
+          fi
+
+          # A source push must still be fully verified when this repository has
+          # not been configured with registry credentials.  Publishing a release
+          # in that state would be misleading: its panel images could not be
+          # built or pushed, so an online update could not actually use it.
+          if [[ -z "${DOCKER_HUB_USERNAME}" || -z "${DOCKER_HUB_TOKEN}" ]]; then
+            echo "publish_release=false" >> "$GITHUB_OUTPUT"
+            echo "Docker Hub credentials are unavailable; running verification only."
             exit 0
           fi
 
@@ -130,12 +143,6 @@ jobs:
         working-directory: ./vite-frontend
         run: npm run build
 
-      - name: Require registry credentials for a release
-        if: needs.prepare.outputs.publish_release == 'true'
-        run: |
-          test -n "$DOCKER_HUB_USERNAME"
-          test -n "$DOCKER_HUB_TOKEN"
-
       - name: Set up Docker Buildx
         if: needs.prepare.outputs.publish_release == 'true'
         uses: docker/setup-buildx-action@v3
@@ -177,12 +184,6 @@ jobs:
       - name: Build Java JAR
         working-directory: ./springboot-backend
         run: mvn -B clean package -DskipTests
-
-      - name: Require registry credentials for a release
-        if: needs.prepare.outputs.publish_release == 'true'
-        run: |
-          test -n "$DOCKER_HUB_USERNAME"
-          test -n "$DOCKER_HUB_TOKEN"
 
       - name: Set up Docker Buildx
         if: needs.prepare.outputs.publish_release == 'true'
