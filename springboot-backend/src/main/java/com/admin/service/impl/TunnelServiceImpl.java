@@ -6,6 +6,7 @@ import com.admin.common.dto.*;
 import com.admin.common.lang.R;
 import com.admin.common.utils.GostUtil;
 import com.admin.common.utils.JwtUtil;
+import com.admin.common.utils.TunnelForwardDiagnosisLimiter;
 import com.admin.common.utils.WebSocketServer;
 import com.admin.entity.Forward;
 import com.admin.entity.Node;
@@ -64,6 +65,7 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
     
     /** 节点状态常量 */
     private static final int NODE_STATUS_ONLINE = 1;        // 节点在线状态
+    private static final int MAX_BATCH_FORWARD_DIAGNOSIS = 20;
     
     /** 用户角色常量 */
     private static final int ADMIN_ROLE_ID = 0;             // 管理员角色ID
@@ -114,6 +116,9 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
     
     @Resource
     UserTunnelService userTunnelService;
+
+    @Resource
+    private TunnelForwardDiagnosisLimiter tunnelForwardDiagnosisLimiter;
 
     // ========== 公共接口实现 ==========
 
@@ -920,10 +925,39 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
             return R.err(ERROR_TUNNEL_NOT_FOUND);
         }
 
-        List<Forward> forwards = forwardService.list(new QueryWrapper<Forward>()
+        UserInfo currentUser = getCurrentUserInfo();
+        QueryWrapper<Forward> forwardQuery = new QueryWrapper<Forward>()
                 .eq("tunnel_id", tunnelId)
                 .orderByAsc("inx")
-                .orderByAsc("id"));
+                .orderByAsc("id");
+        if (!Objects.equals(currentUser.getRoleId(), ADMIN_ROLE_ID)) {
+            UserTunnel assignment = userTunnelMapper.selectOne(new QueryWrapper<UserTunnel>()
+                    .eq("user_id", currentUser.getUserId())
+                    .eq("tunnel_id", tunnelId));
+            if (assignment == null) {
+                return R.err(403, "没有检测此隧道的权限");
+            }
+            forwardQuery.eq("user_id", currentUser.getUserId());
+        }
+
+        List<Forward> forwards = forwardService.list(forwardQuery);
+        if (forwards.size() > MAX_BATCH_FORWARD_DIAGNOSIS) {
+            return R.err("一次最多检测 " + MAX_BATCH_FORWARD_DIAGNOSIS + " 条转发，请使用单条诊断或稍后分批处理");
+        }
+
+        final TunnelForwardDiagnosisLimiter.Lease lease;
+        try {
+            lease = tunnelForwardDiagnosisLimiter.acquire(currentUser.getUserId(), tunnelId);
+        } catch (IllegalArgumentException | IllegalStateException exception) {
+            return R.err(429, exception.getMessage());
+        }
+
+        try (TunnelForwardDiagnosisLimiter.Lease ignored = lease) {
+            return diagnoseTunnelForwardsSequentially(tunnel, forwards);
+        }
+    }
+
+    private R diagnoseTunnelForwardsSequentially(Tunnel tunnel, List<Forward> forwards) {
 
         List<JSONObject> forwardReports = new ArrayList<>();
         int successfulForwards = 0;
@@ -953,7 +987,7 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
         }
 
         Map<String, Object> report = new LinkedHashMap<>();
-        report.put("tunnelId", tunnelId);
+        report.put("tunnelId", tunnel.getId());
         report.put("tunnelName", tunnel.getName());
         report.put("timestamp", System.currentTimeMillis());
         report.put("totalForwards", forwards.size());

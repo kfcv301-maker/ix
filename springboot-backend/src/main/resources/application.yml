@@ -45,6 +45,15 @@ panel-updater:
   url: ${PANEL_UPDATER_URL:http://updater:18080}
   token: ${PANEL_UPDATER_TOKEN:}
 
+vps:
+  security:
+    # User-submitted VPSes are always public-only. This opt-in only permits
+    # administrator inventory to use RFC1918 / ULA addresses.
+    allow-private-admin-targets: ${VPS_ALLOW_PRIVATE_ADMIN_TARGETS:false}
+  terminal:
+    # Comma-separated browser origins. Empty keeps the panel's same-origin default.
+    allowed-origins: ${VPS_TERMINAL_ALLOWED_ORIGINS:}
+
 
 captcha:
   init-default-resource: true

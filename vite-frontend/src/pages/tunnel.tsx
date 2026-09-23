@@ -824,6 +824,7 @@ export default function TunnelPage() {
                         color="success"
                         onPress={() => handleDiagnoseAllForwards(tunnel)}
                         className="flex-1 min-h-8"
+                        title="最多 20 条转发，每个隧道 30 秒内只能执行一次"
                         startContent={
                           <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
                             <path strokeLinecap="round" strokeLinejoin="round" d="M4 12h2l2-6 4 12 2-6h6" />
@@ -1539,7 +1540,7 @@ export default function TunnelPage() {
                   <h2 className="text-xl font-bold">一键 PING 结果</h2>
                   {currentPingTunnel && (
                     <p className="text-small text-default-500">
-                      {currentPingTunnel.name} · 逐条检测该隧道下所有转发的完整 TCP 链路
+                      {currentPingTunnel.name} · 逐条检测该隧道下的完整 TCP 链路（最多 20 条，30 秒冷却）
                     </p>
                   )}
                 </ModalHeader>

@@ -42,6 +42,7 @@ import {
   pauseForwardService,
   resumeForwardService,
   diagnoseForward,
+  diagnoseTunnelForwards,
   updateForwardOrder
 } from "@/api";
 import { JwtUtil } from "@/utils/jwt";
@@ -709,8 +710,7 @@ export default function ForwardPage() {
     }
   };
 
-  // 在某个隧道的展开区域中顺序检测全部转发，避免同一节点同时堆积大量 TCP 探测。
-  // diagnoseForward 会由服务端再次核验归属，普通用户无法借此探测其他用户的转发。
+  // 一条批量请求由后端顺序执行，并统一施加数量、并发和冷却限制。
   const handleDiagnoseTunnelForwards = async (tunnelGroup: TunnelGroup) => {
     if (tunnelGroup.forwards.length === 0) {
       toast.error('该隧道暂无可检测的转发');
@@ -728,43 +728,48 @@ export default function ForwardPage() {
       forwards: []
     });
 
-    const reports: TunnelPingForwardReport[] = [];
-    let successfulForwards = 0;
-    for (const forward of tunnelGroup.forwards) {
-      try {
-        const response: any = await diagnoseForward(forward.id);
-        const results: DiagnosisResult['results'] = Array.isArray(response?.data?.results) ? response.data.results : [];
-        const success = response?.code === 0 && results.length > 0 && results.every(result => result.success === true);
-        if (success) successfulForwards++;
-        reports.push({
-          forwardId: forward.id,
-          forwardName: forward.name,
-          remoteAddress: forward.remoteAddr,
-          success,
-          message: success ? undefined : (response?.msg || response?.data?.message || '至少一个链路检测未通过'),
-          results
-        });
-      } catch {
-        reports.push({
-          forwardId: forward.id,
-          forwardName: forward.name,
-          remoteAddress: forward.remoteAddr,
-          success: false,
-          message: '检测请求失败，请稍后重试',
-          results: []
+    try {
+      const response: any = await diagnoseTunnelForwards(tunnelGroup.tunnelId);
+      if (response?.code === 0 && response.data) {
+        setTunnelPingSummary(response.data as TunnelPingSummary);
+      } else {
+        toast.error(response?.msg || '一键 PING 失败');
+        setTunnelPingSummary({
+          tunnelId: tunnelGroup.tunnelId,
+          tunnelName: tunnelGroup.tunnelName,
+          totalForwards: 0,
+          successfulForwards: 0,
+          failedForwards: 1,
+          forwards: [{
+            forwardId: 0,
+            forwardName: '批量检测失败',
+            remoteAddress: '',
+            success: false,
+            message: response?.msg || '无法开始检测',
+            results: []
+          }]
         });
       }
-
+    } catch {
+      toast.error('网络错误，请重试');
       setTunnelPingSummary({
         tunnelId: tunnelGroup.tunnelId,
         tunnelName: tunnelGroup.tunnelName,
-        totalForwards: tunnelGroup.forwards.length,
-        successfulForwards,
-        failedForwards: reports.length - successfulForwards,
-        forwards: [...reports]
+        totalForwards: 0,
+        successfulForwards: 0,
+        failedForwards: 1,
+        forwards: [{
+          forwardId: 0,
+          forwardName: '网络错误',
+          remoteAddress: '',
+          success: false,
+          message: '无法连接到服务器',
+          results: []
+        }]
       });
+    } finally {
+      setTunnelPingLoading(false);
     }
-    setTunnelPingLoading(false);
   };
 
   // 获取连接质量
@@ -1572,7 +1577,7 @@ export default function ForwardPage() {
                           className="shadow-none border border-divider"
                         >
                           <div className="flex flex-col gap-2 border-b border-divider px-4 pb-3 pt-1 sm:flex-row sm:items-center sm:justify-between">
-                            <p className="text-xs text-default-500">检测此隧道下全部转发的完整 TCP 链路</p>
+                            <p className="text-xs text-default-500">检测此隧道下全部转发的完整 TCP 链路（最多 20 条，30 秒冷却）</p>
                             <Button
                               size="sm"
                               color="primary"

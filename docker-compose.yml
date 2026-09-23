@@ -35,6 +35,8 @@ services:
       DB_PASSWORD: ${DB_PASSWORD}
       JWT_SECRET: ${JWT_SECRET}
       PANEL_UPDATER_TOKEN: ${PANEL_UPDATER_TOKEN}
+      VPS_ALLOW_PRIVATE_ADMIN_TARGETS: ${VPS_ALLOW_PRIVATE_ADMIN_TARGETS:-false}
+      VPS_TERMINAL_ALLOWED_ORIGINS: "${VPS_TERMINAL_ALLOWED_ORIGINS:-}"
       LOG_DIR: /app/logs
       JAVA_OPTS: -Xms256m -Xmx512m -Dfile.encoding=UTF-8 -Duser.timezone=Asia/Shanghai
     ports:

@@ -1,6 +1,7 @@
 package com.admin.service.impl;
 
 import com.admin.entity.VpsHost;
+import com.admin.common.utils.VpsSshTargetPolicy;
 import com.admin.service.VpsSshService;
 import net.schmizz.sshj.SSHClient;
 import net.schmizz.sshj.connection.channel.direct.Session;
@@ -17,9 +18,9 @@ import java.util.Base64;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.Future;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
@@ -34,11 +35,15 @@ public class VpsSshServiceImpl implements VpsSshService {
     private static final int CONNECT_TIMEOUT_MS = 12_000;
     private static final int SOCKET_TIMEOUT_MS = 20_000;
     private static final long TASK_TIMEOUT_MINUTES = 30;
-    private static final ExecutorService STREAM_EXECUTOR = Executors.newCachedThreadPool(runnable -> {
+    private static final ThreadPoolExecutor STREAM_EXECUTOR = new ThreadPoolExecutor(
+            4, 12, 60L, TimeUnit.SECONDS, new ArrayBlockingQueue<>(64), runnable -> {
         Thread thread = new Thread(runnable, "vps-ssh-stream");
         thread.setDaemon(true);
         return thread;
-    });
+    }, new ThreadPoolExecutor.CallerRunsPolicy());
+
+    @javax.annotation.Resource
+    private VpsSshTargetPolicy vpsSshTargetPolicy;
 
     @Override
     public HealthCheckResult check(VpsHost host, String password) {
@@ -48,7 +53,7 @@ public class VpsSshServiceImpl implements VpsSshService {
             return new HealthCheckResult(true, "SSH 认证成功", latency, connection.fingerprint, false);
         } catch (HostFingerprintChangedException exception) {
             return new HealthCheckResult(false, "SSH 主机指纹已变化，连接已被保护性拒绝", 0,
-                    exception.presentedFingerprint, true);
+                    exception.getPresentedFingerprint(), true);
         } catch (Exception exception) {
             return new HealthCheckResult(false, friendlyError(exception), 0, null, false);
         }
@@ -88,8 +93,6 @@ public class VpsSshServiceImpl implements VpsSshService {
                     succeeded ? "部署任务执行完成" : "部署任务执行失败，退出码："
                             + (exitStatus == null ? "未知" : exitStatus),
                     connection.fingerprint);
-        } catch (HostFingerprintChangedException exception) {
-            return new CommandResult(false, "SSH 主机指纹已变化，部署已取消", exception.presentedFingerprint);
         }
     }
 
@@ -98,6 +101,7 @@ public class VpsSshServiceImpl implements VpsSshService {
             throw new IllegalArgumentException("VPS SSH 配置不完整");
         }
 
+        String targetAddress = vpsSshTargetPolicy.resolveForConnection(host);
         AtomicReference<String> presentedFingerprint = new AtomicReference<>();
         String expectedFingerprint = trimToNull(host.getSshFingerprint());
         SSHClient client = new SSHClient();
@@ -118,7 +122,7 @@ public class VpsSshServiceImpl implements VpsSshService {
         });
 
         try {
-            client.connect(host.getHost(), host.getSshPort() == null ? 22 : host.getSshPort());
+            client.connect(targetAddress, host.getSshPort() == null ? 22 : host.getSshPort());
             client.authPassword(host.getSshUsername(), password);
             return new SshConnection(client, presentedFingerprint.get());
         } catch (Exception exception) {
@@ -269,12 +273,4 @@ public class VpsSshServiceImpl implements VpsSshService {
         }
     }
 
-    private static final class HostFingerprintChangedException extends IOException {
-        private final String presentedFingerprint;
-
-        private HostFingerprintChangedException(String presentedFingerprint) {
-            super("SSH host fingerprint changed");
-            this.presentedFingerprint = presentedFingerprint;
-        }
-    }
 }

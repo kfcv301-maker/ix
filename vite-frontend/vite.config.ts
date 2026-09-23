@@ -19,9 +19,12 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: false,
-    minify: false,  
+    // Keep Vite's production defaults: esbuild minification and Rollup tree
+    // shaking. Disabling both made every route (including xterm) ship in the
+    // initial dashboard bundle.
+    minify: 'esbuild',
     rollupOptions: {
-      treeshake: false,
+      treeshake: true,
     }
   }
 });

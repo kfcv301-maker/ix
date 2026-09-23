@@ -29,9 +29,9 @@ public interface VpsHostService extends IService<VpsHost> {
 
     boolean canOperate(Long userId, boolean administrator, Long hostId);
 
-    void checkAllActiveHosts();
+    void recordSshSuccess(VpsHost host, String fingerprint, String message);
 
-    void recordSuccessfulFingerprint(VpsHost host, String fingerprint);
+    void recordSshFailure(VpsHost host, String message, boolean fingerprintChanged);
 
     String decryptSshPassword(VpsHost host);
 

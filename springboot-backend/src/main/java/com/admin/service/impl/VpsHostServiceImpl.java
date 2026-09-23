@@ -8,6 +8,7 @@ import com.admin.common.lang.R;
 import com.admin.common.utils.AESCrypto;
 import com.admin.common.utils.HttpContextUtils;
 import com.admin.common.utils.JwtUtil;
+import com.admin.common.utils.VpsSshTargetPolicy;
 import com.admin.entity.User;
 import com.admin.entity.VpsHost;
 import com.admin.mapper.UserMapper;
@@ -45,6 +46,9 @@ public class VpsHostServiceImpl extends ServiceImpl<VpsHostMapper, VpsHost> impl
     @Resource
     private VpsSshService vpsSshService;
 
+    @Resource
+    private VpsSshTargetPolicy vpsSshTargetPolicy;
+
     @Value("${jwt-secret}")
     private String jwtSecret;
 
@@ -64,9 +68,11 @@ public class VpsHostServiceImpl extends ServiceImpl<VpsHostMapper, VpsHost> impl
             return R.err("请确认：用户托管的 VPS 将允许所有管理员进行维护和 SSH 操作");
         }
 
-        String normalizedHost = normalizeHost(hostDto.getHost());
-        if (normalizedHost == null) {
-            return R.err("SSH 地址格式无效，不能使用本机或包含协议、空格的地址");
+        String normalizedHost;
+        try {
+            normalizedHost = vpsSshTargetPolicy.normalizeForStorage(hostDto.getHost(), administrator);
+        } catch (IllegalArgumentException exception) {
+            return R.err(exception.getMessage());
         }
         if (administrator && hostDto.getAssignedUserId() != null && !isAssignableUser(hostDto.getAssignedUserId())) {
             return R.err("请选择有效的普通用户进行分配");
@@ -99,8 +105,12 @@ public class VpsHostServiceImpl extends ServiceImpl<VpsHostMapper, VpsHost> impl
         if (host == null || !Objects.equals(host.getStatus(), ACTIVE_STATUS)) return R.err("VPS 不存在");
         if (!canManage(host, actor)) return R.err(403, "你只能修改自己托管的 VPS；管理员托管并分配的 VPS 不可修改连接凭据");
 
-        String normalizedHost = normalizeHost(hostDto.getHost());
-        if (normalizedHost == null) return R.err("SSH 地址格式无效，不能使用本机或包含协议、空格的地址");
+        String normalizedHost;
+        try {
+            normalizedHost = vpsSshTargetPolicy.normalizeForStorage(hostDto.getHost(), ORIGIN_ADMIN.equals(host.getOrigin()));
+        } catch (IllegalArgumentException exception) {
+            return R.err(exception.getMessage());
+        }
         if (actor.administrator && ORIGIN_ADMIN.equals(host.getOrigin())
                 && hostDto.getAssignedUserId() != null && !isAssignableUser(hostDto.getAssignedUserId())) {
             return R.err("请选择有效的普通用户进行分配");
@@ -183,7 +193,7 @@ public class VpsHostServiceImpl extends ServiceImpl<VpsHostMapper, VpsHost> impl
                 .set("updated_time", now))) return R.err("重置 SSH 主机指纹失败");
         host.setSshFingerprint(null);
         host.setHealthStatus("unknown");
-        host.setLastCheckMessage(update.getLastCheckMessage());
+        host.setLastCheckMessage("SSH 主机指纹已清除，请重新执行检测确认新服务器身份");
         host.setLastCheckTime(null);
         host.setLastLatencyMs(null);
         return R.ok(toView(host, actor, loadUserNames(Collections.singletonList(host))));
@@ -233,22 +243,46 @@ public class VpsHostServiceImpl extends ServiceImpl<VpsHostMapper, VpsHost> impl
     }
 
     @Override
-    public void checkAllActiveHosts() {
-        List<VpsHost> hosts = list(new QueryWrapper<VpsHost>().eq("status", ACTIVE_STATUS));
-        for (VpsHost host : hosts) {
-            checkHostInternal(host);
+    public void recordSshSuccess(VpsHost host, String fingerprint, String message) {
+        if (host == null || host.getId() == null) return;
+        long now = System.currentTimeMillis();
+        UpdateWrapper<VpsHost> update = new UpdateWrapper<VpsHost>()
+                .eq("id", host.getId())
+                .eq("status", ACTIVE_STATUS)
+                .set("health_status", "online")
+                .set("last_check_time", now)
+                .set("last_check_message", limit(isBlank(message) ? "SSH 认证成功" : message, 500))
+                .set("last_latency_ms", null)
+                .set("updated_time", now);
+        if (isBlank(host.getSshFingerprint()) && !isBlank(fingerprint) && !"unknown".equals(fingerprint)) {
+            update.set("ssh_fingerprint", fingerprint);
+            host.setSshFingerprint(fingerprint);
         }
+        update(new VpsHost(), update);
+        host.setHealthStatus("online");
+        host.setLastCheckTime(now);
+        host.setLastCheckMessage(isBlank(message) ? "SSH 认证成功" : message);
+        host.setLastLatencyMs(null);
     }
 
     @Override
-    public void recordSuccessfulFingerprint(VpsHost host, String fingerprint) {
-        if (host == null || isBlank(fingerprint) || !isBlank(host.getSshFingerprint())) return;
-        VpsHost update = new VpsHost();
-        update.setId(host.getId());
-        update.setSshFingerprint(fingerprint);
-        update.setUpdatedTime(System.currentTimeMillis());
-        updateById(update);
-        host.setSshFingerprint(fingerprint);
+    public void recordSshFailure(VpsHost host, String message, boolean fingerprintChanged) {
+        if (host == null || host.getId() == null) return;
+        long now = System.currentTimeMillis();
+        String status = fingerprintChanged ? "fingerprint_changed" : "offline";
+        String safeMessage = limit(isBlank(message) ? "SSH 连接失败" : message, 500);
+        update(new VpsHost(), new UpdateWrapper<VpsHost>()
+                .eq("id", host.getId())
+                .eq("status", ACTIVE_STATUS)
+                .set("health_status", status)
+                .set("last_check_time", now)
+                .set("last_check_message", safeMessage)
+                .set("last_latency_ms", null)
+                .set("updated_time", now));
+        host.setHealthStatus(status);
+        host.setLastCheckTime(now);
+        host.setLastCheckMessage(safeMessage);
+        host.setLastLatencyMs(null);
     }
 
     @Override
@@ -344,18 +378,6 @@ public class VpsHostServiceImpl extends ServiceImpl<VpsHostMapper, VpsHost> impl
             }
         }
         return crypto;
-    }
-
-    private String normalizeHost(String value) {
-        if (isBlank(value)) return null;
-        String host = value.trim();
-        if (host.startsWith("[") && host.endsWith("]")) host = host.substring(1, host.length() - 1);
-        String lower = host.toLowerCase();
-        if (host.length() > 255 || host.matches(".*\\s+.*") || host.contains("://") || host.contains("/") || host.indexOf('\\') >= 0
-                || "localhost".equals(lower) || "::1".equals(lower) || lower.startsWith("127.")) {
-            return null;
-        }
-        return host;
     }
 
     private static boolean isBlank(String value) {

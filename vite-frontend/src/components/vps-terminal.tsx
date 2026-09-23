@@ -3,6 +3,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 
+import { createVpsTerminalTicket } from '@/api';
 import { getVpsTerminalSocketUrl } from '@/utils/realtime-socket';
 
 interface VpsTerminalProps {
@@ -46,6 +47,7 @@ export function VpsTerminal({ vpsId, visible }: VpsTerminalProps) {
     terminal.open(mountRef.current);
 
     let socket: WebSocket | null = null;
+    let disposed = false;
     const fit = () => {
       try {
         fitAddon.fit();
@@ -61,45 +63,58 @@ export function VpsTerminal({ vpsId, visible }: VpsTerminalProps) {
     const resizeObserver = new ResizeObserver(fit);
     resizeObserver.observe(mountRef.current);
 
-    terminal.writeln('\x1b[36m正在请求服务器端 SSH 会话…\x1b[0m');
-    socket = new WebSocket(getVpsTerminalSocketUrl(vpsId));
     const disposable = terminal.onData((data) => {
       if (socket?.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ type: 'input', data }));
       }
     });
 
-    socket.onopen = () => {
-      setConnectionStatus('已连接，等待远程 Shell 就绪…');
-      fit();
-    };
-    socket.onmessage = (event) => {
-      try {
-        const message = JSON.parse(event.data);
-        if (message.type === 'output') {
-          terminal.write(String(message.data ?? ''));
-        } else if (message.type === 'ready') {
-          setConnectionStatus(String(message.data || 'SSH 已连接'));
-          terminal.writeln(`\r\n\x1b[32m${String(message.data || 'SSH 已连接')}\x1b[0m\r\n`);
-          terminal.focus();
-        } else if (message.type === 'error') {
-          setConnectionStatus(String(message.data || 'SSH 连接失败'));
-          terminal.writeln(`\r\n\x1b[31m${String(message.data || 'SSH 连接失败')}\x1b[0m\r\n`);
-        }
-      } catch {
-        terminal.write(String(event.data));
+    const openTerminal = async () => {
+      terminal.writeln('\x1b[36m正在请求一次性 SSH 会话…\x1b[0m');
+      const response = await createVpsTerminalTicket(vpsId);
+      if (disposed) return;
+      if (response.code !== 0 || !response.data?.terminalTicket) {
+        const message = response.msg || '无法创建 SSH 会话';
+        setConnectionStatus(message);
+        terminal.writeln(`\r\n\x1b[31m${message}\x1b[0m\r\n`);
+        return;
       }
+
+      socket = new WebSocket(getVpsTerminalSocketUrl(response.data.terminalTicket));
+      socket.onopen = () => {
+        setConnectionStatus('已连接，等待远程 Shell 就绪…');
+        fit();
+      };
+      socket.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          if (message.type === 'output') {
+            terminal.write(String(message.data ?? ''));
+          } else if (message.type === 'ready') {
+            setConnectionStatus(String(message.data || 'SSH 已连接'));
+            terminal.writeln(`\r\n\x1b[32m${String(message.data || 'SSH 已连接')}\x1b[0m\r\n`);
+            terminal.focus();
+          } else if (message.type === 'error') {
+            setConnectionStatus(String(message.data || 'SSH 连接失败'));
+            terminal.writeln(`\r\n\x1b[31m${String(message.data || 'SSH 连接失败')}\x1b[0m\r\n`);
+          }
+        } catch {
+          terminal.write(String(event.data));
+        }
+      };
+      socket.onerror = () => {
+        setConnectionStatus('终端网络连接失败');
+        terminal.writeln('\r\n\x1b[31m终端网络连接失败。\x1b[0m');
+      };
+      socket.onclose = () => {
+        setConnectionStatus('终端已断开');
+        terminal.writeln('\r\n\x1b[33mSSH 终端已断开。\x1b[0m');
+      };
     };
-    socket.onerror = () => {
-      setConnectionStatus('终端网络连接失败');
-      terminal.writeln('\r\n\x1b[31m终端网络连接失败。\x1b[0m');
-    };
-    socket.onclose = () => {
-      setConnectionStatus('终端已断开');
-      terminal.writeln('\r\n\x1b[33mSSH 终端已断开。\x1b[0m');
-    };
+    void openTerminal();
 
     return () => {
+      disposed = true;
       window.clearTimeout(fitTimer);
       resizeObserver.disconnect();
       disposable.dispose();

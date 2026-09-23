@@ -54,6 +54,19 @@ public interface VpsSshService {
         public String getFingerprint() { return fingerprint; }
     }
 
+    class HostFingerprintChangedException extends IOException {
+        private final String presentedFingerprint;
+
+        public HostFingerprintChangedException(String presentedFingerprint) {
+            super("SSH 主机指纹已变化，连接已被保护性拒绝");
+            this.presentedFingerprint = presentedFingerprint;
+        }
+
+        public String getPresentedFingerprint() {
+            return presentedFingerprint;
+        }
+    }
+
     interface TerminalConnection extends AutoCloseable {
         InputStream getOutput();
         OutputStream getInput();

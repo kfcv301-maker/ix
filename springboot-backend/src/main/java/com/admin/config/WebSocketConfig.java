@@ -8,7 +8,10 @@ import org.springframework.web.socket.WebSocketHandler;
 import org.springframework.web.socket.config.annotation.EnableWebSocket;
 import org.springframework.web.socket.config.annotation.WebSocketConfigurer;
 import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry;
+import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistration;
 import javax.annotation.Resource;
+import org.springframework.beans.factory.annotation.Value;
+import java.util.Arrays;
 
 
 @Configuration
@@ -24,16 +27,26 @@ public class WebSocketConfig implements WebSocketConfigurer {
     @Resource
     private VpsTerminalWebSocketHandler vpsTerminalWebSocketHandler;
 
+    @Value("${vps.terminal.allowed-origins:}")
+    private String terminalAllowedOrigins;
+
     @Override
     public void registerWebSocketHandlers(WebSocketHandlerRegistry webSocketHandlerRegistry) {
         webSocketHandlerRegistry
                 .addHandler(myHandler(), "/system-info")
                 .setAllowedOrigins("*")
                 .addInterceptors(webSocketInterceptor);
-        webSocketHandlerRegistry
-                .addHandler(vpsTerminalWebSocketHandler, "/vps-terminal")
-                .setAllowedOrigins("*")
-                .addInterceptors(vpsTerminalHandshakeInterceptor);
+        WebSocketHandlerRegistration terminalRegistration = webSocketHandlerRegistry
+                .addHandler(vpsTerminalWebSocketHandler, "/vps-terminal");
+        String[] origins = Arrays.stream((terminalAllowedOrigins == null ? "" : terminalAllowedOrigins).split(","))
+                .map(String::trim)
+                .filter(value -> !value.isEmpty())
+                .toArray(String[]::new);
+        if (origins.length > 0) {
+            terminalRegistration.setAllowedOrigins(origins);
+        }
+        // Without an explicit allow-list Spring keeps its same-origin default.
+        terminalRegistration.addInterceptors(vpsTerminalHandshakeInterceptor);
     }
 
 

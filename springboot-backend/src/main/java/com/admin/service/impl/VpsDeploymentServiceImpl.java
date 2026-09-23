@@ -53,7 +53,7 @@ public class VpsDeploymentServiceImpl implements VpsDeploymentService {
         if (host == null) return R.err(403, "没有在此 VPS 上执行部署任务的权限");
         if (!isSupportedTemplate(deploymentDto.getTaskType())) return R.err("不支持的部署模板");
 
-        Long concurrent = taskMapper.selectCount(new QueryWrapper<VpsDeploymentTask>()
+        Integer concurrent = taskMapper.selectCount(new QueryWrapper<VpsDeploymentTask>()
                 .eq("vps_id", host.getId())
                 .eq("status", ACTIVE_STATUS)
                 .in("task_status", PENDING, RUNNING));

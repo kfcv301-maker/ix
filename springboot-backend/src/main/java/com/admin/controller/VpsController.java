@@ -6,8 +6,11 @@ import com.admin.common.dto.VpsDeploymentDto;
 import com.admin.common.dto.VpsHostDto;
 import com.admin.common.dto.VpsHostUpdateDto;
 import com.admin.common.lang.R;
+import com.admin.common.utils.HttpContextUtils;
+import com.admin.common.utils.JwtUtil;
 import com.admin.service.VpsDeploymentService;
 import com.admin.service.VpsHostService;
+import com.admin.service.VpsTerminalTicketService;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -16,6 +19,9 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import javax.annotation.Resource;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Objects;
 
 /** VPS hosting API. Authorization is enforced by VpsHostService per resource. */
 @RestController
@@ -28,6 +34,9 @@ public class VpsController {
 
     @Resource
     private VpsDeploymentService vpsDeploymentService;
+
+    @Resource
+    private VpsTerminalTicketService vpsTerminalTicketService;
 
     @LogAnnotation
     @PostMapping("/list")
@@ -57,6 +66,32 @@ public class VpsController {
     @PostMapping("/check")
     public R check(@Validated @RequestBody VpsActionDto actionDto) {
         return vpsHostService.checkHost(actionDto);
+    }
+
+    /**
+     * Browsers cannot put an Authorization header on a WebSocket upgrade. Issue
+     * a one-time 60-second ticket instead of putting the long-lived login JWT
+     * into the terminal URL.
+     */
+    @LogAnnotation
+    @PostMapping("/terminal-ticket")
+    public R createTerminalTicket(@Validated @RequestBody VpsActionDto actionDto) {
+        String token = HttpContextUtils.getHttpServletRequest().getHeader("Authorization");
+        Long userId = JwtUtil.getUserIdFromToken(token);
+        boolean administrator = Objects.equals(JwtUtil.getRoleIdFromToken(token), 0);
+        if (!vpsHostService.canOperate(userId, administrator, actionDto.getId())) {
+            return R.err(403, "没有连接此 VPS 的权限");
+        }
+        try {
+            VpsTerminalTicketService.IssuedTicket ticket = vpsTerminalTicketService.issue(
+                    userId, administrator, actionDto.getId());
+            Map<String, Object> response = new HashMap<>();
+            response.put("terminalTicket", ticket.getValue());
+            response.put("expiresAt", ticket.getExpiresAt());
+            return R.ok(response);
+        } catch (IllegalArgumentException | IllegalStateException exception) {
+            return R.err(exception.getMessage());
+        }
     }
 
     @LogAnnotation

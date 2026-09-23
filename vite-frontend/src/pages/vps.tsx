@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { Button } from '@heroui/button';
 import { Card, CardBody, CardHeader } from '@heroui/card';
 import { Chip } from '@heroui/chip';
@@ -19,7 +19,8 @@ import {
   resetVpsHostFingerprint,
   updateVpsHost,
 } from '@/api';
-import { VpsTerminal } from '@/components/vps-terminal';
+
+const VpsTerminal = lazy(() => import('@/components/vps-terminal').then((module) => ({ default: module.VpsTerminal })));
 
 type DeploymentTemplate = 'docker' | 'flux_panel';
 
@@ -90,7 +91,7 @@ const statusMeta = (status: VpsHost['healthStatus']) => {
   if (status === 'online') return { color: 'success' as const, text: 'SSH 在线' };
   if (status === 'offline') return { color: 'danger' as const, text: 'SSH 离线' };
   if (status === 'fingerprint_changed') return { color: 'warning' as const, text: '主机指纹变化' };
-  return { color: 'default' as const, text: '等待检测' };
+  return { color: 'default' as const, text: '待 SSH 操作' };
 };
 
 const taskMeta = (status: DeploymentTask['taskStatus']) => {
@@ -225,7 +226,7 @@ export default function VpsPage() {
         ? await updateVpsHost({ ...payload, id: editingHost.id })
         : await createVpsHost(payload);
       if (response.code === 0) {
-        toast.success(isEditing ? 'VPS 托管信息已保存' : 'VPS 已加入托管，正在等待 SSH 检测');
+        toast.success(isEditing ? 'VPS 托管信息已保存' : 'VPS 已加入托管，首次 SSH 操作或手动检测时会更新状态');
         setFormOpen(false);
         await loadHosts(true);
       } else {
@@ -318,7 +319,7 @@ export default function VpsPage() {
       {loading ? (
         <div className="flex min-h-64 items-center justify-center"><Spinner label="正在加载 VPS…" /></div>
       ) : hosts.length === 0 ? (
-        <Card className="border border-dashed border-divider shadow-none"><CardBody className="py-16 text-center"><p className="text-base font-medium">暂无 VPS 托管记录</p><p className="mt-2 text-sm text-default-500">添加服务器后，面板会自动检测 SSH 连通性，并可直接打开在线终端。</p><Button className="mt-5" color="primary" variant="flat" onPress={openCreate}>托管第一台 VPS</Button></CardBody></Card>
+        <Card className="border border-dashed border-divider shadow-none"><CardBody className="py-16 text-center"><p className="text-base font-medium">暂无 VPS 托管记录</p><p className="mt-2 text-sm text-default-500">添加服务器后，可手动检测 SSH 连通性或直接打开在线终端。</p><Button className="mt-5" color="primary" variant="flat" onPress={openCreate}>托管第一台 VPS</Button></CardBody></Card>
       ) : (
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
           {hosts.map((host) => {
@@ -343,8 +344,8 @@ export default function VpsPage() {
                     <div className="rounded-lg bg-default-100/70 p-2 dark:bg-default-100/10"><span className="text-default-500">分配</span><p className="mt-1 font-medium text-foreground">{host.assignedUserName || (host.origin === 'ADMIN' ? '尚未分配' : '托管用户可用')}</p></div>
                   </div>
                   <div className="text-xs text-default-500">
-                    <p>{host.lastCheckMessage || '等待自动 SSH 检测'}</p>
-                    <p className="mt-1">最近检测：{formatTime(host.lastCheckTime)}{host.lastLatencyMs !== undefined && host.lastLatencyMs !== null ? ` · ${host.lastLatencyMs} ms` : ''}</p>
+                    <p>{host.lastCheckMessage || '等待首次 SSH 操作或手动检测'}</p>
+                    <p className="mt-1">最近 SSH 操作 / 检测：{formatTime(host.lastCheckTime)}{host.lastLatencyMs !== undefined && host.lastLatencyMs !== null ? ` · ${host.lastLatencyMs} ms` : ''}</p>
                   </div>
                   {host.remark && <p className="rounded-lg border border-divider px-2 py-1.5 text-xs text-default-500">{host.remark}</p>}
                   <div className="flex flex-wrap gap-2 border-t border-divider pt-3">
@@ -399,7 +400,7 @@ export default function VpsPage() {
       </Modal>
 
       <Modal isOpen={terminalHost !== null} onOpenChange={(open) => { if (!open) setTerminalHost(null); }} size="5xl" scrollBehavior="inside" backdrop="blur">
-        <ModalContent>{terminalHost && <><ModalHeader className="flex-col items-start gap-1"><span>{terminalHost.name} · 在线 SSH</span><span className="text-xs font-normal text-default-500">{terminalHost.sshUsername}@{terminalHost.host}:{terminalHost.sshPort} · SSH 密码不会发送至浏览器</span></ModalHeader><ModalBody className="pb-5"><VpsTerminal vpsId={terminalHost.id} visible /></ModalBody></>}</ModalContent>
+        <ModalContent>{terminalHost && <><ModalHeader className="flex-col items-start gap-1"><span>{terminalHost.name} · 在线 SSH</span><span className="text-xs font-normal text-default-500">{terminalHost.sshUsername}@{terminalHost.host}:{terminalHost.sshPort} · SSH 密码不会发送至浏览器</span></ModalHeader><ModalBody className="pb-5"><Suspense fallback={<div className="flex h-[58vh] min-h-[340px] items-center justify-center"><Spinner label="正在加载安全终端…" /></div>}><VpsTerminal vpsId={terminalHost.id} visible /></Suspense></ModalBody></>}</ModalContent>
       </Modal>
 
       <Modal isOpen={deploymentHost !== null} onOpenChange={(open) => { if (!open) setDeploymentHost(null); }} size="lg" backdrop="blur">

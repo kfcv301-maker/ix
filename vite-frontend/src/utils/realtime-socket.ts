@@ -27,8 +27,8 @@ export const getRealtimeSocketUrl = (): string => {
   return apiUrl.toString();
 };
 
-/** URL for an authorized browser terminal. The SSH password stays server-side. */
-export const getVpsTerminalSocketUrl = (vpsId: number): string => {
+/** URL for one authorized browser terminal. The SSH password stays server-side. */
+export const getVpsTerminalSocketUrl = (ticket: string): string => {
   const configuredBase = axios.defaults.baseURL
     || (import.meta.env.VITE_API_BASE ? `${import.meta.env.VITE_API_BASE}/api/v1/` : '/api/v1/');
   const apiUrl = new URL(configuredBase, window.location.href);
@@ -36,8 +36,7 @@ export const getVpsTerminalSocketUrl = (vpsId: number): string => {
   apiUrl.protocol = apiUrl.protocol === 'https:' ? 'wss:' : 'ws:';
   apiUrl.pathname = `${apiUrl.pathname.replace(/\/api\/v1\/?$/, '').replace(/\/$/, '')}/vps-terminal`;
   apiUrl.search = '';
-  apiUrl.searchParams.set('vpsId', String(vpsId));
-  const token = localStorage.getItem('token');
-  if (token) apiUrl.searchParams.set('secret', token);
+  // This is a one-time, short-lived terminal ticket—not the login JWT.
+  apiUrl.searchParams.set('ticket', ticket);
   return apiUrl.toString();
 };

@@ -17,19 +17,23 @@ import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 /** Bridges an authorized browser WebSocket to one short-lived SSH shell. */
 @Component
 public class VpsTerminalWebSocketHandler extends TextWebSocketHandler {
 
     private static final int MAX_INPUT_LENGTH = 16 * 1024;
-    private static final ExecutorService OUTPUT_EXECUTOR = Executors.newCachedThreadPool(runnable -> {
+    /** One reader is held for each active terminal, so this must stay bounded. */
+    private static final ThreadPoolExecutor OUTPUT_EXECUTOR = new ThreadPoolExecutor(
+            0, 16, 60L, TimeUnit.SECONDS, new SynchronousQueue<>(), runnable -> {
         Thread thread = new Thread(runnable, "vps-terminal-output");
         thread.setDaemon(true);
         return thread;
-    });
+    }, new ThreadPoolExecutor.AbortPolicy());
 
     private final Map<String, TerminalState> terminals = new ConcurrentHashMap<>();
 
@@ -57,12 +61,24 @@ public class VpsTerminalWebSocketHandler extends TextWebSocketHandler {
 
         try {
             VpsSshService.TerminalConnection connection = vpsSshService.openTerminal(host, password);
-            vpsHostService.recordSuccessfulFingerprint(host, connection.getFingerprint());
+            vpsHostService.recordSshSuccess(host, connection.getFingerprint(), "在线 SSH 已连接");
             TerminalState state = new TerminalState(connection);
             terminals.put(session.getId(), state);
             send(session, "ready", "SSH 已连接：" + host.getName());
-            OUTPUT_EXECUTOR.execute(() -> copyOutput(session, state));
+            try {
+                OUTPUT_EXECUTOR.execute(() -> copyOutput(session, state));
+            } catch (RejectedExecutionException exception) {
+                closeState(session);
+                try {
+                    closeWithError(session, "在线 SSH 会话已达上限，请稍后重试");
+                } catch (IOException ignored) {
+                    // The client may already have disconnected while the queue was full.
+                }
+                return;
+            }
         } catch (Exception exception) {
+            vpsHostService.recordSshFailure(host, safeMessage(exception),
+                    exception instanceof VpsSshService.HostFingerprintChangedException);
             closeWithError(session, safeMessage(exception));
         }
     }

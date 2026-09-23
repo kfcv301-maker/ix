@@ -1,18 +1,7 @@
 import { Route, Routes, useNavigate } from "react-router-dom";
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 
 import IndexPage from "@/pages/index";
-import ChangePasswordPage from "@/pages/change-password";
-import DashboardPage from "@/pages/dashboard";
-import ForwardPage from "@/pages/forward";
-import TunnelPage from "@/pages/tunnel";
-import NodePage from "@/pages/node";
-import UserPage from "@/pages/user";
-import ProfilePage from "@/pages/profile";
-import LimitPage from "@/pages/limit";
-import ConfigPage from "@/pages/config";
-import VpsPage from "@/pages/vps";
-import { SettingsPage } from "@/pages/settings";
 
 import AdminLayout from "@/layouts/admin";
 import H5Layout from "@/layouts/h5";
@@ -20,6 +9,22 @@ import H5SimpleLayout from "@/layouts/h5-simple";
 
 import { isLoggedIn } from "@/utils/auth";
 import { siteConfig } from "@/config/site";
+
+const VpsPage = lazy(() => import("@/pages/vps"));
+const ChangePasswordPage = lazy(() => import("@/pages/change-password"));
+const DashboardPage = lazy(() => import("@/pages/dashboard"));
+const ForwardPage = lazy(() => import("@/pages/forward"));
+const TunnelPage = lazy(() => import("@/pages/tunnel"));
+const NodePage = lazy(() => import("@/pages/node"));
+const UserPage = lazy(() => import("@/pages/user"));
+const ProfilePage = lazy(() => import("@/pages/profile"));
+const LimitPage = lazy(() => import("@/pages/limit"));
+const ConfigPage = lazy(() => import("@/pages/config"));
+const SettingsPage = lazy(() => import("@/pages/settings").then((module) => ({ default: module.SettingsPage })));
+
+const PageFallback = () => (
+  <div className="flex min-h-64 items-center justify-center text-sm text-default-500">正在加载页面…</div>
+);
 
 // 检测是否为H5模式
 const useH5Mode = () => {
@@ -154,7 +159,7 @@ function App() {
         path="/change-password" 
         element={
           <ProtectedRoute skipLayout={true}>
-            <ChangePasswordPage />
+            <Suspense fallback={<PageFallback />}><ChangePasswordPage /></Suspense>
           </ProtectedRoute>
         } 
       />
@@ -162,7 +167,7 @@ function App() {
         path="/dashboard" 
         element={
           <ProtectedRoute>
-            <DashboardPage />
+            <Suspense fallback={<PageFallback />}><DashboardPage /></Suspense>
           </ProtectedRoute>
         } 
       />
@@ -170,7 +175,7 @@ function App() {
         path="/forward" 
         element={
           <ProtectedRoute>
-            <ForwardPage />
+            <Suspense fallback={<PageFallback />}><ForwardPage /></Suspense>
           </ProtectedRoute>
         } 
       />
@@ -178,7 +183,7 @@ function App() {
         path="/tunnel" 
         element={
           <ProtectedRoute>
-            <TunnelPage />
+            <Suspense fallback={<PageFallback />}><TunnelPage /></Suspense>
           </ProtectedRoute>
         } 
       />
@@ -186,7 +191,7 @@ function App() {
         path="/node" 
         element={
           <ProtectedRoute>
-            <NodePage />
+            <Suspense fallback={<PageFallback />}><NodePage /></Suspense>
           </ProtectedRoute>
         } 
       />
@@ -194,7 +199,9 @@ function App() {
         path="/vps"
         element={
           <ProtectedRoute>
-            <VpsPage />
+            <Suspense fallback={<PageFallback />}>
+              <VpsPage />
+            </Suspense>
           </ProtectedRoute>
         }
       />
@@ -202,7 +209,7 @@ function App() {
         path="/user" 
         element={
           <ProtectedRoute useSimpleLayout={true}>
-            <UserPage />
+            <Suspense fallback={<PageFallback />}><UserPage /></Suspense>
           </ProtectedRoute>
         } 
       />
@@ -210,7 +217,7 @@ function App() {
         path="/profile" 
         element={
           <ProtectedRoute>
-            <ProfilePage />
+            <Suspense fallback={<PageFallback />}><ProfilePage /></Suspense>
           </ProtectedRoute>
         } 
       />
@@ -218,7 +225,7 @@ function App() {
         path="/limit" 
         element={
           <ProtectedRoute useSimpleLayout={true}>
-            <LimitPage />
+            <Suspense fallback={<PageFallback />}><LimitPage /></Suspense>
           </ProtectedRoute>
         } 
       />
@@ -226,13 +233,13 @@ function App() {
         path="/config" 
         element={
           <ProtectedRoute useSimpleLayout={true}>
-            <ConfigPage />
+            <Suspense fallback={<PageFallback />}><ConfigPage /></Suspense>
           </ProtectedRoute>
         } 
       />
       <Route 
         path="/settings" 
-        element={<SettingsPage />}
+        element={<Suspense fallback={<PageFallback />}><SettingsPage /></Suspense>}
       />
     </Routes>
   );

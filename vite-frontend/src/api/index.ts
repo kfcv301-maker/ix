@@ -29,6 +29,11 @@ export const createVpsHost = (data: any) => Network.post("/vps/create", data);
 export const updateVpsHost = (data: any) => Network.post("/vps/update", data);
 export const deleteVpsHost = (id: number) => Network.post("/vps/delete", { id });
 export const checkVpsHost = (id: number) => Network.post("/vps/check", { id });
+export interface VpsTerminalTicket {
+  terminalTicket: string;
+  expiresAt: number;
+}
+export const createVpsTerminalTicket = (id: number) => Network.post<VpsTerminalTicket>("/vps/terminal-ticket", { id });
 export const resetVpsHostFingerprint = (id: number) => Network.post("/vps/reset-fingerprint", { id });
 export const getVpsAssignableUsers = () => Network.post("/vps/assignable-users");
 export const deployVpsTemplate = (id: number, taskType: 'docker' | 'flux_panel') => Network.post("/vps/deploy", { id, taskType });

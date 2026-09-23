@@ -47,9 +47,11 @@ public class VpsDeploymentExecutor {
             append(task.getId(), "开始执行受限部署模板：" + task.getTaskType() + "\n");
             VpsSshService.CommandResult result = vpsSshService.runTemplate(host, password, task.getTaskType(),
                     chunk -> append(task.getId(), chunk));
-            if (result.getFingerprint() != null) vpsHostService.recordSuccessfulFingerprint(host, result.getFingerprint());
+            vpsHostService.recordSshSuccess(host, result.getFingerprint(), "受限部署任务已建立 SSH 连接");
             finish(task, result.isSucceeded() ? "succeeded" : "failed", "\n" + result.getMessage() + "\n");
         } catch (Exception exception) {
+            vpsHostService.recordSshFailure(host, safeMessage(exception),
+                    exception instanceof VpsSshService.HostFingerprintChangedException);
             finish(task, "failed", "\n任务异常：" + safeMessage(exception) + "\n");
         }
     }

@@ -26,7 +26,7 @@ services:
       retries: 10
 
   backend:
-    image: bqlpfy/springboot-backend:1.4.3
+    image: bqlpfy/springboot-backend:1.4.4
     container_name: springboot-backend
     restart: unless-stopped
     environment:
@@ -35,6 +35,8 @@ services:
       DB_USER: ${DB_USER}
       DB_PASSWORD: ${DB_PASSWORD}
       JWT_SECRET: ${JWT_SECRET}
+      VPS_ALLOW_PRIVATE_ADMIN_TARGETS: ${VPS_ALLOW_PRIVATE_ADMIN_TARGETS:-false}
+      VPS_TERMINAL_ALLOWED_ORIGINS: "${VPS_TERMINAL_ALLOWED_ORIGINS:-}"
       LOG_DIR: /app/logs
       JAVA_OPTS: "-Xms256m -Xmx512m -Dfile.encoding=UTF-8 -Duser.timezone=Asia/Shanghai"
     ports:
@@ -47,14 +49,20 @@ services:
     networks:
       - gost-network
     healthcheck:
-      test: ["CMD", "sh", "-c", "wget --no-verbose --tries=1 --spider http://localhost:6365/flow/test || exit 1"]
+      test:
+        [
+          "CMD",
+          "sh",
+          "-c",
+          "wget --no-verbose --tries=1 --spider http://localhost:6365/flow/test || exit 1",
+        ]
       interval: 30s
       timeout: 10s
       retries: 5
       start_period: 90s
 
   frontend:
-    image: bqlpfy/vite-frontend:1.4.3
+    image: bqlpfy/vite-frontend:1.4.4
     container_name: vite-frontend
     restart: unless-stopped
     ports:
@@ -65,7 +73,6 @@ services:
     networks:
       - gost-network
 
-
 volumes:
   mysql_data:
     name: mysql_data
@@ -74,7 +81,6 @@ volumes:
     name: backend_logs
     driver: local
 
-
 networks:
   gost-network:
     name: gost-network
@@ -82,5 +88,5 @@ networks:
     enable_ipv6: true
     ipam:
       config:
-        - subnet: 172.20.0.0/16 
+        - subnet: 172.20.0.0/16
         - subnet: fd00:dead:beef::/48
