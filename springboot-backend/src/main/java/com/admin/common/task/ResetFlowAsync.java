@@ -1,14 +1,7 @@
 package com.admin.common.task;
 
-import com.admin.common.utils.GostUtil;
-import com.admin.entity.Forward;
-import com.admin.entity.Tunnel;
-import com.admin.entity.TunnelEntryNode;
 import com.admin.entity.User;
 import com.admin.entity.UserTunnel;
-import com.admin.mapper.TunnelEntryNodeMapper;
-import com.admin.service.ForwardService;
-import com.admin.service.TunnelService;
 import com.admin.service.UserService;
 import com.admin.service.UserTunnelService;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
@@ -21,9 +14,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import javax.annotation.Resource;
 import java.time.LocalDate;
 import java.util.Date;
-import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Set;
 
 @Slf4j
 @Configuration
@@ -37,13 +28,7 @@ public class ResetFlowAsync {
     UserTunnelService userTunnelService;
 
     @Resource
-    ForwardService forwardService;
-
-    @Resource
-    TunnelService tunnelService;
-
-    @Resource
-    TunnelEntryNodeMapper tunnelEntryNodeMapper;
+    ForwardPauseTaskService forwardPauseTaskService;
 
     /**
      * 每天0点执行流量重置任务
@@ -201,18 +186,10 @@ public class ResetFlowAsync {
         // 查询过期用户
         List<User> user_list = userService.list(new QueryWrapper<User>().ne("role_id", 0).eq("status", 1).isNotNull("exp_time").lt("exp_time", new Date().getTime()));
         for (User user : user_list) {
-            // 查询对应转发
-            List<Forward> forwardList = forwardService.list(new QueryWrapper<Forward>().eq("user_id", user.getId()).eq("status", 1));
-            for (Forward forward : forwardList) {
-                UserTunnel userTunnel = userTunnelService.getOne(new QueryWrapper<UserTunnel>().eq("user_id", forward.getUserId()).eq("tunnel_id", forward.getTunnelId()));
-                if (userTunnel != null) {
-                    pauseForwardService(forward, userTunnel.getId());
-                    forward.setStatus(0);
-                    forwardService.updateById(forward);
-                }
+            int queued = forwardPauseTaskService.disableExpiredUserAndQueue(user.getId());
+            if (queued > 0) {
+                forwardPauseTaskService.dispatchPendingTasks();
             }
-            user.setStatus(0);
-            userService.updateById(user);
         }
     }
 
@@ -222,50 +199,10 @@ public class ResetFlowAsync {
         List<UserTunnel> user_tunnel_list = userTunnelService.list(new QueryWrapper<UserTunnel>().eq("status", 1).isNotNull("exp_time").lt("exp_time", new Date().getTime()));
         // 查询对应转发
         for (UserTunnel userTunnel : user_tunnel_list) {
-            List<Forward> forwardList = forwardService.list(new QueryWrapper<Forward>().eq("tunnel_id", userTunnel.getTunnelId()).eq("user_id", userTunnel.getUserId()).eq("status", 1));
-            for (Forward forward : forwardList) {
-                pauseForwardService(forward, userTunnel.getId());
-                forward.setStatus(0);
-                forwardService.updateById(forward);
-            }
-            userTunnel.setStatus(0);
-            userTunnelService.updateById(userTunnel);
-        }
-    }
-
-
-    private void pauseForwardService(Forward forward, Integer userTunnelId) {
-        Tunnel tunnel = tunnelService.getById(forward.getTunnelId());
-        if (tunnel == null) return;
-
-        String serviceName = buildServiceName(forward.getId(), forward.getUserId(), userTunnelId);
-        for (Long entryNodeId : getIngressNodeIds(tunnel)) {
-            GostUtil.PauseService(entryNodeId, serviceName);
-        }
-        if (tunnel.getType() == 2){
-            GostUtil.PauseRemoteService(tunnel.getOutNodeId(), serviceName);
-        }
-    }
-
-    private Set<Long> getIngressNodeIds(Tunnel tunnel) {
-        Set<Long> nodeIds = new LinkedHashSet<>();
-        if (tunnel.getId() != null) {
-            List<TunnelEntryNode> entries = tunnelEntryNodeMapper.selectList(
-                    new QueryWrapper<TunnelEntryNode>().eq("tunnel_id", tunnel.getId()).orderByAsc("id"));
-            for (TunnelEntryNode entry : entries) {
-                if (entry.getNodeId() != null) {
-                    nodeIds.add(entry.getNodeId());
-                }
+            int queued = forwardPauseTaskService.disableExpiredUserTunnelAndQueue(userTunnel);
+            if (queued > 0) {
+                forwardPauseTaskService.dispatchPendingTasks();
             }
         }
-        if (nodeIds.isEmpty() && tunnel.getInNodeId() != null) {
-            nodeIds.add(tunnel.getInNodeId());
-        }
-        return nodeIds;
-    }
-
-
-    private String buildServiceName(Long forwardId, Integer userId, Integer userTunnelId) {
-        return forwardId + "_" + userId + "_" + userTunnelId;
     }
 }

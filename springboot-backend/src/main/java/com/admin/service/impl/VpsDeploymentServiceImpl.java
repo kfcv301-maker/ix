@@ -15,6 +15,7 @@ import com.admin.service.VpsDeploymentService;
 import com.admin.service.VpsHostService;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import org.springframework.beans.BeanUtils;
+import org.springframework.core.task.TaskRejectedException;
 import org.springframework.stereotype.Service;
 
 import javax.annotation.Resource;
@@ -70,7 +71,18 @@ public class VpsDeploymentServiceImpl implements VpsDeploymentService {
         task.setUpdatedTime(now);
         task.setStatus(ACTIVE_STATUS);
         if (taskMapper.insert(task) <= 0) return R.err("创建部署任务失败");
-        deploymentExecutor.execute(task.getId());
+        try {
+            deploymentExecutor.execute(task.getId());
+        } catch (TaskRejectedException exception) {
+            VpsDeploymentTask rejected = new VpsDeploymentTask();
+            rejected.setId(task.getId());
+            rejected.setTaskStatus("failed");
+            rejected.setOutputLog("任务队列已满，请稍后重试。\n");
+            rejected.setFinishedTime(System.currentTimeMillis());
+            rejected.setUpdatedTime(System.currentTimeMillis());
+            taskMapper.updateById(rejected);
+            return R.err("部署任务队列繁忙，请稍后重试");
+        }
         return R.ok(toView(task, loadUserNames(Collections.singletonList(task))));
     }
 

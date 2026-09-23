@@ -5,10 +5,12 @@ spring:
     username: ${DB_USER}
     password: ${DB_PASSWORD}
     hikari:
-      max-lifetime: 500000
+      # Keep pool sizing explicit, but do not compensate for slow work by
+      # multiplying HTTP threads. Node commands run on bounded executors.
+      max-lifetime: 1800000
       connection-timeout: 30000
-      idle-timeout: 600000
-      max-pool-size: 20
+      idle-timeout: 300000
+      maximum-pool-size: 20
       minimum-idle: 5
       pool-name: HikariCP
       auto-commit: true
@@ -24,7 +26,8 @@ server:
   port: 6365
   tomcat:
     uri-encoding: UTF-8
-    max-thread: 800
+    threads:
+      max: 200
     max-connections: 2000
   shutdown: graceful
   error:

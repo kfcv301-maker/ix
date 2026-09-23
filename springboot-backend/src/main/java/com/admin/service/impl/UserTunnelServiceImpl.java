@@ -5,6 +5,7 @@ import com.admin.common.dto.UserTunnelQueryDto;
 import com.admin.common.dto.UserTunnelUpdateDto;
 import com.admin.common.dto.UserTunnelWithDetailDto;
 import com.admin.common.lang.R;
+import com.admin.common.task.ForwardPauseTaskService;
 import com.admin.entity.UserTunnel;
 import com.admin.mapper.TunnelMapper;
 import com.admin.mapper.UserTunnelMapper;
@@ -14,6 +15,8 @@ import com.admin.service.ForwardService;
 import com.admin.service.NodeService;
 import com.admin.service.TunnelEntryDomainService;
 import com.admin.common.utils.GostUtil;
+import com.admin.common.utils.TunnelIngressNodeResolver;
+import com.admin.common.utils.WebSocketServer;
 import com.admin.entity.Forward;
 import com.admin.entity.Tunnel;
 import com.admin.entity.Node;
@@ -31,6 +34,7 @@ import javax.annotation.Resource;
 import java.util.List;
 import java.util.Map;
 import java.util.Locale;
+import java.util.Set;
 
 /**
  * <p>
@@ -77,6 +81,15 @@ public class UserTunnelServiceImpl extends ServiceImpl<UserTunnelMapper, UserTun
     @Autowired
     private TunnelEntryDomainService tunnelEntryDomainService;
 
+    @Autowired
+    private TunnelIngressNodeResolver ingressNodeResolver;
+
+    // The worker itself resolves UserTunnelService while processing a task.
+    // Lazy injection keeps that graph acyclic at application startup.
+    @Autowired
+    @Lazy
+    private ForwardPauseTaskService forwardPauseTaskService;
+
     // ========== 公共接口实现 ==========
 
     /**
@@ -108,8 +121,9 @@ public class UserTunnelServiceImpl extends ServiceImpl<UserTunnelMapper, UserTun
         // 设置默认状态为启用
         userTunnel.setStatus(1);
         boolean success = this.save(userTunnel);
-        
+
         if (success) {
+            WebSocketServer.closeUserSessions(userTunnel.getUserId().longValue());
             return R.ok(SUCCESS_ASSIGN_MSG);
         }
         
@@ -153,7 +167,11 @@ public class UserTunnelServiceImpl extends ServiceImpl<UserTunnelMapper, UserTun
         
         // 4. 删除用户隧道权限记录
         boolean success = this.removeById(id);
-        return success ? R.ok(SUCCESS_REMOVE_MSG) : R.err(ERROR_PERMISSION_NOT_FOUND);
+        if (success) {
+            WebSocketServer.closeUserSessions(userTunnel.getUserId().longValue());
+            return R.ok(SUCCESS_REMOVE_MSG);
+        }
+        return R.err(ERROR_PERMISSION_NOT_FOUND);
     }
 
 
@@ -191,10 +209,25 @@ public class UserTunnelServiceImpl extends ServiceImpl<UserTunnelMapper, UserTun
         // 3. 更新用户隧道权限属性
         updateUserTunnelProperties(existingUserTunnel, updateDto);
         
-        // 4. 保存更新
-        boolean success = this.updateById(existingUserTunnel);
+        // 4. Update only entitlement fields. Writing the loaded entity back
+        // would overwrite in_flow/out_flow that a concurrent node report just
+        // atomically incremented.
+        UpdateWrapper<UserTunnel> update = new UpdateWrapper<>();
+        update.eq("id", existingUserTunnel.getId())
+                .set("flow", existingUserTunnel.getFlow())
+                .set("num", existingUserTunnel.getNum())
+                .set("flow_reset_time", existingUserTunnel.getFlowResetTime())
+                .set("exp_time", existingUserTunnel.getExpTime())
+                .set("status", existingUserTunnel.getStatus())
+                .set("speed_id", existingUserTunnel.getSpeedId())
+                .set("entry_address_mode", existingUserTunnel.getEntryAddressMode())
+                .set("entry_domain_id", existingUserTunnel.getEntryDomainId());
+        boolean success = this.update(null, update);
         
         if (success) {
+            WebSocketServer.closeUserSessions(existingUserTunnel.getUserId().longValue());
+            forwardPauseTaskService.enqueueForCurrentLimits(existingUserTunnel.getUserId().longValue(),
+                    existingUserTunnel.getId().longValue());
             // 6. 如果限速规则发生变化，更新该用户隧道下的所有转发
             if (speedChanged) {
                 updateUserTunnelForwardsSpeed(existingUserTunnel.getUserId(), existingUserTunnel.getTunnelId(), updateDto.getSpeedId());
@@ -345,38 +378,38 @@ public class UserTunnelServiceImpl extends ServiceImpl<UserTunnelMapper, UserTun
                 return;
             }
 
-            Node inNode = nodeService.getById(tunnel.getInNodeId());
             Node outNode = nodeService.getById(tunnel.getOutNodeId());
             
             String serviceName = buildServiceName(forward.getId(), Long.valueOf(userId), userTunnelId);
             
-            // 1. 先删除主服务
-            if (inNode != null) {
+            // 1. Each ingress owns a separate copy of the main service and
+            // chain. Cleaning only the legacy in_node_id leaves secondary
+            // entries forwarding after an entitlement is removed.
+            Set<Long> ingressNodeIds = ingressNodeResolver.resolveNodeIds(tunnel);
+            for (Long ingressNodeId : ingressNodeIds) {
                 try {
-                    GostUtil.DeleteService(inNode.getId(), serviceName);
+                    GostUtil.DeleteService(ingressNodeId, serviceName);
                 } catch (Exception e) {
                     // 主服务删除失败，记录但继续
                 }
+                if (tunnel.getType() == 2) {
+                    try {
+                        GostUtil.DeleteChains(ingressNodeId, serviceName);
+                    } catch (Exception e) {
+                        // 链删除失败，记录但继续
+                    }
+                }
             }
-            
+
             // 2. 如果是隧道转发，删除远端服务
-            if (tunnel.getType() == 2 && outNode != null && !outNode.getId().equals(inNode != null ? inNode.getId() : null)) {
+            if (tunnel.getType() == 2 && outNode != null) {
                 try {
                     GostUtil.DeleteRemoteService(outNode.getId(), serviceName);
                 } catch (Exception e) {
                     // 远端服务删除失败，记录但继续
                 }
             }
-            
-            // 3. 如果是隧道转发，最后删除转发链
-            if (tunnel.getType() == 2 && inNode != null) {
-                try {
-                    GostUtil.DeleteChains(inNode.getId(), serviceName);
-                } catch (Exception e) {
-                    // 转发链删除失败，记录但继续
-                }
-            }
-            
+
         } catch (Exception e) {
             // 服务删除失败，记录错误
             throw new RuntimeException("删除转发服务失败，转发ID：" + forward.getId() + "，错误：" + e.getMessage(), e);
@@ -471,14 +504,14 @@ public class UserTunnelServiceImpl extends ServiceImpl<UserTunnelMapper, UserTun
             return;
         }
 
-        // 4. 获取入口节点信息
-        Node inNode = nodeService.getById(tunnel.getInNodeId());
-
-        if (inNode == null) {
+        // 4. Every ingress publishes its own copy of this service. Updating
+        // only tunnel.in_node_id leaves secondary entries on their old limiter.
+        Set<Long> ingressNodeIds = ingressNodeResolver.resolveNodeIds(tunnel);
+        if (ingressNodeIds.isEmpty()) {
             return;
         }
 
-        // 5. 批量更新该用户在该隧道下所有转发的限速配置（只更新入口节点）
+        // 5. 批量更新该用户在该隧道下所有转发的限速配置。
         for (Forward forward : userTunnelForwards) {
             String serviceName = buildServiceName(forward.getId(), Long.valueOf(userId), userTunnel.getId());
 
@@ -488,8 +521,12 @@ public class UserTunnelServiceImpl extends ServiceImpl<UserTunnelMapper, UserTun
                 interfaceName = forward.getInterfaceName();
             }
 
-            // 6. 更新入口节点的主服务限速配置（使用批量UpdateService接口）
-            GostUtil.UpdateService(inNode.getId(), serviceName, forward.getInPort(), speedId, forward.getRemoteAddr(), tunnel.getType(), tunnel, forward.getStrategy(), interfaceName);
+            // 6. Update every ingress; a later node inventory report repairs a
+            // missing limiter before restoring a service on that node.
+            for (Long nodeId : ingressNodeIds) {
+                GostUtil.UpdateService(nodeId, serviceName, forward.getInPort(), speedId,
+                        forward.getRemoteAddr(), tunnel.getType(), tunnel, forward.getStrategy(), interfaceName);
+            }
         }
     }
 }

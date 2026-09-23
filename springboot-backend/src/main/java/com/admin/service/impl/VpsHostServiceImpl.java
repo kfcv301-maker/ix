@@ -64,9 +64,6 @@ public class VpsHostServiceImpl extends ServiceImpl<VpsHostMapper, VpsHost> impl
     public R createHost(VpsHostDto hostDto) {
         Actor actor = currentActor();
         boolean administrator = actor.administrator;
-        if (!administrator && !Boolean.TRUE.equals(hostDto.getAdminAccessAcknowledged())) {
-            return R.err("请确认：用户托管的 VPS 将允许所有管理员进行维护和 SSH 操作");
-        }
 
         String normalizedHost;
         try {

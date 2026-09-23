@@ -5,12 +5,11 @@ import com.admin.common.dto.SpeedLimitDto;
 import com.admin.common.dto.SpeedLimitUpdateDto;
 import com.admin.common.lang.R;
 import com.admin.common.utils.GostUtil;
-import com.admin.entity.Node;
+import com.admin.common.utils.TunnelIngressNodeResolver;
 import com.admin.entity.SpeedLimit;
 import com.admin.entity.Tunnel;
 import com.admin.entity.UserTunnel;
 import com.admin.mapper.SpeedLimitMapper;
-import com.admin.service.NodeService;
 import com.admin.service.SpeedLimitService;
 import com.admin.service.TunnelService;
 import com.admin.service.UserTunnelService;
@@ -26,7 +25,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.List;
 import java.util.Objects;
-import java.util.UUID;
+import java.util.Set;
 
 /**
  * <p>
@@ -77,14 +76,14 @@ public class SpeedLimitServiceImpl extends ServiceImpl<SpeedLimitMapper, SpeedLi
     private TunnelService tunnelService;
 
     @Autowired
-    private NodeService nodeService;
-
-    @Autowired
     private UserTunnelService userTunnelService;
 
     @Autowired
     @Lazy
     private SpeedLimitService speedLimitService;
+
+    @Autowired
+    private TunnelIngressNodeResolver ingressNodeResolver;
 
     // ========== 公共接口实现 ==========
 
@@ -192,12 +191,31 @@ public class SpeedLimitServiceImpl extends ServiceImpl<SpeedLimitMapper, SpeedLi
             return R.ok();
         }
 
-        // 4. 调用Gost API删除限速器
-        deleteGostLimiter(id, tunnel);
+        // 4. 所有入口都确认删除后才移除数据库规则，避免孤立的限速器。
+        R gostResult = deleteGostLimiter(id, tunnel);
+        if (gostResult.getCode() != 0) {
+            return gostResult;
+        }
 
         // 5. 删除限速规则
         boolean result = this.removeById(id);
         return result ? R.ok(SUCCESS_DELETE_MSG) : R.err(ERROR_DELETE_MSG);
+    }
+
+    @Override
+    public R ensureLimiterOnNode(Long speedLimitId, Long nodeId) {
+        if (speedLimitId == null || nodeId == null) {
+            return R.err("限速规则或入口节点不能为空");
+        }
+        SpeedLimit speedLimit = this.getById(speedLimitId);
+        if (speedLimit == null) {
+            return R.err(ERROR_SPEED_LIMIT_NOT_FOUND);
+        }
+        Tunnel tunnel = tunnelService.getById(speedLimit.getTunnelId());
+        if (tunnel == null || !ingressNodeResolver.isIngressNode(tunnel, nodeId)) {
+            return R.err("限速规则不属于该入口节点");
+        }
+        return updateGostLimiterOnNode(speedLimit, nodeId);
     }
 
     // ========== 私有辅助方法 ==========
@@ -287,15 +305,15 @@ public class SpeedLimitServiceImpl extends ServiceImpl<SpeedLimitMapper, SpeedLi
      */
     private R addGostLimiter(SpeedLimit speedLimit, Tunnel tunnel) {
         String speedInMBps = convertBitsToMBps(speedLimit.getSpeed());
-        Node node = nodeService.getNodeById(tunnel.getInNodeId());
-        
-        GostDto gostResult = GostUtil.AddLimiters(
-           node.getId(),
-            speedLimit.getId(), 
-            speedInMBps
-        );
-        
-        return isGostOperationSuccess(gostResult) ? R.ok() : R.err(gostResult.getMsg());
+        Set<Long> ingressNodeIds = ingressNodeResolver.resolveNodeIds(tunnel);
+        if (ingressNodeIds.isEmpty()) return R.err("隧道没有入口节点");
+        for (Long nodeId : ingressNodeIds) {
+            GostDto gostResult = GostUtil.AddLimiters(nodeId, speedLimit.getId(), speedInMBps);
+            if (!isGostOperationSuccess(gostResult)) {
+                return R.err("入口节点 " + nodeId + " 创建限速器失败：" + gostMessage(gostResult));
+            }
+        }
+        return R.ok();
     }
 
     /**
@@ -306,18 +324,13 @@ public class SpeedLimitServiceImpl extends ServiceImpl<SpeedLimitMapper, SpeedLi
      * @return 操作结果响应
      */
     private R updateGostLimiter(SpeedLimit speedLimit, Tunnel tunnel) {
-        String speedInMBps = convertBitsToMBps(speedLimit.getSpeed());
-        Node node = nodeService.getNodeById(tunnel.getInNodeId());
-
-        // 尝试更新限速器
-        GostDto gostResult = GostUtil.UpdateLimiters(node.getId(), speedLimit.getId(), speedInMBps);
-        
-        // 如果限速器不存在，则创建新的
-        if (gostResult.getMsg().contains(GOST_NOT_FOUND_MSG)) {
-            gostResult = GostUtil.AddLimiters(node.getId(), speedLimit.getId(), speedInMBps);
+        Set<Long> ingressNodeIds = ingressNodeResolver.resolveNodeIds(tunnel);
+        if (ingressNodeIds.isEmpty()) return R.err("隧道没有入口节点");
+        for (Long nodeId : ingressNodeIds) {
+            R result = updateGostLimiterOnNode(speedLimit, nodeId);
+            if (result.getCode() != 0) return result;
         }
-        
-        return isGostOperationSuccess(gostResult) ? R.ok() : R.err(gostResult.getMsg());
+        return R.ok();
     }
 
     /**
@@ -328,10 +341,25 @@ public class SpeedLimitServiceImpl extends ServiceImpl<SpeedLimitMapper, SpeedLi
      * @return 操作结果响应
      */
     private R deleteGostLimiter(Long speedLimitId, Tunnel tunnel) {
-        Node node = nodeService.getNodeById(tunnel.getInNodeId());
-        GostDto gostResult = GostUtil.DeleteLimiters(node.getId(), speedLimitId);
-        
-        return isGostOperationSuccess(gostResult) ? R.ok() : R.err(gostResult.getMsg());
+        Set<Long> ingressNodeIds = ingressNodeResolver.resolveNodeIds(tunnel);
+        if (ingressNodeIds.isEmpty()) return R.err("隧道没有入口节点");
+        for (Long nodeId : ingressNodeIds) {
+            GostDto gostResult = GostUtil.DeleteLimiters(nodeId, speedLimitId);
+            if (!isGostOperationSuccess(gostResult)) {
+                return R.err("入口节点 " + nodeId + " 删除限速器失败：" + gostMessage(gostResult));
+            }
+        }
+        return R.ok();
+    }
+
+    private R updateGostLimiterOnNode(SpeedLimit speedLimit, Long nodeId) {
+        String speedInMBps = convertBitsToMBps(speedLimit.getSpeed());
+        GostDto gostResult = GostUtil.UpdateLimiters(nodeId, speedLimit.getId(), speedInMBps);
+        if (gostResult != null && gostResult.getMsg() != null && gostResult.getMsg().contains(GOST_NOT_FOUND_MSG)) {
+            gostResult = GostUtil.AddLimiters(nodeId, speedLimit.getId(), speedInMBps);
+        }
+        return isGostOperationSuccess(gostResult) ? R.ok()
+                : R.err("入口节点 " + nodeId + " 同步限速器失败：" + gostMessage(gostResult));
     }
 
     /**
@@ -363,7 +391,11 @@ public class SpeedLimitServiceImpl extends ServiceImpl<SpeedLimitMapper, SpeedLi
      * @return 是否成功
      */
     private boolean isGostOperationSuccess(GostDto gostResult) {
-        return Objects.equals(gostResult.getMsg(), GOST_SUCCESS_MSG);
+        return gostResult != null && Objects.equals(gostResult.getMsg(), GOST_SUCCESS_MSG);
+    }
+
+    private String gostMessage(GostDto gostResult) {
+        return gostResult == null || gostResult.getMsg() == null ? "无响应" : gostResult.getMsg();
     }
 
     // ========== 内部数据类 ==========

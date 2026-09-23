@@ -6,7 +6,6 @@ import com.admin.common.utils.GostUtil;
 import com.admin.entity.*;
 import com.admin.mapper.TunnelEntryNodeMapper;
 import com.admin.service.*;
-import com.alibaba.fastjson.JSONObject;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Lazy;
@@ -15,8 +14,10 @@ import org.springframework.stereotype.Service;
 
 import javax.annotation.Resource;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
@@ -44,6 +45,14 @@ public class CheckGostConfigAsync {
     private UserTunnelService userTunnelService;
 
     @Resource
+    @Lazy
+    private UserService userService;
+
+    @Resource
+    @Lazy
+    private ForwardPauseTaskService forwardPauseTaskService;
+
+    @Resource
     private TunnelEntryNodeMapper tunnelEntryNodeMapper;
 
 
@@ -51,20 +60,26 @@ public class CheckGostConfigAsync {
     /**
      * 清理孤立的Gost配置项
      */
-    @Async
+    @Async("nodeConfigExecutor")
     public void cleanNodeConfigs(String node_id, GostConfigDto gostConfig) {
-        System.out.println(JSONObject.toJSONString(gostConfig));
+        if (gostConfig == null) {
+            return;
+        }
         Node node = nodeService.getById(node_id);
         if (node != null) {
             cleanOrphanedServices(gostConfig, node);
             cleanOrphanedChains(gostConfig, node);
             cleanOrphanedLimiters(gostConfig, node);
+            // Restore limiters first. A recovered service that references a
+            // limiter before it exists can start without its assigned cap.
+            syncLimiters(gostConfig, node);
             // 重装节点会让 GOST 侧的运行时服务消失，但数据库中的转发记录仍然存在。
             // 配置上报发生在 WebSocket 建立之后，正是无人工编辑即可恢复缺失服务的安全时机。
             syncMissingForwards(gostConfig, node);
-            // 节点重启后内存中的 limiter 会丢失。配置上报正是节点恢复
-            // 可控状态的时机，必须在这里把数据库中的限速规则补回去。
-            syncLimiters(gostConfig, node);
+            // Run durable quota/expiry pauses after the inventory has been
+            // reconciled. This avoids a reconnect briefly restoring a service
+            // while a prior pause command was waiting for that node.
+            forwardPauseTaskService.retryPendingForNode(node.getId());
         }
     }
 
@@ -76,7 +91,11 @@ public class CheckGostConfigAsync {
             return;
         }
 
+        Map<Long, Forward> forwardsById = loadForwardsByConfigItems(gostConfig.getServices());
         for (ConfigItem service : gostConfig.getServices()) {
+            if (service == null) {
+                continue;
+            }
             safeExecute(() -> {
 
                 if (!Objects.equals(service.getName(), "web_api")){
@@ -86,22 +105,32 @@ public class CheckGostConfigAsync {
                         String userId = serviceIds[1];
                         String userTunnelId = serviceIds[2];
                         String type = serviceIds[3];
+                        Long forwardRecordId = parseForwardId(forwardId);
+                        if (forwardRecordId == null) {
+                            return;
+                        }
+                        Forward forward = forwardsById.get(forwardRecordId);
 
+                        String baseServiceName = forwardId + "_" + userId + "_" + userTunnelId;
                         if (Objects.equals(type, "tcp")) { // 只处理TCP，避免重复处理
-                            Forward forward = forwardService.getById(forwardId);
                             if (forward == null) {
                                 log.info("删除孤立的服务: {} (节点: {})", service.getName(), node.getId());
-                                GostDto gostDto = GostUtil.DeleteService(node.getId(), forwardId + "_" + userId + "_" + userTunnelId);
-                                System.out.println(gostDto);
+                                GostUtil.DeleteService(node.getId(), baseServiceName);
+                            } else if (!Objects.equals(forward.getStatus(), 1)) {
+                                // Older versions could mark a forward paused
+                                // even when the node command timed out. A fresh
+                                // inventory lets us reconcile that drift.
+                                GostUtil.PauseService(node.getId(), baseServiceName);
                             }
                         }
 
 
                         if (Objects.equals(type, "tls")) {
-                            Forward forward = forwardService.getById(forwardId);
                             if (forward == null) {
                                 log.info("删除孤立的服务: {} (节点: {})", service.getName(), node.getId());
-                                GostUtil.DeleteRemoteService(node.getId(), forwardId+"_"+userId+"_"+userTunnelId);
+                                GostUtil.DeleteRemoteService(node.getId(), baseServiceName);
+                            } else if (!Objects.equals(forward.getStatus(), 1)) {
+                                GostUtil.PauseRemoteService(node.getId(), baseServiceName);
                             }
                         }
 
@@ -123,7 +152,11 @@ public class CheckGostConfigAsync {
         }
         
 
+        Map<Long, Forward> forwardsById = loadForwardsByConfigItems(gostConfig.getChains());
         for (ConfigItem chain : gostConfig.getChains()) {
+            if (chain == null) {
+                continue;
+            }
             safeExecute(() -> {
                 String[] serviceIds = parseServiceName(chain.getName());
                 if (serviceIds.length == 4) {
@@ -131,9 +164,10 @@ public class CheckGostConfigAsync {
                     String userId = serviceIds[1];
                     String userTunnelId = serviceIds[2];
                     String type = serviceIds[3];
+                    Long forwardRecordId = parseForwardId(forwardId);
                     
-                    if (Objects.equals(type, "chains")) {
-                        Forward forward = forwardService.getById(forwardId);
+                    if (forwardRecordId != null && Objects.equals(type, "chains")) {
+                        Forward forward = forwardsById.get(forwardRecordId);
                         if (forward == null) {
                             log.info("删除孤立的链: {} (节点: {})", chain.getName(), node.getId());
                             GostUtil.DeleteChains(node.getId(), forwardId+"_"+userId+"_"+userTunnelId);
@@ -153,12 +187,40 @@ public class CheckGostConfigAsync {
         }
         
 
+        Set<Long> reportedLimiterIds = new HashSet<>();
         for (ConfigItem limiter : gostConfig.getLimiters()) {
+            if (limiter == null || limiter.getName() == null) {
+                continue;
+            }
+            try {
+                reportedLimiterIds.add(Long.parseLong(limiter.getName()));
+            } catch (NumberFormatException exception) {
+                log.warn("节点 {} 上报了非法限速器名称 {}", node.getId(), limiter.getName());
+            }
+        }
+        Set<Long> existingLimiterIds = new HashSet<>();
+        if (!reportedLimiterIds.isEmpty()) {
+            for (SpeedLimit speedLimit : speedLimitService.listByIds(reportedLimiterIds)) {
+                existingLimiterIds.add(speedLimit.getId());
+            }
+        }
+        for (ConfigItem limiter : gostConfig.getLimiters()) {
+            if (limiter == null) {
+                continue;
+            }
             safeExecute(() -> {
-                SpeedLimit speedLimit = speedLimitService.getById(limiter.getName());
-                if (speedLimit == null) {
+                if (limiter == null || limiter.getName() == null) {
+                    return;
+                }
+                Long limiterId;
+                try {
+                    limiterId = Long.parseLong(limiter.getName());
+                } catch (NumberFormatException exception) {
+                    return;
+                }
+                if (!existingLimiterIds.contains(limiterId)) {
                     log.info("删除孤立的限流器: {} (节点: {})", limiter.getName(), node.getId());
-                    GostUtil.DeleteLimiters(node.getId(), Long.parseLong(limiter.getName()));
+                    GostUtil.DeleteLimiters(node.getId(), limiterId);
                 }
             }, "清理限流器 " + limiter.getName());
         }
@@ -179,31 +241,21 @@ public class CheckGostConfigAsync {
                     new QueryWrapper<SpeedLimit>().in("tunnel_id", tunnelIds));
             if (speedLimits != null && !speedLimits.isEmpty()) {
                 List<ConfigItem> limiters = gostConfig.getLimiters();
-                List<Long> limiters_ids = new ArrayList<>();
-                List<Long>  speedLimits_ids = new ArrayList<>();
-                if (limiters != null){
+                Set<Long> limiterIds = new HashSet<>();
+                if (limiters != null) {
                     for (ConfigItem limiter : limiters) {
-                        limiters_ids.add(Long.valueOf(limiter.getName()));
+                        try {
+                            limiterIds.add(Long.valueOf(limiter.getName()));
+                        } catch (NumberFormatException ignored) {
+                            log.warn("节点 {} 上报了非法限速器名称 {}", node.getId(), limiter.getName());
+                        }
                     }
                 }
                 for (SpeedLimit speedLimit : speedLimits) {
-                    speedLimits_ids.add(speedLimit.getId());
-                }
-                List<Long> diff = new ArrayList<>(speedLimits_ids);
-                diff.removeAll(limiters_ids);
-                System.out.println(diff);
-                if (!diff.isEmpty()) {
-
-                    for (Long speed_id : diff) {
-                        SpeedLimit speedLimit = speedLimitService.getById(speed_id);
-                        if (speedLimit != null) {
-                            SpeedLimitUpdateDto speedLimitUpdateDto = new SpeedLimitUpdateDto();
-                            speedLimitUpdateDto.setId(speed_id);
-                            speedLimitUpdateDto.setName(speedLimit.getName());
-                            speedLimitUpdateDto.setSpeed(speedLimit.getSpeed());
-                            speedLimitUpdateDto.setTunnelId(speedLimit.getTunnelId());
-                            speedLimitUpdateDto.setTunnelName(speedLimit.getTunnelName());
-                            speedLimitService.updateSpeedLimit(speedLimitUpdateDto);
+                    if (!limiterIds.contains(speedLimit.getId())) {
+                        R result = speedLimitService.ensureLimiterOnNode(speedLimit.getId(), node.getId());
+                        if (result.getCode() != 0) {
+                            log.warn("节点 {} 恢复限速器 {} 失败: {}", node.getId(), speedLimit.getId(), result.getMsg());
                         }
                     }
                 }
@@ -220,20 +272,56 @@ public class CheckGostConfigAsync {
     private void syncMissingForwards(GostConfigDto gostConfig, Node node) {
         Set<String> serviceNames = getConfigNames(gostConfig.getServices());
         Set<String> chainNames = getConfigNames(gostConfig.getChains());
-        List<Forward> activeForwards = forwardService.list(new QueryWrapper<Forward>().eq("status", 1));
+        List<Tunnel> ingressTunnels = getIngressTunnels(node.getId());
+        List<Tunnel> egressTunnels = tunnelService.list(new QueryWrapper<Tunnel>()
+                .eq("out_node_id", node.getId()).eq("type", 2));
+        Map<Long, Tunnel> relevantTunnels = new LinkedHashMap<>();
+        Set<Long> ingressTunnelIds = new HashSet<>();
+        for (Tunnel tunnel : ingressTunnels) {
+            relevantTunnels.put(tunnel.getId(), tunnel);
+            ingressTunnelIds.add(tunnel.getId());
+        }
+        for (Tunnel tunnel : egressTunnels) {
+            relevantTunnels.put(tunnel.getId(), tunnel);
+        }
+        if (relevantTunnels.isEmpty()) return;
+
+        List<Forward> activeForwards = forwardService.list(new QueryWrapper<Forward>()
+                .eq("status", 1).in("tunnel_id", relevantTunnels.keySet()));
         if (activeForwards == null || activeForwards.isEmpty()) return;
 
+        List<UserTunnel> userTunnels = userTunnelService.list(new QueryWrapper<UserTunnel>()
+                .in("tunnel_id", relevantTunnels.keySet()));
+        Map<String, UserTunnel> userTunnelByOwnerAndTunnel = new LinkedHashMap<>();
+        for (UserTunnel userTunnel : userTunnels) {
+            userTunnelByOwnerAndTunnel.put(userTunnelKey(userTunnel.getUserId(), userTunnel.getTunnelId()), userTunnel);
+        }
+
+        Set<Integer> ownerIds = new HashSet<>();
         for (Forward forward : activeForwards) {
-            Tunnel tunnel = tunnelService.getById(forward.getTunnelId());
+            if (forward.getUserId() != null) {
+                ownerIds.add(forward.getUserId());
+            }
+        }
+        Map<Integer, User> ownersById = new LinkedHashMap<>();
+        if (!ownerIds.isEmpty()) {
+            for (User owner : userService.list(new QueryWrapper<User>().in("id", ownerIds))) {
+                ownersById.put(owner.getId().intValue(), owner);
+            }
+        }
+        long now = System.currentTimeMillis();
+
+        for (Forward forward : activeForwards) {
+            Tunnel tunnel = relevantTunnels.get(forward.getTunnelId().longValue());
             if (tunnel == null || !Objects.equals(tunnel.getStatus(), 1)) continue;
 
-            boolean isInNode = isIngressNode(tunnel.getId(), tunnel.getInNodeId(), node.getId());
+            boolean isInNode = ingressTunnelIds.contains(tunnel.getId());
             boolean isOutNode = Objects.equals(tunnel.getOutNodeId(), node.getId());
-            if (!isInNode && !isOutNode) continue;
-
-            UserTunnel userTunnel = userTunnelService.getOne(new QueryWrapper<UserTunnel>()
-                    .eq("user_id", forward.getUserId())
-                    .eq("tunnel_id", forward.getTunnelId()));
+            UserTunnel userTunnel = userTunnelByOwnerAndTunnel.get(userTunnelKey(forward.getUserId(), forward.getTunnelId()));
+            User owner = ownersById.get(forward.getUserId());
+            if (!canRestoreForward(owner, userTunnel, now)) {
+                continue;
+            }
             int userTunnelId = userTunnel == null ? 0 : userTunnel.getId();
             String serviceName = forward.getId() + "_" + forward.getUserId() + "_" + userTunnelId;
 
@@ -249,6 +337,76 @@ public class CheckGostConfigAsync {
                 safeExecute(() -> restoreMissingForward(node, forward, tunnel, userTunnel, serviceName,
                         mainServiceMissing, chainMissing, remoteServiceMissing), "恢复缺失转发 " + serviceName);
             }
+        }
+    }
+
+    private String userTunnelKey(Integer userId, Integer tunnelId) {
+        return userId + ":" + tunnelId;
+    }
+
+    /**
+     * Batch-load inventory references so a large node report does not issue a
+     * database query for every service or chain it contains.
+     */
+    private Map<Long, Forward> loadForwardsByConfigItems(List<ConfigItem> configItems) {
+        Set<Long> forwardIds = new HashSet<>();
+        for (ConfigItem configItem : configItems) {
+            if (configItem == null) {
+                continue;
+            }
+            String[] parts = parseServiceName(configItem.getName());
+            if (parts.length == 4) {
+                Long forwardId = parseForwardId(parts[0]);
+                if (forwardId != null) {
+                    forwardIds.add(forwardId);
+                }
+            }
+        }
+        Map<Long, Forward> forwardsById = new LinkedHashMap<>();
+        if (!forwardIds.isEmpty()) {
+            for (Forward forward : forwardService.listByIds(forwardIds)) {
+                forwardsById.put(forward.getId(), forward);
+            }
+        }
+        return forwardsById;
+    }
+
+    private Long parseForwardId(String value) {
+        try {
+            return value == null ? null : Long.valueOf(value);
+        } catch (NumberFormatException exception) {
+            return null;
+        }
+    }
+
+    /**
+     * Do not resurrect an entitlement that is disabled, expired, or exhausted
+     * simply because one of its nodes has reconnected. All checks are made
+     * from the two batch-loaded maps above, avoiding a per-forward SQL query.
+     */
+    private boolean canRestoreForward(User owner, UserTunnel userTunnel, long now) {
+        if (owner == null || !Objects.equals(owner.getStatus(), 1)
+                || (owner.getExpTime() != null && owner.getExpTime() <= now)) {
+            return false;
+        }
+        if (Objects.equals(owner.getRoleId(), 0)) {
+            return true;
+        }
+        return hasRemainingTraffic(owner.getFlow(), owner.getInFlow(), owner.getOutFlow())
+                && userTunnel != null && Objects.equals(userTunnel.getStatus(), 1)
+                && (userTunnel.getExpTime() == null || userTunnel.getExpTime() > now)
+                && hasRemainingTraffic(userTunnel.getFlow(), userTunnel.getInFlow(), userTunnel.getOutFlow());
+    }
+
+    private boolean hasRemainingTraffic(Long quotaGb, Long inbound, Long outbound) {
+        if (quotaGb == null || quotaGb <= 0) {
+            return false;
+        }
+        try {
+            return Math.addExact(inbound == null ? 0 : inbound, outbound == null ? 0 : outbound)
+                    < Math.multiplyExact(quotaGb, 1024L * 1024 * 1024L);
+        } catch (ArithmeticException exception) {
+            return false;
         }
     }
 
@@ -272,14 +430,6 @@ public class CheckGostConfigAsync {
         tunnelService.list(new QueryWrapper<Tunnel>().eq("in_node_id", nodeId))
                 .forEach(tunnel -> tunnelIds.add(tunnel.getId()));
         return tunnelIds.isEmpty() ? new ArrayList<>() : tunnelService.listByIds(tunnelIds);
-    }
-
-    private boolean isIngressNode(Long tunnelId, Long legacyInNodeId, Long nodeId) {
-        if (Objects.equals(legacyInNodeId, nodeId)) {
-            return true;
-        }
-        return tunnelEntryNodeMapper.selectCount(new QueryWrapper<TunnelEntryNode>()
-                .eq("tunnel_id", tunnelId).eq("node_id", nodeId)) > 0;
     }
 
     private void restoreMissingForward(Node node, Forward forward, Tunnel tunnel, UserTunnel userTunnel,
@@ -337,6 +487,6 @@ public class CheckGostConfigAsync {
      * 解析服务名称
      */
     private String[] parseServiceName(String serviceName) {
-        return serviceName.split("_");
+        return serviceName == null ? new String[0] : serviceName.split("_");
     }
 }

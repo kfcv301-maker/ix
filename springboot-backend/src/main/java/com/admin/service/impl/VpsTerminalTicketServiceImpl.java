@@ -55,6 +55,12 @@ public class VpsTerminalTicketServiceImpl implements VpsTerminalTicketService {
         return access;
     }
 
+    @Override
+    public void revokeUserTickets(Long userId) {
+        if (userId == null) return;
+        tickets.entrySet().removeIf(entry -> userId.equals(entry.getValue().getUserId()));
+    }
+
     private void cleanupExpiredTickets() {
         long now = System.currentTimeMillis();
         Iterator<Map.Entry<String, TerminalAccess>> iterator = tickets.entrySet().iterator();

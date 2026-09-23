@@ -71,6 +71,29 @@ func (s *Stats) ResetTraffic(reportedInputBytes, reportedOutputBytes uint64) {
 	s.outputBytes.Store(reportedOutputBytes)
 }
 
+// AcknowledgeTraffic subtracts only the bytes accepted by the panel. Unlike a
+// load-and-store reset, this CAS loop preserves traffic that arrived while an
+// HTTP report was in flight.
+func (s *Stats) AcknowledgeTraffic(inputBytes, outputBytes uint64) {
+	subtractCounter(&s.inputBytes, inputBytes)
+	subtractCounter(&s.outputBytes, outputBytes)
+}
+
+func subtractCounter(counter *atomic.Uint64, amount uint64) {
+	for {
+		current := counter.Load()
+		var next uint64
+		if amount >= current {
+			next = 0
+		} else {
+			next = current - amount
+		}
+		if counter.CompareAndSwap(current, next) {
+			return
+		}
+	}
+}
+
 func (s *Stats) Reset() {
 	s.updated.Store(false)
 	s.totalConns.Store(0)

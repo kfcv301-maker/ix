@@ -457,6 +457,31 @@ public class WebSocketServer extends TextWebSocketHandler {
         }
     }
 
+    /** Immediately close dashboard sockets for an account whose JWT was revoked. */
+    public static void closeUserSessions(Long userId) {
+        if (userId == null) return;
+        for (WebSocketSession session : activeSessions) {
+            Object id = session.getAttributes().get("id");
+            Long sessionUserId = toLong(id);
+            if (!userId.equals(sessionUserId)) continue;
+            cleanupSession(session);
+            try {
+                if (session.isOpen()) session.close(CloseStatus.POLICY_VIOLATION);
+            } catch (Exception exception) {
+                log.debug("关闭已撤销用户 {} 的 WebSocket 失败: {}", userId, exception.getMessage());
+            }
+        }
+    }
+
+    private static Long toLong(Object value) {
+        if (value instanceof Number) return ((Number) value).longValue();
+        try {
+            return value == null ? null : Long.valueOf(String.valueOf(value));
+        } catch (NumberFormatException exception) {
+            return null;
+        }
+    }
+
     @SuppressWarnings("unchecked")
     private static boolean canViewNode(WebSocketSession session, Long nodeId) {
         if (session == null || nodeId == null || !session.isOpen()) {

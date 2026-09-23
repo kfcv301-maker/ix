@@ -162,13 +162,14 @@ export default function ForwardPage() {
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
   
-  // 显示模式状态 - 从localStorage读取，默认为平铺显示
+  // 管理员通常需要平铺浏览；普通用户默认按隧道浏览，方便从具体隧道发起一键 PING。
   const [viewMode, setViewMode] = useState<'grouped' | 'direct'>(() => {
     try {
       const savedMode = localStorage.getItem('forward-view-mode');
-      return (savedMode as 'grouped' | 'direct') || 'direct';
+      if (savedMode === 'grouped' || savedMode === 'direct') return savedMode;
+      return JwtUtil.getRoleIdFromToken() === 0 ? 'direct' : 'grouped';
     } catch {
-      return 'direct';
+      return JwtUtil.getRoleIdFromToken() === 0 ? 'direct' : 'grouped';
     }
   });
   
@@ -492,19 +493,22 @@ export default function ForwardPage() {
 
   // 编辑转发
   const handleEdit = (forward: Forward) => {
+    // API payloads may encode IDs as either numbers or strings. Normalize the
+    // selected key so HeroUI can find the matching SelectItem reliably.
+    const tunnelId = Number(forward.tunnelId);
+    const selected = tunnels.find((tunnel) => String(tunnel.id) === String(forward.tunnelId));
     setIsEdit(true);
     setForm({
       id: forward.id,
       userId: forward.userId,
       name: forward.name,
-      tunnelId: forward.tunnelId,
+      tunnelId: Number.isInteger(tunnelId) ? tunnelId : null,
       inPort: forward.inPort,
       remoteAddr: forward.remoteAddr.split(',').join('\n'),
       interfaceName: forward.interfaceName || '',
       strategy: forward.strategy || 'fifo'
     });
-    const tunnel = tunnels.find(t => t.id === forward.tunnelId);
-    setSelectedTunnel(tunnel || null);
+    setSelectedTunnel(selected || null);
     setErrors({});
     setModalOpen(true);
   };
@@ -549,10 +553,12 @@ export default function ForwardPage() {
   };
 
   // 处理隧道选择变化
-  const handleTunnelChange = (tunnelId: string) => {
-    const tunnel = tunnels.find(t => t.id === parseInt(tunnelId));
+  const handleTunnelChange = (tunnelKey: string) => {
+    const tunnelId = Number(tunnelKey);
+    if (!Number.isInteger(tunnelId)) return;
+    const tunnel = tunnels.find((item) => String(item.id) === tunnelKey);
     setSelectedTunnel(tunnel || null);
-    setForm(prev => ({ ...prev, tunnelId: parseInt(tunnelId) }));
+    setForm(prev => ({ ...prev, tunnelId }));
   };
 
   // 提交表单
@@ -1619,25 +1625,47 @@ export default function ForwardPage() {
         ) : (
           /* 直接显示模式 */
           forwards.length > 0 ? (
-            <DndContext
-              sensors={sensors}
-              collisionDetection={closestCenter}
-              onDragEnd={handleDragEnd}
-              onDragStart={() => {}} // 添加空的 onDragStart 处理器
-            >
-              <SortableContext
-                items={getSortedForwards().map(f => f.id || 0).filter(id => id > 0)}
-                strategy={rectSortingStrategy}
+            <>
+              {!isAdministrator && userGroups.flatMap((group) => group.tunnelGroups).length > 0 && (
+                <Card className="mb-4 border border-primary-200 bg-primary-50/50 shadow-none dark:border-primary-300/20 dark:bg-primary-100/10">
+                  <CardBody className="gap-3 p-3 sm:flex-row sm:items-center sm:justify-between">
+                    <p className="text-sm text-default-700 dark:text-default-300">按隧道检测全部转发链路</p>
+                    <div className="flex flex-wrap gap-2">
+                      {userGroups.flatMap((group) => group.tunnelGroups).map((tunnelGroup) => (
+                        <Button
+                          key={tunnelGroup.tunnelId}
+                          size="sm"
+                          color="primary"
+                          variant="flat"
+                          onPress={() => handleDiagnoseTunnelForwards(tunnelGroup)}
+                        >
+                          {tunnelGroup.tunnelName} · 一键 PING
+                        </Button>
+                      ))}
+                    </div>
+                  </CardBody>
+                </Card>
+              )}
+              <DndContext
+                sensors={sensors}
+                collisionDetection={closestCenter}
+                onDragEnd={handleDragEnd}
+                onDragStart={() => {}} // 添加空的 onDragStart 处理器
               >
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4">
-                  {getSortedForwards().map((forward) => (
-                    forward && forward.id ? (
-                      <SortableForwardCard key={forward.id} forward={forward} />
-                    ) : null
-                  ))}
-                </div>
-              </SortableContext>
-            </DndContext>
+                <SortableContext
+                  items={getSortedForwards().map(f => f.id || 0).filter(id => id > 0)}
+                  strategy={rectSortingStrategy}
+                >
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4">
+                    {getSortedForwards().map((forward) => (
+                      forward && forward.id ? (
+                        <SortableForwardCard key={forward.id} forward={forward} />
+                      ) : null
+                    ))}
+                  </div>
+                </SortableContext>
+              </DndContext>
+            </>
           ) : (
             /* 空状态 */
             <Card className="shadow-sm border border-gray-200 dark:border-gray-700">
@@ -1693,11 +1721,13 @@ export default function ForwardPage() {
                     <Select
                       label="选择隧道"
                       placeholder="请选择关联的隧道"
-                      selectedKeys={form.tunnelId ? [form.tunnelId.toString()] : []}
+                      selectedKeys={form.tunnelId !== null ? [String(form.tunnelId)] : []}
                       onSelectionChange={(keys) => {
-                        const selectedKey = Array.from(keys)[0] as string;
-                        if (selectedKey) {
-                          handleTunnelChange(selectedKey);
+                        if (keys !== 'all') {
+                          const selectedKey = Array.from(keys)[0];
+                          if (selectedKey !== undefined) {
+                            handleTunnelChange(String(selectedKey));
+                          }
                         }
                       }}
                       isInvalid={!!errors.tunnelId}
@@ -1705,7 +1735,7 @@ export default function ForwardPage() {
                       variant="bordered"
                     >
                       {tunnels.map((tunnel) => (
-                        <SelectItem key={tunnel.id} >
+                        <SelectItem key={String(tunnel.id)} textValue={`${tunnel.name}${tunnel.ip ? ` · ${tunnel.ip}` : ''}`}>
                           {tunnel.name}{tunnel.ip ? ` · ${tunnel.ip}` : ''}
                         </SelectItem>
                       ))}

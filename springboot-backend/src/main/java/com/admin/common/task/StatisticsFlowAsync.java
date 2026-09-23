@@ -3,6 +3,7 @@ package com.admin.common.task;
 
 import com.admin.entity.StatisticsFlow;
 import com.admin.entity.User;
+import com.admin.mapper.StatisticsFlowMapper;
 import com.admin.service.StatisticsFlowService;
 import com.admin.service.UserService;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -11,13 +12,15 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.annotation.Scheduled;
 
-import javax.annotation.PostConstruct;
 import javax.annotation.Resource;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Configuration
@@ -29,6 +32,9 @@ public class StatisticsFlowAsync {
 
     @Resource
     StatisticsFlowService statisticsFlowService;
+
+    @Resource
+    StatisticsFlowMapper statisticsFlowMapper;
 
     @Scheduled(cron = "0 0 * * * ?")
     public void statistics_flow() {
@@ -49,24 +55,24 @@ public class StatisticsFlowAsync {
 
 
         List<User> list = userService.list();
+        if (list.isEmpty()) {
+            return;
+        }
+        List<Long> userIds = list.stream().map(User::getId).collect(Collectors.toList());
+        Map<Long, Long> lastTotalsByUser = new HashMap<>();
+        for (StatisticsFlow last : statisticsFlowMapper.selectLatestByUserIds(userIds)) {
+            lastTotalsByUser.put(last.getUserId(), last.getTotalFlow());
+        }
         List<StatisticsFlow> statisticsFlowList = new ArrayList<>();
 
         for (User user : list) {
-            long currentFlow = user.getInFlow() + user.getOutFlow();
-
-            // 从数据库获取上一次记录
-            StatisticsFlow lastFlowRecord = statisticsFlowService.getOne(
-                    new LambdaQueryWrapper<StatisticsFlow>()
-                            .eq(StatisticsFlow::getUserId, user.getId()) 
-                            .orderByDesc(StatisticsFlow::getId)         
-                            .last("LIMIT 1")                     
-            );
+            long currentFlow = (user.getInFlow() == null ? 0 : user.getInFlow())
+                    + (user.getOutFlow() == null ? 0 : user.getOutFlow());
 
             long currentTotalFlow = currentFlow;
             long incrementFlow = currentTotalFlow;
-            
-            if (lastFlowRecord != null) {
-                long lastTotalFlow = lastFlowRecord.getTotalFlow();
+            Long lastTotalFlow = lastTotalsByUser.get(user.getId());
+            if (lastTotalFlow != null) {
                 incrementFlow = currentTotalFlow - lastTotalFlow;
                 
                 if (incrementFlow < 0) {

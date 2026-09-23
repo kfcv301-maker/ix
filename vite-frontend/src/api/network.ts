@@ -82,6 +82,9 @@ const Network = {
         .then(function(response: AxiosResponse<ApiResponse<T>>) {
           // 检查是否token失效
           if (isTokenExpired(response.data)) {
+            // Always settle the request before redirecting. Leaving this
+            // Promise pending made submit buttons appear to do nothing.
+            resolve(response.data);
             handleTokenExpired();
             return;
           }
@@ -90,11 +93,12 @@ const Network = {
                  .catch(function(error: any) {
            console.error('GET请求错误:', error);
            
-           // 检查是否是401错误（token失效）
-           if (error.response && error.response.status === 401) {
-             handleTokenExpired();
-             return;
-           }
+            // 检查是否是401错误（token失效）
+            if (error.response && error.response.status === 401) {
+              resolve(error.response.data || {"code": 401, "msg": "未登录或token已过期", "data": null as T});
+              handleTokenExpired();
+              return;
+            }
            
            resolve({"code": -1, "msg": error.message || "网络请求失败", "data": null as T});
          });
@@ -119,6 +123,9 @@ const Network = {
         .then(function(response: AxiosResponse<ApiResponse<T>>) {
           // 检查是否token失效
           if (isTokenExpired(response.data)) {
+            // Always settle the request before redirecting. Leaving this
+            // Promise pending made submit buttons appear to do nothing.
+            resolve(response.data);
             handleTokenExpired();
             return;
           }
@@ -127,11 +134,12 @@ const Network = {
                  .catch(function(error: any) {
            console.error('POST请求错误:', error);
            
-           // 检查是否是401错误（token失效）
-           if (error.response && error.response.status === 401) {
-             handleTokenExpired();
-             return;
-           }
+            // 检查是否是401错误（token失效）
+            if (error.response && error.response.status === 401) {
+              resolve(error.response.data || {"code": 401, "msg": "未登录或token已过期", "data": null as T});
+              handleTokenExpired();
+              return;
+            }
            
            resolve({"code": -1, "msg": error.message || "网络请求失败", "data": null as T});
          });
@@ -139,4 +147,4 @@ const Network = {
   }
 };
 
-export default Network; 
+export default Network;

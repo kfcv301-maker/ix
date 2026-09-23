@@ -14,6 +14,7 @@ import (
 	"github.com/go-gost/x/config"
 	"github.com/go-gost/x/internal/util/crypto"
 	"github.com/go-gost/x/registry"
+	"github.com/rs/xid"
 )
 
 var httpReportURL string
@@ -21,11 +22,20 @@ var configReportURL string
 var httpReportToken string
 var httpAESCrypto *crypto.AESCrypto // 新增：HTTP上报加密器
 
+// A report sequence is scoped to one service and this agent process. The
+// server uses this session + sequence pair to acknowledge HTTP retries once
+// without persisting an unbounded row for every five-second report.
+var trafficReportSessionID = xid.New().String()
+var trafficReportSessionStartedAt = time.Now().UnixNano() / int64(time.Millisecond)
+
 // TrafficReportItem 流量报告项（压缩格式）
 type TrafficReportItem struct {
 	N string `json:"n"` // 服务名（name缩写）
 	U int64  `json:"u"` // 上行流量（up缩写）
 	D int64  `json:"d"` // 下行流量（down缩写）
+	I string `json:"i"` // Agent session / boot identifier
+	Q uint64 `json:"q"` // Per-service report sequence
+	B int64  `json:"b"` // Agent session start time in milliseconds
 }
 
 func SetHTTPReportURL(addr string, secret string) {

@@ -13,6 +13,7 @@ import com.admin.mapper.ForwardMapper;
 import com.admin.mapper.TunnelEntryNodeMapper;
 import com.admin.service.*;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.alibaba.fastjson.JSONObject;
 import lombok.Data;
@@ -380,10 +381,14 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
             }
         }
 
-        // 9. 更新转发状态
-        forward.setStatus(targetStatus);
-        forward.setUpdatedTime(System.currentTimeMillis());
-        boolean result = this.updateById(forward);
+        // 9. Do not write the stale Forward object back here: high-frequency
+        // traffic accounting may have incremented its counters while a node
+        // command was in flight.
+        UpdateWrapper<Forward> statusUpdate = new UpdateWrapper<>();
+        statusUpdate.eq("id", forward.getId())
+                .set("status", targetStatus)
+                .set("updated_time", System.currentTimeMillis());
+        boolean result = this.update(null, statusUpdate);
 
         return result ? R.ok("服务已" + operation) : R.err("更新状态失败");
     }
@@ -1272,8 +1277,12 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
      * 更新转发状态为错误
      */
     private void updateForwardStatusToError(Forward forward) {
-        forward.setStatus(FORWARD_STATUS_ERROR);
-        this.updateById(forward);
+        if (forward == null || forward.getId() == null) return;
+        UpdateWrapper<Forward> statusUpdate = new UpdateWrapper<>();
+        statusUpdate.eq("id", forward.getId())
+                .set("status", FORWARD_STATUS_ERROR)
+                .set("updated_time", System.currentTimeMillis());
+        this.update(null, statusUpdate);
     }
 
     /**

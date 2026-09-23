@@ -7,6 +7,9 @@ public interface VpsTerminalTicketService {
 
     TerminalAccess consume(String rawTicket);
 
+    /** Invalidate unused short-lived tickets after a credential or access change. */
+    void revokeUserTickets(Long userId);
+
     final class IssuedTicket {
         private final String value;
         private final long expiresAt;

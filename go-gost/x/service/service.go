@@ -54,10 +54,10 @@ var needWrap = false
 
 // SetProtocolBlock sets protocol blocking switches and recomputes wrapper need
 func SetProtocolBlock(httpOn int, tlsOn int, socksOn int) {
-    isHttp = httpOn
-    isTls = tlsOn
-    isSocks = socksOn
-    needWrap = isTls+isSocks+isHttp > 0
+	isHttp = httpOn
+	isTls = tlsOn
+	isSocks = socksOn
+	needWrap = isTls+isSocks+isHttp > 0
 }
 
 type Option func(opts *options)
@@ -366,6 +366,8 @@ func (s *defaultService) observeStats(ctx context.Context) {
 	}
 
 	var events []observer.Event
+	var pendingTrafficReport *TrafficReportItem
+	var nextTrafficSequence uint64
 
 	ticker := time.NewTicker(d)
 	defer ticker.Stop()
@@ -373,15 +375,6 @@ func (s *defaultService) observeStats(ctx context.Context) {
 	for {
 		select {
 		case <-ticker.C:
-
-			// First, try to send any pending events
-			if len(events) > 0 {
-				if err := s.options.observer.Observe(ctx, events); err == nil {
-					events = nil
-				}
-				continue
-			}
-
 			st := s.status.Stats()
 			if st == nil {
 				continue
@@ -403,25 +396,58 @@ func (s *defaultService) observeStats(ctx context.Context) {
 						TotalErrs:    st.Get(stats.KindTotalErrs),
 					},
 				}
-				if outputBytes > 0 || inputBytes > 0 {
-					reportItems := TrafficReportItem{
+				// Stats are snapshots; retain only the latest unsent one so an
+				// unavailable observer cannot grow this slice without bound.
+				events = evs
+				if pendingTrafficReport == nil && (outputBytes > 0 || inputBytes > 0) {
+					nextTrafficSequence++
+					pendingTrafficReport = &TrafficReportItem{
 						N: s.name,
 						U: int64(outputBytes),
 						D: int64(inputBytes),
+						I: trafficReportSessionID,
+						Q: nextTrafficSequence,
+						B: trafficReportSessionStartedAt,
 					}
-					success, err := sendTrafficReport(ctx, reportItems)
-					if err != nil {
-						fmt.Printf("发送流量报告失败: %v", err)
-					} else if success {
-						if xstats, ok := st.(*xstats.Stats); ok {
-							xstats.ResetTraffic(st.Get(stats.KindInputBytes)-inputBytes, st.Get(stats.KindOutputBytes)-outputBytes)
+				}
+			}
+
+			// Keep retrying the exact same report until the panel acknowledges it.
+			// A timed-out HTTP response can therefore never be re-sent under a new
+			// sequence and counted twice.
+			if pendingTrafficReport != nil {
+				success, err := sendTrafficReport(ctx, *pendingTrafficReport)
+				if err != nil {
+					fmt.Printf("发送流量报告失败: %v", err)
+				} else if success {
+					if xstats, ok := st.(*xstats.Stats); ok {
+						xstats.AcknowledgeTraffic(uint64(pendingTrafficReport.D), uint64(pendingTrafficReport.U))
+						pendingTrafficReport = nil
+
+						// Traffic can arrive while the HTTP call is in flight. Preserve
+						// it as the next report rather than overwriting it during reset.
+						remainingInput := st.Get(stats.KindInputBytes)
+						remainingOutput := st.Get(stats.KindOutputBytes)
+						if remainingInput > 0 || remainingOutput > 0 {
+							nextTrafficSequence++
+							pendingTrafficReport = &TrafficReportItem{
+								N: s.name,
+								U: int64(remainingOutput),
+								D: int64(remainingInput),
+								I: trafficReportSessionID,
+								Q: nextTrafficSequence,
+								B: trafficReportSessionStartedAt,
+							}
 						}
 					}
 				}
+			}
 
-				if err := s.options.observer.Observe(ctx, evs); err != nil {
+			if len(events) > 0 {
+				if err := s.options.observer.Observe(ctx, events); err != nil {
 					fmt.Printf("发送观察器事件失败: %v", err)
-					events = evs
+				} else {
+					events = nil
 				}
 			}
 

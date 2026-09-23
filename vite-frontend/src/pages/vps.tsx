@@ -71,7 +71,6 @@ interface VpsForm {
   sshPassword: string;
   remark: string;
   assignedUserId: string;
-  adminAccessAcknowledged: boolean;
 }
 
 const emptyForm = (): VpsForm => ({
@@ -82,7 +81,6 @@ const emptyForm = (): VpsForm => ({
   sshPassword: '',
   remark: '',
   assignedUserId: '',
-  adminAccessAcknowledged: false,
 });
 
 const formatTime = (value?: number) => value ? new Date(value).toLocaleString() : '尚未检测';
@@ -186,7 +184,6 @@ export default function VpsPage() {
       sshPassword: '',
       remark: host.remark || '',
       assignedUserId: host.assignedUserId ? String(host.assignedUserId) : '',
-      adminAccessAcknowledged: false,
     });
     setFormOpen(true);
   };
@@ -205,11 +202,6 @@ export default function VpsPage() {
       toast.error('首次托管必须填写 SSH 密码');
       return;
     }
-    if (!isAdmin && !isEditing && !form.adminAccessAcknowledged) {
-      toast.error('请确认管理员可维护你托管的 VPS');
-      return;
-    }
-
     const payload = {
       name: form.name.trim(),
       host: form.host.trim(),
@@ -218,20 +210,22 @@ export default function VpsPage() {
       sshPassword: form.sshPassword,
       remark: form.remark.trim(),
       assignedUserId: isAdmin && form.assignedUserId ? Number(form.assignedUserId) : null,
-      adminAccessAcknowledged: form.adminAccessAcknowledged,
     };
     setSubmitting(true);
     try {
       const response = isEditing
         ? await updateVpsHost({ ...payload, id: editingHost.id })
         : await createVpsHost(payload);
-      if (response.code === 0) {
+      if (response?.code === 0) {
         toast.success(isEditing ? 'VPS 托管信息已保存' : 'VPS 已加入托管，首次 SSH 操作或手动检测时会更新状态');
         setFormOpen(false);
         await loadHosts(true);
       } else {
-        toast.error(response.msg || '保存 VPS 托管信息失败');
+        toast.error(response?.msg || '保存 VPS 托管信息失败');
       }
+    } catch (error) {
+      console.error('保存 VPS 托管信息失败:', error);
+      toast.error('保存 VPS 托管信息失败，请检查网络后重试');
     } finally {
       setSubmitting(false);
     }
@@ -310,12 +304,6 @@ export default function VpsPage() {
         <Card className="border border-divider shadow-none"><CardBody className="p-3"><p className="text-xs text-default-500">已分配</p><p className="mt-1 text-xl font-semibold">{hostSummary.assigned}</p></CardBody></Card>
       </div>
 
-      {!isAdmin && (
-        <div className="mb-5 rounded-xl border border-warning-200 bg-warning-50 px-4 py-3 text-sm text-warning-800 dark:border-warning-300/20 dark:bg-warning-100/10 dark:text-warning-200">
-          用户自行托管的 VPS 会同时授权给所有管理员处理故障、执行部署和使用 SSH；密码仅以加密形式保存在后端。
-        </div>
-      )}
-
       {loading ? (
         <div className="flex min-h-64 items-center justify-center"><Spinner label="正在加载 VPS…" /></div>
       ) : hosts.length === 0 ? (
@@ -385,12 +373,6 @@ export default function VpsPage() {
                     {assignableUsers.map((user) => <option key={user.id} value={user.id}>{user.user}（#{user.id}）</option>)}
                   </select>
                   <p className="mt-1 text-xs text-default-500">分配后，该用户可检测、SSH 和执行部署；管理员始终保留完整控制权。</p>
-                </label>
-              )}
-              {!isAdmin && !isEditing && (
-                <label className="sm:col-span-2 flex cursor-pointer items-start gap-2 rounded-lg border border-warning-200 bg-warning-50 p-3 text-sm dark:border-warning-300/20 dark:bg-warning-100/10">
-                  <input type="checkbox" checked={form.adminAccessAcknowledged} onChange={(event) => updateForm('adminAccessAcknowledged', event.target.checked)} className="mt-1 h-4 w-4" />
-                  <span>我确认：提交后，所有管理员可以维护、SSH 登录并在此 VPS 上执行受限部署任务。</span>
                 </label>
               )}
             </div>

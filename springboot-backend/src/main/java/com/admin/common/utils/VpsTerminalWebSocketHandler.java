@@ -36,6 +36,7 @@ public class VpsTerminalWebSocketHandler extends TextWebSocketHandler {
     }, new ThreadPoolExecutor.AbortPolicy());
 
     private final Map<String, TerminalState> terminals = new ConcurrentHashMap<>();
+    private final Map<String, WebSocketSession> terminalSessions = new ConcurrentHashMap<>();
 
     @Resource
     private VpsHostService vpsHostService;
@@ -64,6 +65,7 @@ public class VpsTerminalWebSocketHandler extends TextWebSocketHandler {
             vpsHostService.recordSshSuccess(host, connection.getFingerprint(), "在线 SSH 已连接");
             TerminalState state = new TerminalState(connection);
             terminals.put(session.getId(), state);
+            terminalSessions.put(session.getId(), session);
             send(session, "ready", "SSH 已连接：" + host.getName());
             try {
                 OUTPUT_EXECUTOR.execute(() -> copyOutput(session, state));
@@ -142,6 +144,7 @@ public class VpsTerminalWebSocketHandler extends TextWebSocketHandler {
     }
 
     private void closeState(WebSocketSession session) {
+        terminalSessions.remove(session.getId());
         TerminalState state = terminals.remove(session.getId());
         if (state == null) return;
         state.closed = true;
@@ -149,6 +152,20 @@ public class VpsTerminalWebSocketHandler extends TextWebSocketHandler {
             state.connection.close();
         } catch (IOException ignored) {
             // The browser connection is already closing.
+        }
+    }
+
+    /** Password resets and account disables must also terminate live SSH shells. */
+    public void closeUserSessions(Long userId) {
+        if (userId == null) return;
+        for (WebSocketSession session : terminalSessions.values()) {
+            if (!userId.equals(asLong(session.getAttributes().get("userId")))) continue;
+            closeState(session);
+            try {
+                if (session.isOpen()) session.close(CloseStatus.POLICY_VIOLATION);
+            } catch (IOException ignored) {
+                // It may have closed naturally while this revocation was running.
+            }
         }
     }
 

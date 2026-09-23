@@ -210,18 +210,30 @@ func pauseServices(req pauseServicesRequest) error {
 		return errors.New("services list cannot be empty")
 	}
 
-	// 第一阶段：验证所有服务是否存在，并筛选需要暂停的服务
+	// 第一阶段：验证配置，并筛选仍需要暂停的服务。暂停命令必须
+	// 幂等：面板可能在节点已经执行成功、但确认消息超时时重试。
 	var servicesToPause []struct {
 		name    string
 		service service.Service
 	}
-	//var skippedServices []string
 
 	cfg := config.Global()
+	serviceConfigs := make(map[string]*config.ServiceConfig)
+	for _, serviceConfig := range cfg.Services {
+		serviceConfigs[serviceConfig.Name] = serviceConfig
+	}
 	for _, serviceName := range req.Services {
 		name := strings.TrimSpace(serviceName)
 		if name == "" {
 			return errors.New("service name is required")
+		}
+
+		serviceConfig := serviceConfigs[name]
+		if serviceConfig == nil {
+			return errors.New(fmt.Sprintf("service %s configuration not found", name))
+		}
+		if serviceConfig.Metadata != nil && serviceConfig.Metadata["paused"] == true {
+			continue
 		}
 
 		svc := registry.ServiceRegistry().Get(name)
@@ -229,27 +241,13 @@ func pauseServices(req pauseServicesRequest) error {
 			return errors.New(fmt.Sprintf("service %s not found", name))
 		}
 
-		//// 检查服务是否已经暂停
-		//var serviceConfig *config.ServiceConfig
-		//for _, s := range cfg.Services {
-		//	if s.Name == name {
-		//		serviceConfig = s
-		//		break
-		//	}
-		//}
-		//
-		//// 如果服务已经暂停，跳过
-		//if serviceConfig != nil && serviceConfig.Metadata != nil {
-		//	if pausedVal, exists := serviceConfig.Metadata["paused"]; exists && pausedVal == true {
-		//		skippedServices = append(skippedServices, name)
-		//		continue
-		//	}
-		//}
-
 		servicesToPause = append(servicesToPause, struct {
 			name    string
 			service service.Service
 		}{name, svc})
+	}
+	if len(servicesToPause) == 0 {
+		return nil
 	}
 
 	// 第二阶段：事务性暂停所有服务
@@ -257,12 +255,6 @@ func pauseServices(req pauseServicesRequest) error {
 		name          string
 		service       service.Service
 		serviceConfig *config.ServiceConfig
-	}
-
-	// 获取服务配置
-	serviceConfigs := make(map[string]*config.ServiceConfig)
-	for _, s := range cfg.Services {
-		serviceConfigs[s.Name] = s
 	}
 
 	// 逐个暂停服务，如果失败则回滚

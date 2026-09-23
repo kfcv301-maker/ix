@@ -6,15 +6,20 @@ import cn.hutool.core.map.MapUtil;
 import cn.hutool.core.util.StrUtil;
 import com.admin.common.dto.*;
 import com.admin.common.lang.R;
+import com.admin.common.task.ForwardPauseTaskService;
 import com.admin.common.utils.GostUtil;
 import com.admin.common.utils.JwtUtil;
 import com.admin.common.utils.Md5Util;
+import com.admin.common.utils.TunnelIngressNodeResolver;
+import com.admin.common.utils.VpsTerminalWebSocketHandler;
+import com.admin.common.utils.WebSocketServer;
 import com.admin.entity.*;
 import com.admin.mapper.ForwardMapper;
 import com.admin.mapper.UserMapper;
 import com.admin.mapper.UserTunnelMapper;
 import com.admin.service.*;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
@@ -117,6 +122,24 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
 
     @Resource
     private ImageCaptchaApplication application;
+
+    @Resource
+    private VpsTerminalWebSocketHandler vpsTerminalWebSocketHandler;
+
+    @Resource
+    private VpsTerminalTicketService vpsTerminalTicketService;
+
+    /**
+     * The pause worker reads UserService, so inject the reverse edge lazily.
+     * It persists the node work after entitlement changes instead of claiming
+     * that a disabled user has already been stopped.
+     */
+    @Resource
+    @Lazy
+    private ForwardPauseTaskService forwardPauseTaskService;
+
+    @Resource
+    private TunnelIngressNodeResolver ingressNodeResolver;
 
     // ========== 公共接口实现 ==========
 
@@ -231,6 +254,12 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         boolean result = this.updateById(updateUser);
         
         if (result) {
+            if (updateUser.getTokenVersion() != null) {
+                revokeLiveSessions(existingUser.getId());
+            }
+            // A manual disable, expiry reduction, or quota reduction needs the
+            // same durable multi-node pause path as a flow-triggered limit.
+            forwardPauseTaskService.enqueueForCurrentLimits(existingUser.getId(), null);
             // 5. 处理到期时间延时任务
             return R.ok(SUCCESS_UPDATE_MSG);
         } else {
@@ -259,7 +288,11 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             statisticsFlowService.remove(new QueryWrapper<StatisticsFlow>().eq("user_id", id));
             // 3. 删除用户
             boolean result = this.removeById(id);
-            return result ? R.ok(SUCCESS_DELETE_MSG) : R.err(ERROR_DELETE_FAILED);
+            if (result) {
+                revokeLiveSessions(id);
+                return R.ok(SUCCESS_DELETE_MSG);
+            }
+            return R.err(ERROR_DELETE_FAILED);
             
         } catch (Exception e) {
             e.printStackTrace();
@@ -337,7 +370,11 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             updateUser.setUpdatedTime(System.currentTimeMillis());
             
             boolean result = this.updateById(updateUser);
-            return result ? R.ok("账号密码修改成功") : R.err(ERROR_UPDATE_FAILED);
+            if (result) {
+                revokeLiveSessions(user.getId());
+                return R.ok("账号密码修改成功");
+            }
+            return R.err(ERROR_UPDATE_FAILED);
             
         } catch (Exception e) {
             e.printStackTrace();
@@ -350,15 +387,18 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         if (resetFlowDto.getType() == 1){ // 清零账号流量
             User user = this.getById(resetFlowDto.getId());
             if (user == null) return R.err(ERROR_USER_NOT_FOUND);
-            user.setInFlow(0L);
-            user.setOutFlow(0L);
-            this.updateById(user);
+            // Do not write the previously loaded User back: a report may have
+            // incremented its counters between getById and this reset.
+            UpdateWrapper<User> reset = new UpdateWrapper<>();
+            reset.eq("id", user.getId()).set("in_flow", 0).set("out_flow", 0)
+                    .set("updated_time", System.currentTimeMillis());
+            this.update(null, reset);
         }else { // 清零隧道流量
             UserTunnel tunnel = userTunnelService.getById(resetFlowDto.getId());
             if (tunnel == null) return R.err("隧道不存在");
-            tunnel.setInFlow(0L);
-            tunnel.setOutFlow(0L);
-            userTunnelService.updateById(tunnel);
+            UpdateWrapper<UserTunnel> reset = new UpdateWrapper<>();
+            reset.eq("id", tunnel.getId()).set("in_flow", 0).set("out_flow", 0);
+            userTunnelService.update(null, reset);
         }
         return R.ok();
     }
@@ -473,11 +513,16 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         // A password reset by an administrator must invalidate the target
         // user's existing browser and WebSocket JWTs just like self-service
         // password changes do.
-        if (StrUtil.isNotBlank(userUpdateDto.getPwd())) {
+        boolean passwordChanged = StrUtil.isNotBlank(userUpdateDto.getPwd());
+        boolean statusChanged = userUpdateDto.getStatus() != null
+                && !Objects.equals(userUpdateDto.getStatus(), existingUser.getStatus());
+        if (passwordChanged) {
             user.setPwd(Md5Util.md5(userUpdateDto.getPwd()));
-            user.setTokenVersion(nextTokenVersion(existingUser.getTokenVersion()));
         } else {
             user.setPwd(null); // 不更新密码字段
+        }
+        if (passwordChanged || statusChanged) {
+            user.setTokenVersion(nextTokenVersion(existingUser.getTokenVersion()));
         }
         
         // 设置更新时间
@@ -488,6 +533,12 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
 
     private Integer nextTokenVersion(Integer currentVersion) {
         return currentVersion == null ? 1 : currentVersion + 1;
+    }
+
+    private void revokeLiveSessions(Long userId) {
+        WebSocketServer.closeUserSessions(userId);
+        vpsTerminalWebSocketHandler.closeUserSessions(userId);
+        vpsTerminalTicketService.revokeUserTickets(userId);
     }
 
     /**
@@ -575,21 +626,23 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         Tunnel tunnel = tunnelService.getById(forward.getTunnelId());
         if (tunnel == null) return;
 
-        Node inNode = nodeService.getNodeById(tunnel.getInNodeId());
-        if (inNode == null) return;
-
         // 获取用户隧道关系
         UserTunnel userTunnel = getUserTunnelRelation(userId, tunnel.getId());
-        if (userTunnel == null) return;
+        String serviceName = buildServiceName(forward.getId(), userId,
+                userTunnel == null ? 0 : userTunnel.getId());
 
-        String serviceName = buildServiceName(forward.getId(), userId, userTunnel.getId());
-
-        // 删除主服务
-        GostUtil.DeleteService(inNode.getId(), serviceName);
+        // A multi-ingress tunnel publishes a separate service and chain on
+        // every entry. Remove each copy before deleting its database row.
+        for (Long ingressNodeId : ingressNodeResolver.resolveNodeIds(tunnel)) {
+            GostUtil.DeleteService(ingressNodeId, serviceName);
+            if (tunnel.getType() == TUNNEL_TYPE_TUNNEL_FORWARD) {
+                GostUtil.DeleteChains(ingressNodeId, serviceName);
+            }
+        }
 
         // 如果是隧道转发，还需要删除链和远程服务
         if (tunnel.getType() == TUNNEL_TYPE_TUNNEL_FORWARD) {
-            deleteGostTunnelForwardServices(tunnel, serviceName, inNode);
+            deleteGostTunnelForwardServices(tunnel, serviceName);
         }
     }
 
@@ -600,10 +653,9 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
      * @param serviceName 服务名称
      * @param inNode 入口节点
      */
-    private void deleteGostTunnelForwardServices(Tunnel tunnel, String serviceName, Node inNode) {
+    private void deleteGostTunnelForwardServices(Tunnel tunnel, String serviceName) {
         Node outNode = nodeService.getNodeById(tunnel.getOutNodeId());
         if (outNode != null) {
-            GostUtil.DeleteChains(inNode.getId(), serviceName);
             GostUtil.DeleteRemoteService(outNode.getId(), serviceName);
         }
     }

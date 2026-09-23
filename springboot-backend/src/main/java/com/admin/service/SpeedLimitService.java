@@ -42,4 +42,7 @@ public interface SpeedLimitService extends IService<SpeedLimit> {
      * @return 结果
      */
     R deleteSpeedLimit(Long id);
+
+    /** Ensure one ingress has the rule after that node reports a missing limiter. */
+    R ensureLimiterOnNode(Long speedLimitId, Long nodeId);
 }

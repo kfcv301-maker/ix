@@ -49,6 +49,24 @@ CREATE TABLE `forward` (
 -- --------------------------------------------------------
 
 --
+-- Durable pause retries. A forward remains active in the database until all
+-- of its GOST endpoints have acknowledged the pause command.
+--
+
+CREATE TABLE `forward_pause_task` (
+  `id` bigint(20) NOT NULL,
+  `forward_id` bigint(20) NOT NULL,
+  `task_status` varchar(16) NOT NULL,
+  `attempts` int(10) NOT NULL DEFAULT '0',
+  `last_error` varchar(500) DEFAULT NULL,
+  `created_time` bigint(20) NOT NULL,
+  `updated_time` bigint(20) NOT NULL,
+  `status` int(10) NOT NULL DEFAULT '1'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- --------------------------------------------------------
+
+--
 -- 表的结构 `node`
 --
 
@@ -106,6 +124,23 @@ CREATE TABLE `statistics_flow` (
   `total_flow` bigint(20) NOT NULL,
   `time` varchar(100) NOT NULL,
   `created_time` bigint(20) NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- --------------------------------------------------------
+
+--
+-- Last accepted sequence for each node/service traffic reporter. This bounds
+-- idempotency storage to active services instead of one row per report.
+--
+
+CREATE TABLE `flow_report_cursor` (
+  `node_id` bigint(20) NOT NULL,
+  `service_name` varchar(160) NOT NULL,
+  `session_id` varchar(96) NOT NULL,
+  `session_started_at` bigint(20) NOT NULL,
+  `last_sequence` bigint(20) NOT NULL DEFAULT '0',
+  `created_time` bigint(20) NOT NULL,
+  `updated_time` bigint(20) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- --------------------------------------------------------
@@ -285,13 +320,24 @@ INSERT INTO `vite_config` (`id`, `name`, `value`, `time`) VALUES
 -- 表的索引 `forward`
 --
 ALTER TABLE `forward`
-  ADD PRIMARY KEY (`id`);
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_forward_user_tunnel` (`user_id`,`tunnel_id`),
+  ADD KEY `idx_forward_tunnel` (`tunnel_id`);
+
+--
+-- 表的索引 `forward_pause_task`
+--
+ALTER TABLE `forward_pause_task`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uk_forward_pause_task_forward` (`forward_id`),
+  ADD KEY `idx_forward_pause_task_state` (`task_status`,`updated_time`);
 
 --
 -- 表的索引 `node`
 --
 ALTER TABLE `node`
-  ADD PRIMARY KEY (`id`);
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_node_secret` (`secret`);
 
 --
 -- 表的索引 `speed_limit`
@@ -303,7 +349,16 @@ ALTER TABLE `speed_limit`
 -- 表的索引 `statistics_flow`
 --
 ALTER TABLE `statistics_flow`
-  ADD PRIMARY KEY (`id`);
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_statistics_flow_user_id` (`user_id`,`id`),
+  ADD KEY `idx_statistics_flow_created` (`created_time`);
+
+--
+-- 表的索引 `flow_report_cursor`
+--
+ALTER TABLE `flow_report_cursor`
+  ADD PRIMARY KEY (`node_id`,`service_name`),
+  ADD KEY `idx_flow_report_cursor_updated` (`updated_time`);
 
 --
 -- 表的索引 `tunnel`
@@ -333,7 +388,8 @@ ALTER TABLE `user`
 -- 表的索引 `user_tunnel`
 --
 ALTER TABLE `user_tunnel`
-  ADD PRIMARY KEY (`id`);
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_user_tunnel_user_tunnel` (`user_id`,`tunnel_id`);
 
 --
 -- 表的索引 `vite_config`
@@ -362,6 +418,12 @@ ALTER TABLE `vps_deployment_task`
 --
 ALTER TABLE `forward`
   MODIFY `id` int(10) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
+
+--
+-- 使用表AUTO_INCREMENT `forward_pause_task`
+--
+ALTER TABLE `forward_pause_task`
+  MODIFY `id` bigint(20) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
 
 --
 -- 使用表AUTO_INCREMENT `node`

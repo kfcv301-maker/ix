@@ -39,6 +39,10 @@ public class VpsHostDto {
     /** Administrators may assign inventory VPSes to one regular user. */
     private Long assignedUserId;
 
-    /** A user must explicitly acknowledge the administrator-control model. */
+    /**
+     * Legacy input accepted for compatibility with older browser bundles.
+     * User-origin hosts are always operable by every administrator, regardless
+     * of this value; it is deliberately never persisted.
+     */
     private Boolean adminAccessAcknowledged;
 }
