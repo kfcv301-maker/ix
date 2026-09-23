@@ -90,6 +90,10 @@ jobs:
           tar -xf upx-4.2.1-amd64_linux.tar.xz
           sudo install -m 0755 upx-4.2.1-amd64_linux/upx /usr/local/bin/upx
 
+      - name: Test Agent limiter cache
+        working-directory: ./go-gost/x
+        run: go test ./internal/util/cache ./limiter/traffic/cache
+
       - name: Build GOST binary (AMD64)
         working-directory: ./go-gost
         run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o flux-panel-agent-linux-amd64
