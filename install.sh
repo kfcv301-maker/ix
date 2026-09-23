@@ -555,11 +555,12 @@ EOF
 download_agent() {
   local arch url checksum_url fallback_url fallback_checksum_url temp_bin temp_checksum expected actual
   arch="$(architecture)"
-  # Release assets are immutable. The script path remains stable on main, but
-  # a node install must not silently fetch an old tracked binary from Git.
-  url="$AGENT_RELEASE_BASE/flux-panel-agent-linux-$arch"
+  # The stable install.sh URL follows main, so use the matching main-branch
+  # Agent artifact first. A published Release is only a fallback when the
+  # repository artifact cannot be downloaded.
+  url="$LEGACY_AGENT_RAW_BASE/artifacts/flux-panel-agent-linux-$arch"
   checksum_url="$url.sha256"
-  fallback_url="$LEGACY_AGENT_RAW_BASE/artifacts/flux-panel-agent-linux-$arch"
+  fallback_url="$AGENT_RELEASE_BASE/flux-panel-agent-linux-$arch"
   fallback_checksum_url="$fallback_url.sha256"
   temp_bin="$(mktemp)"
   temp_checksum="$(mktemp)"
@@ -569,9 +570,7 @@ download_agent() {
   command -v curl >/dev/null 2>&1 || fail "请先安装 curl。"
   info "下载 Linux/$arch 节点 Agent"
   if ! curl --fail --location --retry 3 --connect-timeout 15 "$url" -o "$temp_bin"; then
-    # A just-pushed main commit may briefly precede its GitHub Release. Keep
-    # historical installs working during that window, still with a checksum.
-    info "最新 Release Agent 暂不可用，回退到仓库中的兼容 Agent。"
+    info "仓库 Agent 暂不可用，尝试最新 Release。"
     url="$fallback_url"
     checksum_url="$fallback_checksum_url"
     curl --fail --location --retry 3 --connect-timeout 15 "$url" -o "$temp_bin"

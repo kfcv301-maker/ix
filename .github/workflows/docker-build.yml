@@ -68,11 +68,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version: "1.23.4"
+
+      - name: Verify one-click Agent binaries match source
+        shell: bash
+        run: |
+          source_revision="$(git log -1 --format=%H -- go-gost)"
+          for arch in amd64 arm64; do
+            binary="artifacts/flux-panel-agent-linux-${arch}"
+            embedded_revision="$(go version -m "$binary" | awk '$1 == "build" && $2 ~ /^vcs.revision=/ { sub(/^vcs.revision=/, "", $2); print $2 }')"
+            if [[ "$embedded_revision" != "$source_revision" ]]; then
+              echo "${binary} was built from ${embedded_revision}, expected ${source_revision}" >&2
+              exit 1
+            fi
+            (cd artifacts && sha256sum -c "flux-panel-agent-linux-${arch}.sha256")
+          done
 
       - name: Cache Go modules
         uses: actions/cache@v4
