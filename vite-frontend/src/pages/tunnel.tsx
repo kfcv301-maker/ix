@@ -9,6 +9,7 @@ import { Spinner } from "@heroui/spinner";
 import { Divider } from "@heroui/divider";
 import { Alert } from "@heroui/alert";
 import toast from 'react-hot-toast';
+import { useNavigate } from 'react-router-dom';
 
 
 import { 
@@ -110,6 +111,7 @@ interface TunnelForwardDiagnosisResult {
 }
 
 export default function TunnelPage() {
+  const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [tunnels, setTunnels] = useState<Tunnel[]>([]);
   const [nodes, setNodes] = useState<Node[]>([]);
@@ -682,6 +684,9 @@ export default function TunnelPage() {
     );
   }
 
+  const manageableNodes = nodes.filter(node => node.canManage !== false);
+  const onlineManageableNodes = manageableNodes.filter(node => node.status === 1);
+
   return (
     
       <div className="px-3 lg:px-6 py-8">
@@ -695,12 +700,20 @@ export default function TunnelPage() {
               variant="flat"
               color="primary"
               onPress={handleAdd}
+              isDisabled={onlineManageableNodes.length === 0}
              
             >
               新增
             </Button>
      
         </div>
+
+        {onlineManageableNodes.length === 0 && (
+          <div className="mb-5 flex flex-wrap items-center gap-3 rounded-lg border border-warning-200 bg-warning-50 p-4 text-sm text-warning-800 dark:border-warning-500/30 dark:bg-warning-500/10 dark:text-warning-200">
+            <span>{manageableNodes.length === 0 ? '先新增并安装自己的节点，节点上线后即可创建隧道。' : '自己的节点尚未上线，请先完成安装并等待连接。'}</span>
+            <Button size="sm" variant="flat" color="warning" onPress={() => navigate('/node')}>前往节点监控</Button>
+          </div>
+        )}
 
         {/* 隧道卡片网格 */}
         {tunnels.length > 0 ? (
@@ -1000,7 +1013,7 @@ export default function TunnelPage() {
                       variant="bordered"
                       isDisabled={isEdit}
                     >
-                      {nodes.filter(node => node.canManage !== false).map((node) => (
+                      {(isEdit ? manageableNodes : onlineManageableNodes).map((node) => (
                         <SelectItem 
                           key={node.id}
                           textValue={`${node.name} (${node.status === 1 ? '在线' : '离线'})`}
@@ -1177,7 +1190,7 @@ export default function TunnelPage() {
                           variant="bordered"
                           isDisabled={isEdit}
                         >
-                          {nodes.filter(node => node.canManage !== false).map((node) => (
+                          {(isEdit ? manageableNodes : onlineManageableNodes).map((node) => (
                             <SelectItem 
                               key={node.id}
                               textValue={`${node.name} (${node.status === 1 ? '在线' : '离线'})`}
