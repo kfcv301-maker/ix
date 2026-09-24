@@ -26,7 +26,7 @@ import java.util.regex.Pattern;
 public class LogAspect {
 
     private static final Pattern SENSITIVE_JSON_VALUE = Pattern.compile(
-            "(?i)(\\\"(?:cfApiToken|ddnsToken|secret|password|pwd|currentPassword|newPassword|confirmPassword|sshPassword|sshPrivateKey|sshPassphrase|terminalTicket|ticket)\\\"\\s*:\\s*\\\")[^\\\"]*(\\\")");
+            "(?i)(\\\"(?:cfApiToken|ddnsToken|secret|password|pwd|currentPassword|newPassword|confirmPassword|sshPassword|sshPrivateKey|sshPassphrase|terminalTicket|ticket|token|authorization)\\\"\\s*:\\s*\\\")[^\\\"]*(\\\")");
 
     @Pointcut("@annotation(com.admin.common.aop.LogAnnotation)")
     public void pt() {

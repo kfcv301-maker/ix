@@ -3,6 +3,8 @@ package com.admin.entity;
 
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
+import com.alibaba.fastjson.annotation.JSONField;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 
@@ -43,6 +45,8 @@ public class User extends BaseEntity {
 
     private String user;
 
+    @JsonIgnore
+    @JSONField(serialize = false)
     private String pwd;
 
     /** Incremented whenever a password is changed to invalidate old JWTs. */

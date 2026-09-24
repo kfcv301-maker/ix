@@ -114,6 +114,24 @@ class FlowAccountingServiceTest {
     }
 
     @Test
+    void accountsAgentTcpAndUdpServiceNames() {
+        for (String protocol : new String[]{"tcp", "udp"}) {
+            Fixtures fixtures = fixtures();
+            FlowDto report = report("12_3_9_" + protocol, 8);
+            FlowReportCursor cursor = cursor(report, 7L);
+            when(fixtures.accountingMapper.selectContext(12L, 9L, 5L)).thenReturn(validContext());
+            when(fixtures.cursorMapper.selectForUpdate(5L, report.getN())).thenReturn(cursor);
+            when(fixtures.accountingMapper.incrementForwardAndUser(12L, 3L, 2048L, 1024L)).thenReturn(2);
+            when(fixtures.accountingMapper.incrementUserTunnel(9, 3L, 42, 2048L, 1024L)).thenReturn(1);
+            when(fixtures.cursorMapper.updateCursor(eq(5L), eq(report.getN()), eq(report.getReportSessionId()),
+                    eq(report.getReportSessionStartedAt()), eq(8L), anyLong())).thenReturn(1);
+
+            assertTrue(fixtures.service.account(node(), report).isAccepted());
+            verify(fixtures.accountingMapper).incrementForwardAndUser(12L, 3L, 2048L, 1024L);
+        }
+    }
+
+    @Test
     void acceptsOneSequencedTailReportImmediatelyAfterPause() {
         Fixtures fixtures = fixtures();
         FlowDto report = report("12_3_9", 8);

@@ -97,15 +97,15 @@ public class ForwardSyncTaskService {
     private ForwardSyncTaskService self;
 
     public R requestPause(Long forwardId) {
-        return beginOperation(forwardId, OPERATION_PAUSE, false);
+        return self.beginOperation(forwardId, OPERATION_PAUSE, false);
     }
 
     public R requestResume(Long forwardId) {
-        return beginOperation(forwardId, OPERATION_RESUME, false);
+        return self.beginOperation(forwardId, OPERATION_RESUME, false);
     }
 
     public R requestDelete(Long forwardId) {
-        return beginOperation(forwardId, OPERATION_DELETE, false);
+        return self.beginOperation(forwardId, OPERATION_DELETE, false);
     }
 
     /**
@@ -114,7 +114,7 @@ public class ForwardSyncTaskService {
      * the compensating pause command.
      */
     public R queueSafetyPause(Long forwardId) {
-        return beginOperation(forwardId, OPERATION_PAUSE, true);
+        return self.beginOperation(forwardId, OPERATION_PAUSE, true);
     }
 
     @Transactional
@@ -167,6 +167,7 @@ public class ForwardSyncTaskService {
 
         UpdateWrapper<Forward> update = new UpdateWrapper<>();
         update.eq("id", forwardId)
+                .eq("status", forward.getStatus())
                 .set("status", transientStatus)
                 .set("updated_time", now);
         if (OPERATION_RESUME.equals(operation)) {
@@ -257,7 +258,7 @@ public class ForwardSyncTaskService {
         List<String> operationIds = forwardSyncTaskMapper.selectCompletedDeleteOperationIds(
                 System.currentTimeMillis() - DELETE_SETTLE_MILLIS, RETRY_BATCH_SIZE);
         for (String operationId : operationIds) {
-            finalizeDelete(operationId);
+            self.finalizeDelete(operationId);
         }
     }
 
@@ -271,11 +272,14 @@ public class ForwardSyncTaskService {
         if (forwardIds == null || forwardIds.isEmpty()) return Collections.emptyMap();
         Set<Long> wanted = new LinkedHashSet<>(forwardIds);
         Map<Long, ForwardSyncSummary> result = new LinkedHashMap<>();
-        for (ForwardSyncSummary summary : forwardSyncTaskMapper.selectActiveSummaries()) {
-            if (summary.getForwardId() == null || !wanted.contains(summary.getForwardId())) continue;
-            ForwardSyncSummary existing = result.get(summary.getForwardId());
-            if (existing == null || value(summary.getLatestTime()) > value(existing.getLatestTime())) {
-                result.put(summary.getForwardId(), summary);
+        List<Long> ids = new ArrayList<>(wanted);
+        for (int start = 0; start < ids.size(); start += 500) {
+            for (ForwardSyncSummary summary : forwardSyncTaskMapper.selectActiveSummaries(
+                    ids.subList(start, Math.min(start + 500, ids.size())))) {
+                ForwardSyncSummary existing = result.get(summary.getForwardId());
+                if (existing == null || value(summary.getLatestTime()) > value(existing.getLatestTime())) {
+                    result.put(summary.getForwardId(), summary);
+                }
             }
         }
         return result;
@@ -418,7 +422,8 @@ public class ForwardSyncTaskService {
         forwardService.update(null, update);
     }
 
-    private void finalizeDelete(String operationId) {
+    @Transactional
+    public void finalizeDelete(String operationId) {
         List<ForwardSyncTask> tasks = forwardSyncTaskMapper.selectByOperationId(operationId);
         if (tasks.isEmpty() || tasks.stream().anyMatch(task -> !TASK_SUCCEEDED.equals(task.getTaskStatus()))) return;
         ForwardSyncTask representative = tasks.get(0);

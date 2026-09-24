@@ -5,7 +5,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
+
+	"github.com/go-gost/core/observer/stats"
+	xstats "github.com/go-gost/x/observer/stats"
 )
 
 func TestBatchReportAcknowledgesOnlyCommittedSequences(t *testing.T) {
@@ -69,5 +73,55 @@ func TestBatchReportRecognizesLegacyPanelResponse(t *testing.T) {
 	}
 	if compatible {
 		t.Fatal("plain ok must trigger the legacy protocol fallback")
+	}
+}
+
+func TestTrafficReportSessionAdvancesWhenServiceRestarts(t *testing.T) {
+	firstID, firstStart := newTrafficReportSession()
+	secondID, secondStart := newTrafficReportSession()
+	if firstID == secondID {
+		t.Fatal("recreated service reused the old report session ID")
+	}
+	if secondStart <= firstStart {
+		t.Fatalf("recreated service must have a newer report session: %d <= %d", secondStart, firstStart)
+	}
+}
+
+func TestClosingServiceReportsBytesBeforeNextStatsTick(t *testing.T) {
+	var mu sync.Mutex
+	var reports []TrafficReportItem
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		defer request.Body.Close()
+		var payload trafficBatchRequest
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Errorf("decode final report: %v", err)
+			return
+		}
+		mu.Lock()
+		reports = append(reports, payload.Items...)
+		mu.Unlock()
+		ack := make([]trafficBatchAck, 0, len(payload.Items))
+		for _, item := range payload.Items {
+			ack = append(ack, trafficBatchAck{N: item.N, I: item.I, Q: item.Q, B: item.B})
+		}
+		_ = json.NewEncoder(writer).Encode(trafficBatchResponse{Type: "flow_batch", Acknowledged: ack})
+	}))
+	defer server.Close()
+	previousURL, previousCrypto := httpReportURL, httpAESCrypto
+	httpReportURL, httpAESCrypto = server.URL, nil
+	defer func() { httpReportURL, httpAESCrypto = previousURL, previousCrypto }()
+
+	counters := xstats.NewStats(true)
+	counters.Add(stats.KindInputBytes, 16384)
+	counters.Add(stats.KindOutputBytes, 16384)
+	svc := &defaultService{name: "4_1_0_tcp", status: &Status{stats: counters}}
+	svc.flushFinalTraffic(nil, 0, "new-session", 123)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(reports) != 1 || reports[0].D != 16384 || reports[0].U != 16384 || reports[0].Q != 1 {
+		t.Fatalf("closing service lost its final traffic: %#v", reports)
+	}
+	if counters.Get(stats.KindInputBytes) != 0 || counters.Get(stats.KindOutputBytes) != 0 {
+		t.Fatal("acknowledged final traffic remained in the service counters")
 	}
 }

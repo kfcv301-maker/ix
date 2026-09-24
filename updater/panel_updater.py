@@ -126,6 +126,12 @@ def update_worker() -> None:
             set_state(state="completed", message="已是最新版本；数据库备份已完成")
             return
 
+        # A hard reset would discard fixes made directly in the installed checkout.
+        # Refuse the update until those changes are reviewed and committed.
+        dirty = run(["git", "status", "--porcelain", "--untracked-files=no"])
+        if dirty.returncode != 0 or dirty.stdout.strip():
+            raise RuntimeError("安装目录存在未提交的代码修改，已取消更新以保护本地修复")
+
         set_state(state="updating", message="正在下载新版本并重建服务")
         reset = run(["git", "reset", "--hard", f"origin/{BRANCH}"])
         if reset.returncode != 0:

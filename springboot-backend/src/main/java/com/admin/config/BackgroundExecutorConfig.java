@@ -38,8 +38,8 @@ public class BackgroundExecutorConfig {
         return executor("tunnel-probe-", 2, 4, 32);
     }
 
-    @Bean("vpsDeploymentExecutor")
-    public TaskExecutor vpsDeploymentExecutor() {
+    @Bean("vpsDeploymentTaskExecutor")
+    public TaskExecutor vpsDeploymentTaskExecutor() {
         return executor("vps-deploy-", 1, 2, 16);
     }
 

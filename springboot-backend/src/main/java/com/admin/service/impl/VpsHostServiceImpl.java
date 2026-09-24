@@ -8,6 +8,7 @@ import com.admin.common.lang.R;
 import com.admin.common.utils.AESCrypto;
 import com.admin.common.utils.HttpContextUtils;
 import com.admin.common.utils.JwtUtil;
+import com.admin.common.utils.VpsTerminalWebSocketHandler;
 import com.admin.common.utils.VpsSshTargetPolicy;
 import com.admin.entity.User;
 import com.admin.entity.VpsHost;
@@ -20,6 +21,7 @@ import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 
 import javax.annotation.Resource;
@@ -45,6 +47,10 @@ public class VpsHostServiceImpl extends ServiceImpl<VpsHostMapper, VpsHost> impl
 
     @Resource
     private VpsSshService vpsSshService;
+
+    @Resource
+    @Lazy
+    private VpsTerminalWebSocketHandler vpsTerminalWebSocketHandler;
 
     @Resource
     private VpsSshTargetPolicy vpsSshTargetPolicy;
@@ -116,6 +122,11 @@ public class VpsHostServiceImpl extends ServiceImpl<VpsHostMapper, VpsHost> impl
 
         boolean endpointChanged = !Objects.equals(host.getHost(), normalizedHost)
                 || !Objects.equals(host.getSshPort(), hostDto.getSshPort());
+        boolean accessChanged = endpointChanged
+                || !Objects.equals(host.getSshUsername(), hostDto.getSshUsername().trim())
+                || !isBlank(hostDto.getSshPassword())
+                || (actor.administrator && ORIGIN_ADMIN.equals(host.getOrigin())
+                    && !Objects.equals(host.getAssignedUserId(), hostDto.getAssignedUserId()));
         host.setName(hostDto.getName().trim());
         host.setHost(normalizedHost);
         host.setSshPort(hostDto.getSshPort());
@@ -147,6 +158,7 @@ public class VpsHostServiceImpl extends ServiceImpl<VpsHostMapper, VpsHost> impl
                     .set("last_check_time", null)
                     .set("last_latency_ms", null));
         }
+        if (accessChanged) vpsTerminalWebSocketHandler.closeHostSessions(host.getId());
         return R.ok(toView(host, actor, loadUserNames(Collections.singletonList(host))));
     }
 
@@ -161,7 +173,9 @@ public class VpsHostServiceImpl extends ServiceImpl<VpsHostMapper, VpsHost> impl
         update.setId(host.getId());
         update.setStatus(0);
         update.setUpdatedTime(System.currentTimeMillis());
-        return updateById(update) ? R.ok("VPS 托管已移除") : R.err("VPS 托管移除失败");
+        if (!updateById(update)) return R.err("VPS 托管移除失败");
+        vpsTerminalWebSocketHandler.closeHostSessions(host.getId());
+        return R.ok("VPS 托管已移除");
     }
 
     @Override

@@ -5,10 +5,14 @@ import com.admin.common.aop.LogAnnotation;
 import com.admin.common.annotation.RequireRole;
 import com.admin.common.dto.*;
 import com.admin.common.lang.R;
+import com.admin.common.utils.JwtUtil;
+import com.admin.common.utils.SubscriptionTokenService;
+import com.admin.entity.User;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
+import javax.annotation.Resource;
 
 /**
  * <p>
@@ -22,6 +26,9 @@ import java.util.Map;
 @CrossOrigin
 @RequestMapping("/api/v1/user")
 public class UserController extends BaseController {
+
+    @Resource
+    private SubscriptionTokenService subscriptionTokenService;
 
     @LogAnnotation
     @PostMapping("/login")
@@ -63,6 +70,14 @@ public class UserController extends BaseController {
     @PostMapping("/package")
     public R getUserPackageInfo() {
         return userService.getUserPackageInfo();
+    }
+
+    @LogAnnotation
+    @PostMapping("/subscription-token")
+    public R subscriptionToken() {
+        User user = userService.getById(JwtUtil.getUserIdFromToken());
+        if (user == null || !Integer.valueOf(1).equals(user.getStatus())) return R.err(403, "账号不可用");
+        return R.ok(Map.of("user", user.getUser(), "token", subscriptionTokenService.issue(user)));
     }
 
     @LogAnnotation

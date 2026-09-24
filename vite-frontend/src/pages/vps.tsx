@@ -380,7 +380,7 @@ export default function VpsPage() {
                     <option value="">暂不分配（仅管理员可见）</option>
                     {assignableUsers.map((user) => <option key={user.id} value={user.id}>{user.user}（#{user.id}）</option>)}
                   </select>
-                  <p className="mt-1 text-xs text-default-500">分配后，该用户可检测、SSH 和执行部署；管理员始终保留完整控制权。</p>
+                  <p className="mt-1 text-xs text-default-500">分配后，该用户可检测、SSH 和执行部署；管理员始终保留完整控制权。取消分配会立即断开该 VPS 的网页终端，但不会暂停已有转发；如需停用转发，请在转发页暂停或撤销隧道授权。</p>
                 </label>
               )}
             </div>

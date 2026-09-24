@@ -5,25 +5,29 @@ import com.admin.common.aop.LogAnnotation;
 import com.admin.common.lang.R;
 import javax.servlet.http.HttpServletResponse;
 
-import com.admin.common.utils.Md5Util;
+import com.admin.common.utils.SubscriptionTokenService;
 import com.admin.entity.User;
 import com.admin.entity.UserTunnel;
 import com.alibaba.fastjson.JSONObject;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.Objects;
+import javax.annotation.Resource;
+
 
 @RestController
 @CrossOrigin
 @RequestMapping("/api/v1/open_api")
 public class OpenApiController extends BaseController {
 
+    @Resource
+    private SubscriptionTokenService subscriptionTokenService;
+
     @LogAnnotation
     @GetMapping("/sub_store")
     public Object create(
             @RequestParam("user") String user,
-            @RequestParam("pwd") String pwd,
+            @RequestParam("token") String token,
             @RequestParam(value = "tunnel", required = false, defaultValue = "-1") String tunnel,
             HttpServletResponse response) {
         JSONObject result = new JSONObject();
@@ -35,17 +39,12 @@ public class OpenApiController extends BaseController {
         if (user == null || user.isEmpty()) {
             return R.err("用户不能为空");
         }
-        if (pwd == null || pwd.isEmpty()) {
-            return R.err("密码不能为空");
-        }
-
         User userInfo = userService.getOne(new QueryWrapper<User>().eq("user", user));
         if (userInfo == null) {
             return R.err("鉴权失败");
         }
 
-        String pwdMd5 = Md5Util.md5(pwd);
-        if (!Objects.equals(pwdMd5, userInfo.getPwd())) {
+        if (!subscriptionTokenService.matches(userInfo, token) || !Integer.valueOf(1).equals(userInfo.getStatus())) {
             return R.err("鉴权失败");
         }
 

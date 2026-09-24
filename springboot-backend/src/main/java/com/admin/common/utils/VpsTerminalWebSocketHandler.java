@@ -169,6 +169,20 @@ public class VpsTerminalWebSocketHandler extends TextWebSocketHandler {
         }
     }
 
+    /** Revoking or changing a hosted VPS must terminate shells opened before that change. */
+    public void closeHostSessions(Long hostId) {
+        if (hostId == null) return;
+        for (WebSocketSession session : terminalSessions.values()) {
+            if (!hostId.equals(asLong(session.getAttributes().get("vpsId")))) continue;
+            closeState(session);
+            try {
+                if (session.isOpen()) session.close(CloseStatus.POLICY_VIOLATION);
+            } catch (IOException ignored) {
+                // It may have closed naturally while this revocation was running.
+            }
+        }
+    }
+
     private void send(WebSocketSession session, String type, String data) {
         if (!session.isOpen()) return;
         JSONObject payload = new JSONObject();

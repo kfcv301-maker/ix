@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-gost/core/observer/stats"
@@ -27,8 +28,23 @@ var httpAESCrypto *crypto.AESCrypto // 新增：HTTP上报加密器
 // A report sequence is scoped to one service and this agent process. The
 // server uses this session + sequence pair to acknowledge HTTP retries once
 // without persisting an unbounded row for every five-second report.
-var trafficReportSessionID = xid.New().String()
-var trafficReportSessionStartedAt = time.Now().UnixNano() / int64(time.Millisecond)
+var lastTrafficReportSessionStart atomic.Int64
+
+// Each service instance needs its own session. Pausing, resuming, or updating
+// a service restarts its sequence at one without restarting the agent process.
+// A strictly increasing start time lets the panel accept that new sequence.
+func newTrafficReportSession() (string, int64) {
+	for {
+		previous := lastTrafficReportSessionStart.Load()
+		startedAt := time.Now().UnixMilli()
+		if startedAt <= previous {
+			startedAt = previous + 1
+		}
+		if lastTrafficReportSessionStart.CompareAndSwap(previous, startedAt) {
+			return xid.New().String(), startedAt
+		}
+	}
+}
 
 // TrafficReportItem 流量报告项（压缩格式）
 type TrafficReportItem struct {
@@ -292,6 +308,26 @@ func sendTrafficReportBatch(ctx context.Context, items []TrafficReportItem) (map
 		acknowledged[trafficReportKey(TrafficReportItem{N: ack.N, I: ack.I, Q: ack.Q, B: ack.B})] = struct{}{}
 	}
 	return acknowledged, true, nil
+}
+
+func sendFinalTrafficReport(ctx context.Context, item TrafficReportItem) bool {
+	acknowledged, compatible, err := sendTrafficReportBatch(ctx, []TrafficReportItem{item})
+	if err != nil {
+		fmt.Printf("关闭服务时上报流量失败: %v\n", err)
+		return false
+	}
+	if !compatible {
+		ok, err := sendTrafficReport(ctx, item)
+		if err != nil {
+			fmt.Printf("关闭服务时兼容上报流量失败: %v\n", err)
+		}
+		return ok
+	}
+	_, ok := acknowledged[trafficReportKey(item)]
+	if !ok {
+		fmt.Printf("关闭服务时流量报告未获确认: %s\n", item.N)
+	}
+	return ok
 }
 
 func postTrafficPayload(ctx context.Context, jsonData []byte) (string, error) {

@@ -8,7 +8,7 @@ import com.admin.common.dto.*;
 import com.admin.common.lang.R;
 import com.admin.common.task.ForwardPauseTaskService;
 import com.admin.common.utils.JwtUtil;
-import com.admin.common.utils.Md5Util;
+import com.admin.common.utils.PasswordHashes;
 import com.admin.common.utils.VpsTerminalWebSocketHandler;
 import com.admin.common.utils.WebSocketServer;
 import com.admin.entity.*;
@@ -371,8 +371,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
 
             // 3. 验证当前密码是否正确
             User user = currentUser.getUser();
-            String currentPasswordMd5 = Md5Util.md5(changePasswordDto.getCurrentPassword());
-            if (!user.getPwd().equals(currentPasswordMd5)) {
+            if (!PasswordHashes.matches(changePasswordDto.getCurrentPassword(), user.getPwd())) {
                 return R.err(ERROR_CURRENT_PASSWORD_WRONG);
             }
 
@@ -388,7 +387,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             User updateUser = new User();
             updateUser.setId(user.getId());
             updateUser.setUser(changePasswordDto.getNewUsername());
-            updateUser.setPwd(Md5Util.md5(changePasswordDto.getNewPassword()));
+            updateUser.setPwd(PasswordHashes.encode(changePasswordDto.getNewPassword()));
             updateUser.setTokenVersion(nextTokenVersion(user.getTokenVersion()));
             updateUser.setUpdatedTime(System.currentTimeMillis());
             
@@ -441,12 +440,21 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             return LoginValidationResult.error(ERROR_LOGIN_CREDENTIALS);
         }
         
-        if (!user.getPwd().equals(Md5Util.md5(loginDto.getPassword()))) {
+        if (!PasswordHashes.matches(loginDto.getPassword(), user.getPwd())) {
             return LoginValidationResult.error(ERROR_LOGIN_CREDENTIALS);
         }
         
         if (user.getStatus() == USER_STATUS_DISABLED) {
             return LoginValidationResult.error(ERROR_ACCOUNT_DISABLED);
+        }
+
+        if (PasswordHashes.isLegacyMd5(user.getPwd())) {
+            String previousHash = user.getPwd();
+            String upgradedHash = PasswordHashes.encode(loginDto.getPassword());
+            boolean upgraded = this.update(null, new UpdateWrapper<User>()
+                    .eq("id", user.getId()).eq("pwd", previousHash).set("pwd", upgradedHash));
+            if (!upgraded) return LoginValidationResult.error(ERROR_LOGIN_CREDENTIALS);
+            user.setPwd(upgradedHash);
         }
         
         return LoginValidationResult.success(user);
@@ -496,7 +504,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         BeanUtils.copyProperties(userDto, user);
         
         // 设置加密密码
-        user.setPwd(Md5Util.md5(userDto.getPwd()));
+        user.setPwd(PasswordHashes.encode(userDto.getPwd()));
         user.setTokenVersion(0);
         
         // 设置默认属性
@@ -540,7 +548,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         boolean statusChanged = userUpdateDto.getStatus() != null
                 && !Objects.equals(userUpdateDto.getStatus(), existingUser.getStatus());
         if (passwordChanged) {
-            user.setPwd(Md5Util.md5(userUpdateDto.getPwd()));
+            user.setPwd(PasswordHashes.encode(userUpdateDto.getPwd()));
         } else {
             user.setPwd(null); // 不更新密码字段
         }

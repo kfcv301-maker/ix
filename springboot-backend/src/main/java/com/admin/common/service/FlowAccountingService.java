@@ -29,7 +29,8 @@ import java.util.regex.Pattern;
 @Slf4j
 public class FlowAccountingService {
 
-    private static final Pattern SERVICE_NAME = Pattern.compile("^(\\d+)_(\\d+)_(\\d+)$");
+    // GOST creates separate TCP/UDP services from one forward base name.
+    private static final Pattern SERVICE_NAME = Pattern.compile("^(\\d+)_(\\d+)_(\\d+)(?:_(?:tcp|udp))?$");
     private static final Pattern SESSION_ID = Pattern.compile("^[A-Za-z0-9_-]{8,96}$");
     private static final long MAX_REPORT_BYTES = 4L * 1024 * 1024 * 1024 * 1024;
     private static final long MAX_FUTURE_SESSION_MILLIS = 5 * 60 * 1000L;

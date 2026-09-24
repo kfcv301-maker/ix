@@ -6,10 +6,11 @@ import toast from 'react-hot-toast';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 
-import { getNodeList, getUserPackageInfo } from "@/api";
+import { getNodeList, getSubscriptionToken, getUserPackageInfo } from "@/api";
 import { getRealtimeSocketUrl } from "@/utils/realtime-socket";
 
 interface UserInfo {
+  user?: string;
   flow: number;
   inFlow: number;
   outFlow: number;
@@ -759,6 +760,22 @@ export default function DashboardPage() {
     return inFlow + outFlow;
   };
 
+  const copySubscriptionLink = async () => {
+    try {
+      const result = await getSubscriptionToken();
+      if (result.code !== 0 || !result.data?.token) {
+        toast.error(result.msg || '获取订阅链接失败');
+        return;
+      }
+      const url = new URL('/api/v1/open_api/sub_store', window.location.origin);
+      url.searchParams.set('user', result.data.user);
+      url.searchParams.set('token', result.data.token);
+      await copyToClipboard(url.toString());
+    } catch (error) {
+      toast.error('获取订阅链接失败');
+    }
+  };
+
       if (loading) {
       return (
         
@@ -777,6 +794,11 @@ export default function DashboardPage() {
       return (
       
         <div className="px-3 lg:px-6 py-2 lg:py-4">
+
+         <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-default-200 bg-default-50 px-4 py-3">
+           <p className="text-sm text-default-600">订阅链接只提供流量与到期信息；修改账号密码后旧链接会失效。</p>
+           <Button size="sm" color="primary" variant="flat" onPress={copySubscriptionLink}>复制订阅链接</Button>
+         </div>
 
                           {/* 响应式统计卡片 */}
          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-4 mb-6 lg:mb-8">

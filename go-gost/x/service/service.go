@@ -141,6 +141,9 @@ type defaultService struct {
 	handler  handler.Handler
 	status   *Status
 	options  options
+	connMu   sync.Mutex
+	conns    map[net.Conn]struct{}
+	closing  bool
 }
 
 func NewService(name string, ln listener.Listener, h handler.Handler, opts ...Option) service.Service {
@@ -153,6 +156,7 @@ func NewService(name string, ln listener.Listener, h handler.Handler, opts ...Op
 		listener: ln,
 		handler:  h,
 		options:  options,
+		conns:    make(map[net.Conn]struct{}),
 		status: &Status{
 			createTime: time.Now(),
 			events:     make([]Event, 0, MaxEventSize),
@@ -266,11 +270,16 @@ func (s *defaultService) Serve() error {
 			log.Debugf("admission: %s is denied", clientAddr)
 			continue
 		}
+		if !s.trackConnection(conn) {
+			conn.Close()
+			continue
+		}
 
 		wg.Add(1)
 
 		go func() {
 			defer wg.Done()
+			defer s.releaseConnection(conn)
 
 			if v := xmetrics.GetCounter(xmetrics.MetricServiceRequestsCounter,
 				metrics.Labels{"service": s.name, "client": clientIP}); v != nil {
@@ -317,10 +326,39 @@ func (s *defaultService) Close() error {
 	s.execCmds("pre-down", s.options.preDown)
 	defer s.execCmds("post-down", s.options.postDown)
 
+	s.connMu.Lock()
+	s.closing = true
+	active := make([]net.Conn, 0, len(s.conns))
+	for conn := range s.conns {
+		active = append(active, conn)
+	}
+	s.connMu.Unlock()
+
+	err := s.listener.Close()
+	for _, conn := range active {
+		conn.Close()
+	}
 	if closer, ok := s.handler.(io.Closer); ok {
 		closer.Close()
 	}
-	return s.listener.Close()
+	return err
+}
+
+func (s *defaultService) trackConnection(conn net.Conn) bool {
+	s.connMu.Lock()
+	defer s.connMu.Unlock()
+	if s.closing {
+		return false
+	}
+	s.conns[conn] = struct{}{}
+	return true
+}
+
+func (s *defaultService) releaseConnection(conn net.Conn) {
+	s.connMu.Lock()
+	delete(s.conns, conn)
+	s.connMu.Unlock()
+	conn.Close()
 }
 
 func (s *defaultService) execCmds(phase string, cmds []string) {
@@ -373,10 +411,13 @@ func (s *defaultService) observeStats(ctx context.Context) {
 	var pendingTrafficReport *TrafficReportItem
 	var pendingTrafficDelivery <-chan trafficReportDelivery
 	var nextTrafficSequence uint64
+	reportSessionID, reportSessionStartedAt := newTrafficReportSession()
 	defer func() {
 		if pendingTrafficReport != nil {
 			cancelTrafficReport(*pendingTrafficReport)
 		}
+		s.flushFinalTraffic(pendingTrafficReport, nextTrafficSequence,
+			reportSessionID, reportSessionStartedAt)
 	}()
 
 	ticker := time.NewTicker(d)
@@ -415,9 +456,9 @@ func (s *defaultService) observeStats(ctx context.Context) {
 						N: s.name,
 						U: int64(outputBytes),
 						D: int64(inputBytes),
-						I: trafficReportSessionID,
+						I: reportSessionID,
 						Q: nextTrafficSequence,
-						B: trafficReportSessionStartedAt,
+						B: reportSessionStartedAt,
 					}
 				}
 			}
@@ -447,9 +488,9 @@ func (s *defaultService) observeStats(ctx context.Context) {
 									N: s.name,
 									U: int64(remainingOutput),
 									D: int64(remainingInput),
-									I: trafficReportSessionID,
+									I: reportSessionID,
 									Q: nextTrafficSequence,
-									B: trafficReportSessionStartedAt,
+									B: reportSessionStartedAt,
 								}
 							}
 						}
@@ -471,6 +512,40 @@ func (s *defaultService) observeStats(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		}
+	}
+}
+
+// Closing a service can happen before its next five-second stats tick. Send
+// the final snapshot while the panel still accepts the pause/delete tail.
+func (s *defaultService) flushFinalTraffic(pending *TrafficReportItem, lastSequence uint64,
+	sessionID string, sessionStartedAt int64) {
+	st := s.status.Stats()
+	if st == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+	if pending != nil {
+		if !sendFinalTrafficReport(ctx, *pending) {
+			return
+		}
+		if counters, ok := st.(*xstats.Stats); ok {
+			counters.AcknowledgeTraffic(uint64(pending.D), uint64(pending.U))
+		}
+	}
+	inputBytes := st.Get(stats.KindInputBytes)
+	outputBytes := st.Get(stats.KindOutputBytes)
+	if inputBytes == 0 && outputBytes == 0 {
+		return
+	}
+	if !sendFinalTrafficReport(ctx, TrafficReportItem{
+		N: s.name, U: int64(outputBytes), D: int64(inputBytes),
+		I: sessionID, Q: lastSequence + 1, B: sessionStartedAt,
+	}) {
+		return
+	}
+	if counters, ok := st.(*xstats.Stats); ok {
+		counters.AcknowledgeTraffic(inputBytes, outputBytes)
 	}
 }
 

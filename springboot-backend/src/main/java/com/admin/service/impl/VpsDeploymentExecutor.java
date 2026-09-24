@@ -27,7 +27,7 @@ public class VpsDeploymentExecutor {
     @Resource
     private VpsSshService vpsSshService;
 
-    @Async("vpsDeploymentExecutor")
+    @Async("vpsDeploymentTaskExecutor")
     public void execute(Long taskId) {
         VpsDeploymentTask task = taskMapper.selectById(taskId);
         if (task == null || task.getStatus() == null || task.getStatus() != ACTIVE_STATUS) return;

@@ -8,6 +8,7 @@ INSTALL_DIR="${INSTALL_DIR:-/opt/flux-panel-enhanced}"
 FRONTEND_PORT="${FRONTEND_PORT:-6366}"
 BACKEND_PORT="${BACKEND_PORT:-6365}"
 FRONTEND_BIND_ADDRESS="${FRONTEND_BIND_ADDRESS:-127.0.0.1}"
+BACKEND_BIND_ADDRESS="${BACKEND_BIND_ADDRESS:-127.0.0.1}"
 
 info() { printf '\033[1;34m[INFO]\033[0m %s\n' "$*"; }
 ok() { printf '\033[1;32m[ OK ]\033[0m %s\n' "$*"; }
@@ -28,6 +29,7 @@ Lunaris Relay 管理脚本
   INSTALL_DIR=/opt/flux-panel-enhanced
   FRONTEND_PORT=6366 BACKEND_PORT=6365
   FRONTEND_BIND_ADDRESS=127.0.0.1  # 使用现有 Nginx 时保持仅本机监听；直连时设为 0.0.0.0
+  BACKEND_BIND_ADDRESS=127.0.0.1   # 后端通过前端代理访问，默认只在本机监听
   REPO_URL=https://github.com/kfcv301-maker/ix.git BRANCH=main
 EOF
 }
@@ -71,6 +73,8 @@ sync_source() {
   mkdir -p "$(dirname "$INSTALL_DIR")"
   if [[ -d "$INSTALL_DIR/.git" ]]; then
     info "更新已有源码：$INSTALL_DIR"
+    [[ -z "$(git -C "$INSTALL_DIR" status --porcelain)" ]] ||
+      fail "安装目录有未合并的本地修改；请先备份并合并修复，避免更新覆盖修改"
     git -C "$INSTALL_DIR" fetch --depth=1 origin "$BRANCH"
     git -C "$INSTALL_DIR" checkout --force "$BRANCH"
     git -C "$INSTALL_DIR" reset --hard "origin/$BRANCH"
@@ -121,6 +125,7 @@ PANEL_UPDATER_TOKEN=$(random_secret)
 FRONTEND_PORT=$FRONTEND_PORT
 BACKEND_PORT=$BACKEND_PORT
 FRONTEND_BIND_ADDRESS=$FRONTEND_BIND_ADDRESS
+BACKEND_BIND_ADDRESS=$BACKEND_BIND_ADDRESS
 EOF
   chmod 600 "$env_file"
   ok "已生成仅保存在本机的 .env"

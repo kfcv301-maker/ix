@@ -328,12 +328,15 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
                 : existing != null && Integer.valueOf(1).equals(existing.getTcpTuningAutoEnabled());
         target.setTcpTuningAutoEnabled(autoEnabled ? 1 : 0);
         if (autoEnabled) {
-            String minProfile = normalizeTcpTuningProfile(requestedProfileMin == null
-                    ? (existing == null ? null : existing.getTcpTuningProfileMin())
-                    : requestedProfileMin);
-            String maxProfile = normalizeTcpTuningProfile(requestedProfileMax == null
-                    ? (existing == null ? null : existing.getTcpTuningProfileMax())
-                    : requestedProfileMax);
+            String rawMinProfile = requestedProfileMin == null
+                    ? (existing == null ? null : existing.getTcpTuningProfileMin()) : requestedProfileMin;
+            String rawMaxProfile = requestedProfileMax == null
+                    ? (existing == null ? null : existing.getTcpTuningProfileMax()) : requestedProfileMax;
+            if (StrUtil.isBlank(rawMinProfile) || StrUtil.isBlank(rawMaxProfile)) {
+                return R.err("启用动态 TCP 调优时必须选择最低和最高档位");
+            }
+            String minProfile = normalizeTcpTuningProfile(rawMinProfile);
+            String maxProfile = normalizeTcpTuningProfile(rawMaxProfile);
             if (minProfile == null || maxProfile == null) {
                 return R.err("启用动态 TCP 调优时必须选择有效的最低和最高档位");
             }

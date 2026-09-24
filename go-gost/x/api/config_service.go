@@ -12,7 +12,6 @@ import (
 	"github.com/go-gost/core/service"
 	"github.com/go-gost/x/config"
 	parser "github.com/go-gost/x/config/parsing/service"
-	kill "github.com/go-gost/x/internal/util/port"
 	"github.com/go-gost/x/registry"
 )
 
@@ -537,23 +536,22 @@ func pauseService(ctx *gin.Context) {
 		return
 	}
 
-	// 获取服务地址用于强制断开连接
-	var serviceAddr string
+	var serviceConfig *config.ServiceConfig
 	cfg := config.Global()
 	for _, s := range cfg.Services {
 		if s.Name == name {
-			serviceAddr = s.Addr
+			serviceConfig = s
 			break
 		}
 	}
-
-	// 强制断开端口的所有连接
-	if serviceAddr != "" {
-		_ = kill.ForceClosePortConnections(serviceAddr)
+	if serviceConfig == nil {
+		writeError(ctx, NewError(http.StatusBadRequest, ErrCodeNotFound, fmt.Sprintf("service %s configuration not found", name)))
+		return
 	}
+	svc.Close()
 
 	// 更新配置中的暂停状态
-	config.OnUpdate(func(c *config.Config) error {
+	if err := config.OnUpdate(func(c *config.Config) error {
 		for i := range c.Services {
 			if c.Services[i].Name == name {
 				if c.Services[i].Metadata == nil {
@@ -564,7 +562,15 @@ func pauseService(ctx *gin.Context) {
 			}
 		}
 		return nil
-	})
+	}); err != nil {
+		rollbackPausedServices([]struct {
+			name          string
+			service       service.Service
+			serviceConfig *config.ServiceConfig
+		}{{name: name, service: svc, serviceConfig: serviceConfig}})
+		writeError(ctx, NewError(http.StatusInternalServerError, ErrCodeFailed, err.Error()))
+		return
+	}
 
 	ctx.JSON(http.StatusOK, Response{
 		Msg: "OK",
@@ -739,6 +745,7 @@ func rollbackPausedServices(pausedServices []struct {
 	serviceConfig *config.ServiceConfig
 }) {
 	for _, pss := range pausedServices {
+		registry.ServiceRegistry().Unregister(pss.name)
 		// 重新解析并启动服务
 		svc, err := parser.ParseService(pss.serviceConfig)
 		if err != nil {
@@ -902,10 +909,7 @@ func pauseServices(ctx *gin.Context) {
 			return
 		}
 
-		// 强制断开端口的所有连接
-		if serviceConfig.Addr != "" {
-			_ = kill.ForceClosePortConnections(serviceConfig.Addr)
-		}
+		stp.service.Close()
 
 		// 记录已暂停的服务
 		pausedServices = append(pausedServices, struct {

@@ -7,7 +7,11 @@ import (
 )
 
 const (
-	bufferSize = 64 * 1024
+	// Each active TCP forward uses one buffer in each direction. A 16 KiB
+	// buffer keeps idle high-connection workloads bounded without changing
+	// the streaming semantics; larger buffers multiplied into hundreds of
+	// megabytes on small Agent hosts.
+	bufferSize = 16 * 1024
 )
 
 func Transport(rw1, rw2 io.ReadWriter) error {

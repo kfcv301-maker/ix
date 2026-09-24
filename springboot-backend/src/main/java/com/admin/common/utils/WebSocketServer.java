@@ -68,6 +68,9 @@ public class WebSocketServer extends TextWebSocketHandler {
     @Override
     public void handleTextMessage(WebSocketSession session, TextMessage message) {
         try {
+            // Dashboard sockets are read-only. Only authenticated Agent sockets
+            // may submit metrics or complete pending node commands.
+            if (!Objects.equals(session.getAttributes().get("type"), "1")) return;
             if (StringUtils.isNoneBlank(message.getPayload())) {
                 
                 String id = session.getAttributes().get("id").toString();

@@ -122,11 +122,18 @@ select_tuning_profile() {
     fi
     set_tuning_profile "$EFFECTIVE_TCP_PROFILE_MAX"
     info "启用动态 TCP 调优：${EFFECTIVE_TCP_PROFILE_MIN}–${EFFECTIVE_TCP_PROFILE_MAX}（当前从 $TUNING_PROFILE 开始）"
+    if [[ "$EFFECTIVE_TCP_PROFILE_MIN" == "$EFFECTIVE_TCP_PROFILE_MAX" ]]; then
+      info "本机资源上限使动态范围只剩一个档位；如需随内存降档，请选择更低的最低档位。"
+    fi
     return
   fi
 
   if [[ -n "$TCP_PROFILE_OVERRIDE" ]]; then
     is_valid_tuning_profile "$TCP_PROFILE_OVERRIDE" || fail "TCP 调优档位无效：$TCP_PROFILE_OVERRIDE"
+    if (( $(tuning_profile_rank "$TCP_PROFILE_OVERRIDE") > $(tuning_profile_rank "$HOST_RECOMMENDED_PROFILE") )); then
+      info "请求的 $TCP_PROFILE_OVERRIDE 档位超过本机资源上限，已限制为 $HOST_RECOMMENDED_PROFILE"
+      TCP_PROFILE_OVERRIDE="$HOST_RECOMMENDED_PROFILE"
+    fi
     set_tuning_profile "$TCP_PROFILE_OVERRIDE"
     info "使用面板选择的 TCP 档位：$TUNING_PROFILE（收发缓存上限 $((R_MEM_MAX / 1024 / 1024)) MB，接入队列 $SOMAXCONN）"
     return

@@ -169,7 +169,7 @@ export default function NodePage() {
     socks: 0,
     tcpTuningProfile: 'standard',
     tcpTuningAutoEnabled: true,
-    tcpTuningProfileMin: 'small',
+    tcpTuningProfileMin: 'tiny',
     tcpTuningProfileMax: 'standard',
     ddnsEnabled: false,
     cfApiToken: '',
@@ -675,7 +675,7 @@ export default function NodePage() {
       socks: typeof node.socks === 'number' ? node.socks : 1,
       tcpTuningProfile: node.tcpTuningProfileMax || node.tcpTuningProfile || 'balanced',
       tcpTuningAutoEnabled: node.tcpTuningAutoEnabled === 1,
-      tcpTuningProfileMin: node.tcpTuningProfileMin || 'small',
+      tcpTuningProfileMin: node.tcpTuningProfileMin || 'tiny',
       tcpTuningProfileMax: node.tcpTuningProfileMax || node.tcpTuningProfile || 'standard',
       ddnsEnabled: node.ddnsEnabled === 1,
       // 出于安全考虑，后端从不回传令牌。留空保存会保留已加密的旧令牌。
@@ -854,7 +854,7 @@ export default function NodePage() {
       socks: 0,
       tcpTuningProfile: 'standard',
       tcpTuningAutoEnabled: true,
-      tcpTuningProfileMin: 'small',
+      tcpTuningProfileMin: 'tiny',
       tcpTuningProfileMax: 'standard',
       ddnsEnabled: false,
       cfApiToken: '',
@@ -1445,7 +1445,7 @@ export default function NodePage() {
                     </>
                   )}
                   <p className="mt-2 text-xs text-default-500">
-                    安装脚本仍会校验 CPU、内存和内核能力；低内存机器不会被提升到不安全的档位。BBR/FQ 始终保持，不参与动态切换。
+                    安装脚本会按本机 CPU、内存和内核能力限制最高档位。1 GB 节点若最低档设为“小型”，实际可能只剩单一档位；选“轻量”才能在压力下继续降档。BBR/FQ 不参与动态切换。
                   </p>
                   {errors.tcpTuning && <p className="mt-1 text-xs text-danger">{errors.tcpTuning}</p>}
                 </div>

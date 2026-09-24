@@ -22,6 +22,7 @@ export const getAllUsers = (pageData: any = {}) => Network.post("/user/list", pa
 export const updateUser = (data: any) => Network.post("/user/update", data);
 export const deleteUser = (id: number) => Network.post("/user/delete", { id });
 export const getUserPackageInfo = () => Network.post("/user/package");
+export const getSubscriptionToken = () => Network.post<{ user: string; token: string }>("/user/subscription-token");
 
 // VPS 托管：后端按当前登录用户的归属与分配权限过滤数据。
 export const getVpsHosts = () => Network.post("/vps/list");

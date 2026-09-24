@@ -9,7 +9,6 @@ import (
 	"github.com/go-gost/core/service"
 	"github.com/go-gost/x/config"
 	parser "github.com/go-gost/x/config/parsing/service"
-	kill "github.com/go-gost/x/internal/util/port"
 	"github.com/go-gost/x/registry"
 )
 
@@ -269,11 +268,6 @@ func pauseServices(req pauseServicesRequest) error {
 		// 暂停服务
 		stp.service.Close()
 
-		// 强制断开端口的所有连接
-		if serviceConfig.Addr != "" {
-			_ = kill.ForceClosePortConnections(serviceConfig.Addr)
-		}
-
 		// 记录已暂停的服务
 		pausedServices = append(pausedServices, struct {
 			name          string
@@ -438,6 +432,7 @@ func rollbackPausedServices(pausedServices []struct {
 	serviceConfig *config.ServiceConfig
 }) {
 	for _, pss := range pausedServices {
+		registry.ServiceRegistry().Unregister(pss.name)
 		// 重新解析并启动服务
 		svc, err := parser.ParseService(pss.serviceConfig)
 		if err != nil {

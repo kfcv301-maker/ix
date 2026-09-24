@@ -61,15 +61,16 @@ public interface ForwardSyncTaskMapper extends BaseMapper<ForwardSyncTask> {
     @Select("SELECT * FROM forward_sync_task WHERE operation_id = #{operationId} AND status = 1 ORDER BY id ASC")
     List<ForwardSyncTask> selectByOperationId(@Param("operationId") String operationId);
 
-    @Select("SELECT forward_id AS forwardId, operation_id AS operationId, MIN(operation) AS operation, "
+    @Select("<script>SELECT forward_id AS forwardId, operation_id AS operationId, MIN(operation) AS operation, "
             + "COUNT(*) AS totalTasks, "
             + "SUM(CASE WHEN task_status = 'pending' THEN 1 ELSE 0 END) AS pendingTasks, "
             + "SUM(CASE WHEN task_status = 'running' THEN 1 ELSE 0 END) AS runningTasks, "
-            + "SUM(CASE WHEN attempts > 0 AND task_status <> 'succeeded' THEN 1 ELSE 0 END) AS retriedTasks, "
+            + "SUM(CASE WHEN attempts > 0 AND task_status != 'succeeded' THEN 1 ELSE 0 END) AS retriedTasks, "
             + "MAX(last_error) AS lastError, MAX(updated_time) AS latestTime "
             + "FROM forward_sync_task WHERE status = 1 AND task_status IN ('pending', 'running') "
-            + "GROUP BY forward_id, operation_id")
-    List<ForwardSyncSummary> selectActiveSummaries();
+            + "AND forward_id IN <foreach collection='forwardIds' item='id' open='(' separator=',' close=')'>#{id}</foreach> "
+            + "GROUP BY forward_id, operation_id</script>")
+    List<ForwardSyncSummary> selectActiveSummaries(@Param("forwardIds") List<Long> forwardIds);
 
     @Select("SELECT operation_id FROM forward_sync_task t INNER JOIN forward f ON f.id = t.forward_id "
             + "WHERE t.status = 1 AND t.operation = 'delete' AND f.status = 3 "
