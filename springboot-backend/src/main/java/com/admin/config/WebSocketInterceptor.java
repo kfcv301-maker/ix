@@ -51,6 +51,7 @@ public class WebSocketInterceptor extends HttpSessionHandshakeInterceptor {
         String http = serverHttpRequest.getServletRequest().getParameter("http");
         String tls = serverHttpRequest.getServletRequest().getParameter("tls");
         String socks = serverHttpRequest.getServletRequest().getParameter("socks");
+        String metrics = serverHttpRequest.getServletRequest().getParameter("metrics");
         if (Objects.equals(type, "1")) {
             secret = getNodeToken(servletRequest, secret);
             Node node = nodeService.getOne(new QueryWrapper<Node>().eq("secret", secret));
@@ -73,6 +74,9 @@ public class WebSocketInterceptor extends HttpSessionHandshakeInterceptor {
             Integer roleId = JwtUtil.getRoleIdFromToken(secret);
             attributes.put("id", userId);
             attributes.put("roleId", roleId);
+            // Summary is sufficient for dashboards. The node monitor explicitly
+            // asks for detail; old clients keep the former full-metric behavior.
+            attributes.put("monitorMetrics", "summary".equalsIgnoreCase(metrics) ? "summary" : "detail");
 
             // Do the authorization lookup during the authenticated handshake. The
             // WebSocket handler then filters every node status and metric event

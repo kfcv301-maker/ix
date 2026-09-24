@@ -62,4 +62,10 @@ public interface TunnelService extends IService<Tunnel> {
      * 单条转发的入口/出口链路判定与 forward/diagnose 完全一致。
      */
     R diagnoseTunnelForwards(Long tunnelId);
+
+    /** Read one asynchronous tunnel diagnostic task. */
+    R getTunnelForwardDiagnosisTask(String taskId);
+
+    /** Cancel an in-progress tunnel diagnostic task. */
+    R cancelTunnelForwardDiagnosisTask(String taskId);
 }

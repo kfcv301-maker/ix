@@ -43,6 +43,8 @@ import {
   resumeForwardService,
   diagnoseForward,
   diagnoseTunnelForwards,
+  getTunnelForwardDiagnosisTask,
+  cancelTunnelForwardDiagnosisTask,
   updateForwardOrder
 } from "@/api";
 import { JwtUtil } from "@/utils/jwt";
@@ -65,6 +67,9 @@ interface Forward {
   userName?: string;
   userId?: number;
   inx?: number;
+  syncOperation?: 'pause' | 'resume' | 'delete';
+  syncState?: 'syncing' | 'partial';
+  syncError?: string;
 }
 
 interface Tunnel {
@@ -135,6 +140,10 @@ interface TunnelPingForwardReport {
 }
 
 interface TunnelPingSummary {
+  taskId?: string;
+  status?: 'queued' | 'running' | 'cancelling' | 'completed' | 'cancelled' | 'timed_out' | 'failed';
+  completedForwards?: number;
+  message?: string;
   tunnelId: number;
   tunnelName: string;
   totalForwards: number;
@@ -172,6 +181,13 @@ export default function ForwardPage() {
       return JwtUtil.getRoleIdFromToken() === 0 ? 'direct' : 'grouped';
     }
   });
+  const [adminOnlyMyForwards, setAdminOnlyMyForwards] = useState(() => {
+    try {
+      return localStorage.getItem('forward-admin-only-mine') === 'true';
+    } catch {
+      return false;
+    }
+  });
   
   // 拖拽排序相关状态
   const [forwardOrder, setForwardOrder] = useState<number[]>([]);
@@ -184,6 +200,7 @@ export default function ForwardPage() {
   const [isEdit, setIsEdit] = useState(false);
   const [submitLoading, setSubmitLoading] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
+  const [operatingForwardIds, setOperatingForwardIds] = useState<Set<number>>(() => new Set());
   const [diagnosisLoading, setDiagnosisLoading] = useState(false);
   const [forwardToDelete, setForwardToDelete] = useState<Forward | null>(null);
   const [currentDiagnosisForward, setCurrentDiagnosisForward] = useState<Forward | null>(null);
@@ -191,6 +208,7 @@ export default function ForwardPage() {
   const [tunnelPingModalOpen, setTunnelPingModalOpen] = useState(false);
   const [tunnelPingLoading, setTunnelPingLoading] = useState(false);
   const [tunnelPingSummary, setTunnelPingSummary] = useState<TunnelPingSummary | null>(null);
+  const [tunnelPingTaskId, setTunnelPingTaskId] = useState<string | null>(null);
   const [addressModalTitle, setAddressModalTitle] = useState('');
   const [addressList, setAddressList] = useState<AddressItem[]>([]);
   
@@ -228,6 +246,15 @@ export default function ForwardPage() {
 
   const isAdministrator = JwtUtil.getRoleIdFromToken() === 0;
 
+  const getDirectVisibleForwards = (source: Forward[]) => {
+    const currentUserId = JwtUtil.getUserIdFromToken();
+    const needsOwnerFilter = !isAdministrator || adminOnlyMyForwards;
+    if (needsOwnerFilter && currentUserId !== null) {
+      return source.filter(forward => forward.userId === currentUserId);
+    }
+    return source;
+  };
+
   /**
    * For ordinary users, overlay the persisted forwarding record with the one
    * address assigned to their tunnel permission. Admins keep the raw record
@@ -242,6 +269,47 @@ export default function ForwardPage() {
     loadData();
   }, []);
 
+  // Durable node operations continue after the request returns. Refresh only
+  // while a forward is in that transient state so the card can move from
+  // “同步中/部分失败” to its confirmed final status without a manual reload.
+  useEffect(() => {
+    if (!forwards.some(forward => forward.status === 2 || forward.status === 3)) return;
+    const timer = window.setTimeout(() => loadData(false), 3000);
+    return () => window.clearTimeout(timer);
+  }, [forwards]);
+
+  // Tunnel diagnostics run as a bounded server-side task. Polling is short
+  // and cancellable, so a tunnel with many forwards never has to fit inside a
+  // single browser/API timeout.
+  useEffect(() => {
+    if (!tunnelPingTaskId) return;
+    let disposed = false;
+    const terminalStates = new Set(['completed', 'cancelled', 'timed_out', 'failed']);
+    const refreshTask = async () => {
+      try {
+        const response: any = await getTunnelForwardDiagnosisTask(tunnelPingTaskId);
+        if (disposed) return;
+        if (response?.code === 0 && response.data) {
+          const summary = response.data as TunnelPingSummary;
+          setTunnelPingSummary(summary);
+          if (terminalStates.has(summary.status || '')) {
+            setTunnelPingLoading(false);
+            setTunnelPingTaskId(null);
+          }
+        }
+      } catch {
+        // Keep the task running and retry on the next poll. A temporary
+        // browser/network failure must not imply that node commands stopped.
+      }
+    };
+    void refreshTask();
+    const timer = window.setInterval(() => void refreshTask(), 1200);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [tunnelPingTaskId]);
+
   // 切换显示模式并保存到localStorage
   const handleViewModeChange = () => {
     const newMode = viewMode === 'grouped' ? 'direct' : 'grouped';
@@ -251,12 +319,10 @@ export default function ForwardPage() {
       
       // 切换到直接显示模式时，初始化拖拽排序顺序
       if (newMode === 'direct') {
-        // 在平铺模式下，只对当前用户的转发进行排序
-        const currentUserId = JwtUtil.getUserIdFromToken();
-        let userForwards = forwards;
-        if (currentUserId !== null) {
-          userForwards = forwards.filter((f: Forward) => f.userId === currentUserId);
-        }
+        // Drag ordering always uses precisely the records currently visible in
+        // flat view: all records for an admin, or their own records after the
+        // explicit “只看我的” filter is enabled.
+        const userForwards = getDirectVisibleForwards(forwards);
         
         // 检查数据库中是否有排序信息
         const hasDbOrdering = userForwards.some((f: Forward) => f.inx !== undefined && f.inx !== 0);
@@ -320,12 +386,7 @@ export default function ForwardPage() {
         
         // 初始化拖拽排序顺序
         if (viewMode === 'direct') {
-          // 在平铺模式下，只对当前用户的转发进行排序
-          const currentUserId = JwtUtil.getUserIdFromToken();
-          let userForwards = forwardsData;
-          if (currentUserId !== null) {
-            userForwards = forwardsData.filter((f: Forward) => f.userId === currentUserId);
-          }
+          const userForwards = getDirectVisibleForwards(forwardsData);
           
           // 检查数据库中是否有排序信息
           const hasDbOrdering = userForwards.some((f: Forward) => f.inx !== undefined && f.inx !== 0);
@@ -527,16 +588,16 @@ export default function ForwardPage() {
     try {
       const res = await deleteForward(forwardToDelete.id);
       if (res.code === 0) {
-        toast.success('删除成功');
+        toast.success(res.msg || '已进入删除同步队列');
         setDeleteModalOpen(false);
         loadData();
       } else {
-        // 删除失败，询问是否强制删除
-        const confirmed = window.confirm(`常规删除失败：${res.msg || '删除失败'}\n\n是否需要强制删除？\n\n⚠️ 注意：强制删除不会去验证节点端是否已经删除对应的转发服务。`);
+        // 兼容旧入口：它现在同样走持久化节点清理，绝不会直接删库。
+        const confirmed = window.confirm(`删除请求失败：${res.msg || '删除失败'}\n\n是否重新提交删除同步任务？`);
         if (confirmed) {
           const forceRes = await forceDeleteForward(forwardToDelete.id);
           if (forceRes.code === 0) {
-            toast.success('强制删除成功');
+            toast.success(forceRes.msg || '已进入删除同步队列');
             setDeleteModalOpen(false);
             loadData();
           } else {
@@ -620,20 +681,14 @@ export default function ForwardPage() {
   // 处理服务开关
   const handleServiceToggle = async (forward: Forward) => {
     if (forward.status !== 1 && forward.status !== 0) {
-      toast.error('转发状态异常，无法操作');
+      toast.error('转发正在同步或状态异常，暂不能操作');
       return;
     }
+    if (operatingForwardIds.has(forward.id)) return;
 
     const targetState = !forward.serviceRunning;
-    
+    setOperatingForwardIds(prev => new Set(prev).add(forward.id));
     try {
-      // 乐观更新UI
-      setForwards(prev => prev.map(f => 
-        f.id === forward.id 
-          ? { ...f, serviceRunning: targetState }
-          : f
-      ));
-
       let res;
       if (targetState) {
         res = await resumeForwardService(forward.id);
@@ -642,31 +697,22 @@ export default function ForwardPage() {
       }
       
       if (res.code === 0) {
-        toast.success(targetState ? '服务已启动' : '服务已暂停');
-        // 更新转发状态
-        setForwards(prev => prev.map(f => 
-          f.id === forward.id 
-            ? { ...f, status: targetState ? 1 : 0 }
-            : f
-        ));
+        toast.success(res.msg || (targetState ? '恢复同步已开始' : '暂停同步已开始'));
+        // A command timeout can still execute on a node. Always render the
+        // persisted aggregate result instead of guessing locally.
+        await loadData(false);
       } else {
-        // 操作失败，恢复UI状态
-        setForwards(prev => prev.map(f => 
-          f.id === forward.id 
-            ? { ...f, serviceRunning: !targetState }
-            : f
-        ));
         toast.error(res.msg || '操作失败');
       }
     } catch (error) {
-      // 操作失败，恢复UI状态
-      setForwards(prev => prev.map(f => 
-        f.id === forward.id 
-          ? { ...f, serviceRunning: !targetState }
-          : f
-      ));
       console.error('服务开关操作失败:', error);
       toast.error('网络错误，操作失败');
+    } finally {
+      setOperatingForwardIds(prev => {
+        const next = new Set(prev);
+        next.delete(forward.id);
+        return next;
+      });
     }
   };
 
@@ -716,7 +762,7 @@ export default function ForwardPage() {
     }
   };
 
-  // 一条批量请求由后端顺序执行，并统一施加数量、并发和冷却限制。
+  // 一键 PING 以受限后台任务运行，避免浏览器 30 秒请求超时。
   const handleDiagnoseTunnelForwards = async (tunnelGroup: TunnelGroup) => {
     if (tunnelGroup.forwards.length === 0) {
       toast.error('该隧道暂无可检测的转发');
@@ -725,6 +771,7 @@ export default function ForwardPage() {
 
     setTunnelPingModalOpen(true);
     setTunnelPingLoading(true);
+    setTunnelPingTaskId(null);
     setTunnelPingSummary({
       tunnelId: tunnelGroup.tunnelId,
       tunnelName: tunnelGroup.tunnelName,
@@ -737,7 +784,13 @@ export default function ForwardPage() {
     try {
       const response: any = await diagnoseTunnelForwards(tunnelGroup.tunnelId);
       if (response?.code === 0 && response.data) {
-        setTunnelPingSummary(response.data as TunnelPingSummary);
+        const summary = response.data as TunnelPingSummary;
+        setTunnelPingSummary(summary);
+        if (summary.taskId) {
+          setTunnelPingTaskId(summary.taskId);
+        } else {
+          setTunnelPingLoading(false);
+        }
       } else {
         toast.error(response?.msg || '一键 PING 失败');
         setTunnelPingSummary({
@@ -755,6 +808,7 @@ export default function ForwardPage() {
             results: []
           }]
         });
+        setTunnelPingLoading(false);
       }
     } catch {
       toast.error('网络错误，请重试');
@@ -771,11 +825,20 @@ export default function ForwardPage() {
           success: false,
           message: '无法连接到服务器',
           results: []
-        }]
-      });
-    } finally {
+          }]
+        });
       setTunnelPingLoading(false);
     }
+  };
+
+  const closeTunnelPingModal = () => {
+    const activeTaskId = tunnelPingTaskId;
+    if (activeTaskId && tunnelPingLoading) {
+      void cancelTunnelForwardDiagnosisTask(activeTaskId);
+    }
+    setTunnelPingTaskId(null);
+    setTunnelPingLoading(false);
+    setTunnelPingModalOpen(false);
   };
 
   // 获取连接质量
@@ -953,14 +1016,22 @@ export default function ForwardPage() {
         return;
       }
       
-      // The fourth column makes the current user's assigned entry visible.
-      // Import keeps accepting the original first three columns and ignores it.
-      const exportLines = forwardsToExport.map(forward => {
-        return `${forward.remoteAddr}|${forward.name}|${forward.inPort}|${formatInAddress(getForwardEntryAddress(forward), forward.inPort)}`;
-      });
-      
-      const exportText = exportLines.join('\n');
-      setExportData(exportText);
+      // Versioned JSON keeps every setting needed to recreate a forward.
+      // The importer continues to accept the original pipe-delimited format
+      // below so users can still restore their older exports.
+      const exportBundle = {
+        format: 'flux-panel-forward-export',
+        version: 2,
+        exportedAt: new Date().toISOString(),
+        tunnelId: selectedTunnelForExport,
+        forwards: forwardsToExport.map(forward => ({
+          name: forward.name,
+          remoteAddr: forward.remoteAddr,
+          inPort: forward.inPort ?? null,
+          strategy: forward.strategy || 'fifo'
+        }))
+      };
+      setExportData(JSON.stringify(exportBundle, null, 2));
     } catch (error) {
       console.error('导出失败:', error);
       toast.error('导出失败');
@@ -998,109 +1069,138 @@ export default function ForwardPage() {
     setImportResults([]); // 清空之前的结果
 
     try {
-      const lines = importData.trim().split('\n').filter(line => line.trim());
-      
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i].trim();
-        const parts = line.split('|');
-        
-        if (parts.length < 2) {
-          setImportResults(prev => [{
-            line,
-            success: false,
-            message: '格式错误：需要至少包含目标地址和转发名称'
-          }, ...prev]);
+      type ImportItem = {
+        line: string;
+        name?: unknown;
+        remoteAddr?: unknown;
+        inPort?: unknown;
+        strategy?: unknown;
+      };
+      let items: ImportItem[];
+      const raw = importData.trim();
+      if (raw.startsWith('{')) {
+        const bundle = JSON.parse(raw);
+        if (bundle?.format !== 'flux-panel-forward-export' || bundle?.version !== 2 || !Array.isArray(bundle.forwards)) {
+          throw new Error('JSON 导入文件不是受支持的 v2 转发导出格式');
+        }
+        items = bundle.forwards.map((item: unknown) => {
+          const value = item && typeof item === 'object' ? item as Record<string, unknown> : {};
+          return {
+            line: JSON.stringify(value),
+            name: value.name,
+            remoteAddr: value.remoteAddr,
+            inPort: value.inPort,
+            strategy: value.strategy
+          };
+        });
+      } else {
+        // Legacy: 目标地址|转发名称|入口端口|展示入口地址。第 4 列仍只用于展示。
+        items = raw.split('\n').filter(line => line.trim()).map(line => {
+          const [remoteAddr, name, inPort] = line.trim().split('|');
+          return { line: line.trim(), remoteAddr, name, inPort, strategy: 'fifo' };
+        });
+      }
+
+      if (items.length === 0) {
+        throw new Error('没有可导入的转发记录');
+      }
+
+      const results: Array<{ line: string; success: boolean; message: string; forwardName?: string }> = [];
+      const normalizeRemoteAddress = (value: string) => value.replace(/\s+/g, '').toLowerCase();
+      const duplicateKeys = new Set(
+        forwards
+          .filter(forward => forward.tunnelId === selectedTunnelForImport)
+          .map(forward => `${forward.name.trim().toLowerCase()}\u0000${normalizeRemoteAddress(forward.remoteAddr)}`)
+      );
+      const isValidTargetAddress = (value: string) => {
+        const address = value.trim();
+        let host = '';
+        let rawPort = '';
+        if (address.startsWith('[')) {
+          const close = address.indexOf(']');
+          if (close <= 1 || address.charAt(close + 1) !== ':') return false;
+          host = address.slice(1, close);
+          rawPort = address.slice(close + 2);
+        } else {
+          const separator = address.lastIndexOf(':');
+          if (separator <= 0) return false;
+          host = address.slice(0, separator);
+          rawPort = address.slice(separator + 1);
+        }
+        const port = Number(rawPort);
+        return Boolean(host.trim()) && /^\d+$/.test(rawPort) && Number.isInteger(port) && port >= 1 && port <= 65535;
+      };
+
+      for (const item of items) {
+        const line = item.line;
+        const name = typeof item.name === 'string' ? item.name.trim() : '';
+        const remoteAddr = typeof item.remoteAddr === 'string' ? item.remoteAddr.trim() : '';
+        if (!name || !remoteAddr) {
+          results.push({ line, success: false, message: '目标地址和转发名称不能为空' });
+          continue;
+        }
+        if (!remoteAddr.split(',').every(address => isValidTargetAddress(address))) {
+          results.push({ line, success: false, message: '目标地址格式错误；支持域名/IPv4:端口及 [IPv6]:端口，多个地址用逗号分隔' });
           continue;
         }
 
-        const [remoteAddr, name, inPort] = parts;
-        
-        if (!remoteAddr.trim() || !name.trim()) {
-          setImportResults(prev => [{
-            line,
-            success: false,
-            message: '目标地址和转发名称不能为空'
-          }, ...prev]);
-          continue;
+        let portNumber: number | null = null;
+        if (item.inPort !== null && item.inPort !== undefined && String(item.inPort).trim() !== '') {
+          const port = Number(item.inPort);
+          if (!Number.isInteger(port) || port < 1 || port > 65535) {
+            results.push({ line, success: false, message: '入口端口格式错误，应为 1–65535 的整数' });
+            continue;
+          }
+          portNumber = port;
         }
 
-        // 验证远程地址格式 - 支持单个地址或多个地址用逗号分隔
-        const addresses = remoteAddr.trim().split(',');
-        const addressPattern = /^[^:]+:\d+$/;
-        const isValidFormat = addresses.every(addr => addressPattern.test(addr.trim()));
-        
-        if (!isValidFormat) {
-          setImportResults(prev => [{
-            line,
-            success: false,
-            message: '目标地址格式错误，应为 地址:端口 格式，多个地址用逗号分隔'
-          }, ...prev]);
+        const duplicateKey = `${name.toLowerCase()}\u0000${normalizeRemoteAddress(remoteAddr)}`;
+        if (duplicateKeys.has(duplicateKey)) {
+          results.push({ line, success: false, message: '已存在相同名称和目标地址的转发，已跳过' });
           continue;
         }
-
+        const strategy = item.strategy === 'round' || item.strategy === 'rand' || item.strategy === 'fifo'
+          ? item.strategy : 'fifo';
         try {
-          // 处理入口端口
-          let portNumber: number | null = null;
-          if (inPort && inPort.trim()) {
-            const port = parseInt(inPort.trim());
-            if (isNaN(port) || port < 1 || port > 65535) {
-              setImportResults(prev => [{
-                line,
-                success: false,
-                message: '入口端口格式错误，应为1-65535之间的数字'
-              }, ...prev]);
-              continue;
-            }
-            portNumber = port;
-          }
-
-          // 调用创建转发接口
           const response = await createForward({
-            name: name.trim(),
-            tunnelId: selectedTunnelForImport, // 使用用户选择的隧道
-            inPort: portNumber, // 使用指定端口或自动分配
-            remoteAddr: remoteAddr.trim(),
-            strategy: 'fifo'
+            name,
+            tunnelId: selectedTunnelForImport,
+            inPort: portNumber,
+            remoteAddr,
+            strategy
           });
-
           if (response.code === 0) {
-            setImportResults(prev => [{
-              line,
-              success: true,
-              message: '创建成功',
-              forwardName: name.trim()
-            }, ...prev]);
+            duplicateKeys.add(duplicateKey);
+            results.push({ line, success: true, message: '创建成功', forwardName: name });
           } else {
-            setImportResults(prev => [{
-              line,
-              success: false,
-              message: response.msg || '创建失败'
-            }, ...prev]);
+            results.push({ line, success: false, message: response.msg || '创建失败' });
           }
-        } catch (error) {
-          setImportResults(prev => [{
-            line,
-            success: false,
-            message: '网络错误，创建失败'
-          }, ...prev]);
+        } catch {
+          results.push({ line, success: false, message: '网络错误，创建失败' });
         }
       }
-      
-      
-      toast.success(`导入执行完成`);
-      
-      // 导入完成后刷新转发列表
-      await loadData(false);
+
+      setImportResults(results);
+      const successful = results.filter(result => result.success).length;
+      const failed = results.length - successful;
+      if (successful > 0) {
+        toast.success(`导入完成：成功 ${successful} 条${failed ? `，失败或跳过 ${failed} 条` : ''}`);
+        await loadData(false);
+      } else {
+        toast.error(`导入未创建任何转发（${failed} 条失败或跳过）`);
+      }
     } catch (error) {
       console.error('导入失败:', error);
-      toast.error('导入过程中发生错误');
+      const message = error instanceof Error ? error.message : '导入过程中发生错误';
+      toast.error(message);
+      setImportResults([{ line: '导入文件', success: false, message }]);
     } finally {
       setImportLoading(false);
     }
   };
 
   // 获取状态显示
-  const getStatusDisplay = (status: number) => {
+  const getStatusDisplay = (status: number, syncState?: Forward['syncState']) => {
     switch (status) {
       case 1:
         return { color: 'success', text: '正常' };
@@ -1108,6 +1208,10 @@ export default function ForwardPage() {
         return { color: 'warning', text: '暂停' };
       case -1:
         return { color: 'danger', text: '异常' };
+      case 2:
+        return { color: syncState === 'partial' ? 'warning' : 'primary', text: syncState === 'partial' ? '部分失败，重试中' : '同步中' };
+      case 3:
+        return { color: syncState === 'partial' ? 'warning' : 'danger', text: syncState === 'partial' ? '删除部分失败，重试中' : '删除同步中' };
       default:
         return { color: 'default', text: '未知' };
     }
@@ -1205,14 +1309,9 @@ export default function ForwardPage() {
       return [];
     }
     
-    // 在平铺模式下，只显示当前用户的转发
-    let filteredForwards = forwards;
-    if (viewMode === 'direct') {
-      const currentUserId = JwtUtil.getUserIdFromToken();
-      if (currentUserId !== null) {
-        filteredForwards = forwards.filter(forward => forward.userId === currentUserId);
-      }
-    }
+    const filteredForwards = viewMode === 'direct'
+      ? getDirectVisibleForwards(forwards)
+      : forwards;
     
     // 确保过滤后的转发列表有效
     if (!filteredForwards || filteredForwards.length === 0) {
@@ -1282,7 +1381,7 @@ export default function ForwardPage() {
 
   // 渲染转发卡片
   const renderForwardCard = (forward: Forward, listeners?: any) => {
-    const statusDisplay = getStatusDisplay(forward.status);
+    const statusDisplay = getStatusDisplay(forward.status, forward.syncState);
     const strategyDisplay = getStrategyDisplay(forward.strategy);
     const entryAddress = getForwardEntryAddress(forward);
     
@@ -1315,7 +1414,7 @@ export default function ForwardPage() {
                 size="sm"
                 isSelected={forward.serviceRunning}
                 onValueChange={() => handleServiceToggle(forward)}
-                isDisabled={forward.status !== 1 && forward.status !== 0}
+                isDisabled={(forward.status !== 1 && forward.status !== 0) || operatingForwardIds.has(forward.id)}
               />
               <Chip 
                 color={statusDisplay.color as any} 
@@ -1331,6 +1430,11 @@ export default function ForwardPage() {
         
         <CardBody className="pt-0 pb-3">
           <div className="space-y-2">
+            {forward.syncError && (
+              <Alert color="warning" variant="flat" className="py-1 text-xs">
+                {forward.syncError}
+              </Alert>
+            )}
             {/* 地址信息 */}
             <div className="space-y-1">
               <div 
@@ -1401,6 +1505,7 @@ export default function ForwardPage() {
               variant="flat"
               color="primary"
               onPress={() => handleEdit(forward)}
+              isDisabled={forward.status === 2 || forward.status === 3}
               className="flex-1 min-h-8"
               startContent={
                 <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
@@ -1415,6 +1520,7 @@ export default function ForwardPage() {
               variant="flat"
               color="warning"
               onPress={() => handleDiagnose(forward)}
+              isDisabled={forward.status === 3}
               className="flex-1 min-h-8"
               startContent={
                 <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
@@ -1429,6 +1535,7 @@ export default function ForwardPage() {
               variant="flat"
               color="danger"
               onPress={() => handleDelete(forward)}
+              isDisabled={forward.status === 3}
               className="flex-1 min-h-8"
               startContent={
                 <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
@@ -1468,6 +1575,24 @@ export default function ForwardPage() {
           <div className="flex-1">
           </div>
           <div className="flex items-center gap-3">
+            {isAdministrator && viewMode === 'direct' && (
+              <Button
+                size="sm"
+                variant="flat"
+                color={adminOnlyMyForwards ? 'primary' : 'default'}
+                onPress={() => {
+                  const next = !adminOnlyMyForwards;
+                  setAdminOnlyMyForwards(next);
+                  try {
+                    localStorage.setItem('forward-admin-only-mine', String(next));
+                  } catch {
+                    // The filter remains usable even if storage is blocked.
+                  }
+                }}
+              >
+                {adminOnlyMyForwards ? '仅看我的' : '全部用户'}
+              </Button>
+            )}
             {/* 显示模式切换按钮 */}
             <Button
               size="sm"
@@ -2048,10 +2173,10 @@ export default function ForwardPage() {
             <ModalHeader className="flex flex-col gap-1">
               <h2 className="text-xl font-bold">导入转发数据</h2>
               <p className="text-small text-default-500">
-                格式：目标地址|转发名称|入口端口（可附带导出的第 4 列入口地址），每行一个
+                推荐使用本面板导出的 v2 JSON 文件；仍兼容旧格式：目标地址|转发名称|入口端口，每行一个
               </p>
               <p className="text-small text-default-400">
-                入口地址由当前用户的隧道权限决定；导入时第 4 列仅作展示会被忽略。目标地址支持单个地址(如：example.com:8080)或多个地址用逗号分隔(如：3.3.3.3:3,4.4.4.4:4)
+                v2 会保留负载策略；旧格式的第 4 列仍会忽略。目标地址支持域名/IPv4:端口及 [IPv6]:端口，多个地址可用逗号分隔；重复记录会被安全跳过。
               </p>
             </ModalHeader>
             <ModalBody className="pb-6">
@@ -2081,7 +2206,7 @@ export default function ForwardPage() {
                 <div>
                   <Textarea
                     label="导入数据"
-                    placeholder="请输入要导入的转发数据，格式：目标地址|转发名称|入口端口"
+                    placeholder="粘贴 v2 JSON，或旧格式：目标地址|转发名称|入口端口"
                     value={importData}
                     onChange={(e) => setImportData(e.target.value)}
                     variant="flat"
@@ -2177,13 +2302,19 @@ export default function ForwardPage() {
         {/* 隧道一键 PING 结果：只从具体隧道的展开区发起 */}
         <Modal
           isOpen={tunnelPingModalOpen}
-          onOpenChange={setTunnelPingModalOpen}
+          onOpenChange={(open) => {
+            if (open) {
+              setTunnelPingModalOpen(true);
+            } else {
+              closeTunnelPingModal();
+            }
+          }}
           size="3xl"
           scrollBehavior="inside"
           backdrop="blur"
           placement="center"
-          isDismissable={!tunnelPingLoading}
-          isKeyboardDismissDisabled={tunnelPingLoading}
+          isDismissable
+          isKeyboardDismissDisabled={false}
         >
           <ModalContent>
             {(onClose) => (
@@ -2221,7 +2352,7 @@ export default function ForwardPage() {
                   {tunnelPingLoading && (
                     <div className="flex items-center gap-2 rounded-lg bg-primary-50 px-3 py-2 text-small text-primary dark:bg-primary-100/10">
                       <Spinner size="sm" color="primary" />
-                      正在依次检测此隧道下的转发，请勿关闭此窗口
+                      正在检测 {tunnelPingSummary?.completedForwards ?? 0}/{tunnelPingSummary?.totalForwards ?? 0} 条转发；关闭窗口会取消剩余检测
                     </div>
                   )}
 
@@ -2268,8 +2399,8 @@ export default function ForwardPage() {
                   ) : null}
                 </ModalBody>
                 <ModalFooter>
-                  <Button variant="light" isDisabled={tunnelPingLoading} onPress={onClose}>
-                    关闭
+                  <Button variant="light" onPress={onClose}>
+                    {tunnelPingLoading ? '取消并关闭' : '关闭'}
                   </Button>
                 </ModalFooter>
               </>

@@ -40,8 +40,8 @@ public class UserController extends BaseController {
     @LogAnnotation
     @RequireRole
     @PostMapping("/list")
-    public R readAll() {
-        return userService.getAllUsers();
+    public R readAll(@RequestBody(required = false) UserListQueryDto queryDto) {
+        return userService.getAllUsers(queryDto);
     }
 
     @LogAnnotation

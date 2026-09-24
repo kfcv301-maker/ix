@@ -44,6 +44,30 @@ public class FlowSafetyMigration {
                 + "KEY idx_forward_pause_task_state (task_status, updated_time)"
                 + ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 
+        jdbcTemplate.execute("CREATE TABLE IF NOT EXISTS forward_sync_task ("
+                + "id BIGINT NOT NULL AUTO_INCREMENT,"
+                + "operation_id VARCHAR(48) NOT NULL,"
+                + "forward_id BIGINT NOT NULL,"
+                + "node_id BIGINT NOT NULL,"
+                + "endpoint VARCHAR(16) NOT NULL,"
+                + "operation VARCHAR(16) NOT NULL,"
+                + "service_name VARCHAR(160) NOT NULL,"
+                + "target_status INT NOT NULL,"
+                + "task_status VARCHAR(16) NOT NULL,"
+                + "attempts INT NOT NULL DEFAULT 0,"
+                + "next_retry_time BIGINT NOT NULL,"
+                + "last_error VARCHAR(500) NULL,"
+                + "created_time BIGINT NOT NULL,"
+                + "updated_time BIGINT NOT NULL,"
+                + "status INT NOT NULL DEFAULT 1,"
+                + "PRIMARY KEY (id),"
+                + "UNIQUE KEY uk_forward_sync_endpoint (operation_id, node_id, endpoint),"
+                + "KEY idx_forward_sync_ready (task_status, next_retry_time),"
+                + "KEY idx_forward_sync_node_ready (node_id, task_status, next_retry_time),"
+                + "KEY idx_forward_sync_forward (forward_id, created_time)"
+                + ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+        ensureColumn("forward", "flow_grace_until", "ALTER TABLE forward ADD COLUMN flow_grace_until BIGINT NULL");
         ensureIndex("node", "idx_node_secret", "CREATE INDEX idx_node_secret ON `node` (`secret`)");
         ensureIndex("forward", "idx_forward_user_tunnel", "CREATE INDEX idx_forward_user_tunnel ON `forward` (`user_id`, `tunnel_id`)");
         ensureIndex("forward", "idx_forward_tunnel", "CREATE INDEX idx_forward_tunnel ON `forward` (`tunnel_id`)");
@@ -57,6 +81,16 @@ public class FlowSafetyMigration {
                 "SELECT COUNT(*) FROM information_schema.statistics "
                         + "WHERE table_schema = DATABASE() AND table_name = ? AND index_name = ?",
                 Integer.class, table, index);
+        if (count != null && count == 0) {
+            jdbcTemplate.execute(ddl);
+        }
+    }
+
+    private void ensureColumn(String table, String column, String ddl) {
+        Integer count = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM information_schema.columns "
+                        + "WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?",
+                Integer.class, table, column);
         if (count != null && count == 0) {
             jdbcTemplate.execute(ddl);
         }

@@ -21,8 +21,21 @@ public class FlowAccountingContext {
 
     private Long ownerId;
     private Integer ownerRoleId;
+    private Integer ownerStatus;
+    private Long ownerExpTime;
+    private Long ownerFlow;
+    private Long ownerInFlow;
+    private Long ownerOutFlow;
 
     private Integer userTunnelId;
     private Integer userTunnelUserId;
     private Integer userTunnelTunnelId;
+    private Integer userTunnelStatus;
+    private Long userTunnelExpTime;
+    private Long userTunnelFlow;
+    private Long userTunnelInFlow;
+    private Long userTunnelOutFlow;
+
+    /** Allows sequenced reports that were already in flight before a pause ACK. */
+    private Long flowGraceUntil;
 }

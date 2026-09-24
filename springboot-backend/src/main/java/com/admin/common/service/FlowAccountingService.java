@@ -3,6 +3,7 @@ package com.admin.common.service;
 import com.admin.common.dto.FlowAccountingResult;
 import com.admin.common.dto.FlowAccountingContext;
 import com.admin.common.dto.FlowDto;
+import com.admin.common.constants.ForwardStatus;
 import com.admin.entity.FlowReportCursor;
 import com.admin.entity.Node;
 import com.admin.mapper.FlowAccountingMapper;
@@ -34,6 +35,8 @@ public class FlowAccountingService {
     private static final long MAX_FUTURE_SESSION_MILLIS = 5 * 60 * 1000L;
     private static final long CURSOR_RETENTION_MILLIS = 90L * 24 * 60 * 60 * 1000;
     private static final long BYTES_TO_GB = 1024L * 1024 * 1024L;
+    /** Far-from-limit reports skip the two INSERT ... SELECT quota probes. */
+    private static final long QUOTA_PROBE_HEADROOM_BYTES = 64L * 1024 * 1024;
 
     @Resource
     private FlowAccountingMapper flowAccountingMapper;
@@ -70,7 +73,8 @@ public class FlowAccountingService {
                 || !Objects.equals(asLong(context.getForwardUserId()), parsedService.userId)) {
             return FlowAccountingResult.rejected("转发与服务名不匹配");
         }
-        if (!Objects.equals(context.getForwardStatus(), 1)) {
+        long now = System.currentTimeMillis();
+        if (!isForwardBillable(context, now)) {
             return FlowAccountingResult.rejected("转发未处于运行状态");
         }
         if (!Objects.equals(context.getTunnelStatus(), 1) || !Objects.equals(context.getIngressNode(), 1)) {
@@ -84,7 +88,6 @@ public class FlowAccountingService {
             return FlowAccountingResult.rejected("服务名中的用户隧道权限不匹配");
         }
 
-        long now = System.currentTimeMillis();
         flowReportCursorMapper.insertIfAbsent(reportingNode.getId(), report.getN(), report.getReportSessionId(),
                 report.getReportSessionStartedAt(), now);
         FlowReportCursor cursor = flowReportCursorMapper.selectForUpdate(reportingNode.getId(), report.getN());
@@ -121,8 +124,10 @@ public class FlowAccountingService {
         // the compensation work or make the agent wait on a node command.
         int queuedPauseTasks = 0;
         if (!Objects.equals(context.getOwnerRoleId(), 0)) {
-            queuedPauseTasks += forwardPauseTaskMapper.enqueueBlockedUserForwards(context.getOwnerId(), now, BYTES_TO_GB);
-            if (hasValidUserTunnel) {
+            if (shouldProbeOwnerLimit(context, delta, now)) {
+                queuedPauseTasks += forwardPauseTaskMapper.enqueueBlockedUserForwards(context.getOwnerId(), now, BYTES_TO_GB);
+            }
+            if (hasValidUserTunnel && shouldProbeUserTunnelLimit(context, delta, now)) {
                 queuedPauseTasks += forwardPauseTaskMapper.enqueueBlockedUserTunnelForwards(context.getOwnerId(), context.getUserTunnelId(), now,
                         BYTES_TO_GB);
             }
@@ -143,6 +148,55 @@ public class FlowAccountingService {
             return false;
         }
         return report.getReportSessionStartedAt() <= System.currentTimeMillis() + MAX_FUTURE_SESSION_MILLIS;
+    }
+
+    private boolean isForwardBillable(FlowAccountingContext context, long now) {
+        Integer status = context.getForwardStatus();
+        if (Objects.equals(status, ForwardStatus.ACTIVE)
+                || Objects.equals(status, ForwardStatus.SYNCING)
+                || Objects.equals(status, ForwardStatus.DELETING)) {
+            return true;
+        }
+        // The node can emit one final sequenced snapshot immediately after it
+        // receives a pause command.  Accept only that short tail window; the
+        // cursor still makes every retry idempotent.
+        return Objects.equals(status, ForwardStatus.PAUSED)
+                && context.getFlowGraceUntil() != null
+                && context.getFlowGraceUntil() >= now;
+    }
+
+    private boolean shouldProbeOwnerLimit(FlowAccountingContext context, TrafficDelta delta, long now) {
+        return !Objects.equals(context.getOwnerStatus(), 1)
+                || isExpired(context.getOwnerExpTime(), now)
+                || isNearQuota(context.getOwnerFlow(), context.getOwnerInFlow(), context.getOwnerOutFlow(), delta);
+    }
+
+    private boolean shouldProbeUserTunnelLimit(FlowAccountingContext context, TrafficDelta delta, long now) {
+        return !Objects.equals(context.getUserTunnelStatus(), 1)
+                || isExpired(context.getUserTunnelExpTime(), now)
+                || isNearQuota(context.getUserTunnelFlow(), context.getUserTunnelInFlow(),
+                context.getUserTunnelOutFlow(), delta);
+    }
+
+    /**
+     * The authoritative INSERT ... SELECT still checks the live row. This
+     * inexpensive snapshot gate merely avoids running that query for every
+     * five-second report while an account is far below its quota.
+     */
+    private boolean isNearQuota(Long quotaGb, Long inbound, Long outbound, TrafficDelta delta) {
+        if (quotaGb == null || quotaGb <= 0) return true;
+        try {
+            long quota = Math.multiplyExact(quotaGb, BYTES_TO_GB);
+            long used = Math.addExact(inbound == null ? 0 : inbound, outbound == null ? 0 : outbound);
+            long after = Math.addExact(used, Math.addExact(delta.download, delta.upload));
+            return after >= quota - Math.min(quota, QUOTA_PROBE_HEADROOM_BYTES);
+        } catch (ArithmeticException exception) {
+            return true;
+        }
+    }
+
+    private boolean isExpired(Long expiry, long now) {
+        return expiry != null && expiry <= now;
     }
 
     /** Retention is bounded by services, not reports; remove deleted services eventually. */

@@ -16,9 +16,26 @@ public class BackgroundExecutorConfig {
         return executor("flow-pause-", 2, 4, 256);
     }
 
+    @Bean("forwardSyncExecutor")
+    public TaskExecutor forwardSyncExecutor() {
+        return executor("forward-sync-", 2, 6, 256);
+    }
+
     @Bean("nodeConfigExecutor")
     public TaskExecutor nodeConfigExecutor() {
         return executor("node-config-", 1, 2, 32);
+    }
+
+    /** Coordinates short-lived tunnel diagnostics without holding HTTP threads. */
+    @Bean("tunnelDiagnosisCoordinatorExecutor")
+    public TaskExecutor tunnelDiagnosisCoordinatorExecutor() {
+        return executor("tunnel-diagnosis-", 1, 2, 8);
+    }
+
+    /** Bounded probes keep a large tunnel scan from flooding Agent commands. */
+    @Bean("tunnelDiagnosisProbeExecutor")
+    public TaskExecutor tunnelDiagnosisProbeExecutor() {
+        return executor("tunnel-probe-", 2, 4, 32);
     }
 
     @Bean("vpsDeploymentExecutor")

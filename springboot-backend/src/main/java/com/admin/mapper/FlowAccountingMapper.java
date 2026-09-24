@@ -9,9 +9,13 @@ import org.apache.ibatis.annotations.Update;
 public interface FlowAccountingMapper {
 
     @Select("SELECT f.id AS forwardId, f.user_id AS forwardUserId, f.tunnel_id AS forwardTunnelId, "
-            + "f.status AS forwardStatus, t.id AS tunnelId, t.status AS tunnelStatus, t.flow AS tunnelFlow, "
-            + "t.traffic_ratio AS trafficRatio, u.id AS ownerId, u.role_id AS ownerRoleId, "
+            + "f.status AS forwardStatus, f.flow_grace_until AS flowGraceUntil, t.id AS tunnelId, "
+            + "t.status AS tunnelStatus, t.flow AS tunnelFlow, t.traffic_ratio AS trafficRatio, "
+            + "u.id AS ownerId, u.role_id AS ownerRoleId, u.status AS ownerStatus, u.exp_time AS ownerExpTime, "
+            + "u.flow AS ownerFlow, u.in_flow AS ownerInFlow, u.out_flow AS ownerOutFlow, "
             + "ut.id AS userTunnelId, ut.user_id AS userTunnelUserId, ut.tunnel_id AS userTunnelTunnelId, "
+            + "ut.status AS userTunnelStatus, ut.exp_time AS userTunnelExpTime, ut.flow AS userTunnelFlow, "
+            + "ut.in_flow AS userTunnelInFlow, ut.out_flow AS userTunnelOutFlow, "
             + "CASE WHEN t.in_node_id = #{nodeId} OR EXISTS (SELECT 1 FROM tunnel_entry_node ten "
             + "WHERE ten.tunnel_id = t.id AND ten.node_id = #{nodeId}) THEN 1 ELSE 0 END AS ingressNode "
             + "FROM forward f INNER JOIN tunnel t ON t.id = f.tunnel_id "

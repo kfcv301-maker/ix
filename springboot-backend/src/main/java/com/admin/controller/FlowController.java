@@ -2,6 +2,8 @@ package com.admin.controller;
 
 import com.admin.common.aop.LogAnnotation;
 import com.admin.common.dto.FlowAccountingResult;
+import com.admin.common.dto.FlowBatchAck;
+import com.admin.common.dto.FlowBatchResponse;
 import com.admin.common.dto.FlowDto;
 import com.admin.common.dto.GostConfigDto;
 import com.admin.common.task.CheckGostConfigAsync;
@@ -10,6 +12,7 @@ import com.admin.common.service.FlowAccountingService;
 import com.admin.common.utils.AESCrypto;
 import com.admin.entity.Node;
 import com.alibaba.fastjson.JSON;
+import com.alibaba.fastjson.JSONArray;
 import com.alibaba.fastjson.JSONObject;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import org.springframework.web.bind.annotation.*;
@@ -20,6 +23,8 @@ import lombok.extern.slf4j.Slf4j;
 import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
 import java.util.Objects;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -48,6 +53,7 @@ public class FlowController extends BaseController {
 
     // 常量定义
     private static final String SUCCESS_RESPONSE = "ok";
+    private static final int MAX_BATCH_REPORTS = 256;
     // 缓存加密器实例，避免重复创建
     private static final ConcurrentHashMap<String, AESCrypto> CRYPTO_CACHE = new ConcurrentHashMap<>();
 
@@ -156,33 +162,91 @@ public class FlowController extends BaseController {
 
         try {
             String decryptedData = decryptIfNeeded(rawData, secret);
-            FlowDto flowData = JSONObject.parseObject(decryptedData, FlowDto.class);
-            if (flowData != null && Objects.equals(flowData.getN(), "web_api")) {
-                return ResponseEntity.ok(SUCCESS_RESPONSE);
+            JSONObject payload = JSON.parseObject(decryptedData);
+            JSONArray batch = payload == null ? null : payload.getJSONArray("items");
+            if (batch != null) {
+                return uploadBatch(node, batch);
             }
-
-            FlowAccountingResult result = flowAccountingService.account(node, flowData);
-            if (result.isAccepted()) {
-                if (result.isPauseWorkQueued()) {
-                    forwardPauseTaskService.dispatchPendingTasks();
-                }
-                return ResponseEntity.ok(SUCCESS_RESPONSE);
-            }
-            if (result.isDuplicate()) {
-                return ResponseEntity.ok(SUCCESS_RESPONSE);
-            }
-            if (result.isUpgradeRequired()) {
-                log.warn("节点 {} 使用了不支持幂等计费的旧流量上报协议", node.getId());
-                return ResponseEntity.status(HttpStatus.UPGRADE_REQUIRED).body("upgrade_required");
-            }
-            log.warn("拒绝节点 {} 的流量上报: {}", node.getId(), result.getReason());
-            // Rejected reports are acknowledged so a malformed or unauthorized
-            // service cannot keep an agent retrying forever.
-            return ResponseEntity.ok(SUCCESS_RESPONSE);
+            return uploadSingle(node, payload == null ? null : payload.toJavaObject(FlowDto.class));
         } catch (Exception exception) {
             log.warn("处理节点 {} 流量上报失败: {}", node.getId(), exception.getMessage());
             return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body("retry_later");
         }
+    }
+
+    private ResponseEntity<String> uploadSingle(Node node, FlowDto flowData) {
+        if (flowData != null && Objects.equals(flowData.getN(), "web_api")) {
+            return ResponseEntity.ok(SUCCESS_RESPONSE);
+        }
+        FlowAccountingResult result = flowAccountingService.account(node, flowData);
+        if (result.isAccepted()) {
+            if (result.isPauseWorkQueued()) {
+                forwardPauseTaskService.dispatchPendingTasks();
+            }
+            return ResponseEntity.ok(SUCCESS_RESPONSE);
+        }
+        if (result.isDuplicate()) {
+            return ResponseEntity.ok(SUCCESS_RESPONSE);
+        }
+        if (result.isUpgradeRequired()) {
+            log.warn("节点 {} 使用了不支持幂等计费的旧流量上报协议", node.getId());
+            return ResponseEntity.status(HttpStatus.UPGRADE_REQUIRED).body("upgrade_required");
+        }
+        log.warn("拒绝节点 {} 的流量上报: {}", node.getId(), result.getReason());
+        // Rejected reports are acknowledged so a malformed or unauthorized
+        // service cannot keep an agent retrying forever.
+        return ResponseEntity.ok(SUCCESS_RESPONSE);
+    }
+
+    /**
+     * A batch still accounts each service independently, preserving its own
+     * transaction and idempotency cursor. The response acknowledges exactly
+     * the reports the Agent may retire, so a transient failure retries only
+     * that service rather than the entire batch.
+     */
+    private ResponseEntity<String> uploadBatch(Node node, JSONArray rawItems) {
+        FlowBatchResponse response = new FlowBatchResponse();
+        if (rawItems.size() > MAX_BATCH_REPORTS) {
+            return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE).body(JSON.toJSONString(response));
+        }
+
+        boolean pauseWorkQueued = false;
+        for (Object rawItem : rawItems) {
+            FlowDto report;
+            try {
+                report = JSONObject.parseObject(JSON.toJSONString(rawItem), FlowDto.class);
+            } catch (Exception exception) {
+                log.warn("节点 {} 的批量流量项格式非法: {}", node.getId(), exception.getMessage());
+                continue;
+            }
+            if (report == null) continue;
+            if (Objects.equals(report.getN(), "web_api")) {
+                response.getAcknowledged().add(FlowBatchAck.from(report));
+                continue;
+            }
+            try {
+                FlowAccountingResult result = flowAccountingService.account(node, report);
+                if (result.isAccepted()) {
+                    pauseWorkQueued |= result.isPauseWorkQueued();
+                    response.getAcknowledged().add(FlowBatchAck.from(report));
+                } else if (result.isDuplicate()) {
+                    response.getAcknowledged().add(FlowBatchAck.from(report));
+                } else if (result.isUpgradeRequired()) {
+                    log.warn("节点 {} 的批量流量项使用了旧上报协议", node.getId());
+                } else {
+                    log.warn("拒绝节点 {} 的批量流量上报: {}", node.getId(), result.getReason());
+                    response.getAcknowledged().add(FlowBatchAck.from(report));
+                }
+            } catch (Exception exception) {
+                // Omit only this acknowledgement. The Agent keeps its exact
+                // sequence and retries it in a later batch.
+                log.warn("处理节点 {} 的批量流量项失败: {}", node.getId(), exception.getMessage());
+            }
+        }
+        if (pauseWorkQueued) {
+            forwardPauseTaskService.dispatchPendingTasks();
+        }
+        return ResponseEntity.ok(JSON.toJSONString(response));
     }
 
     /**

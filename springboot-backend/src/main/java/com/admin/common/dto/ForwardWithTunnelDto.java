@@ -89,4 +89,9 @@ public class ForwardWithTunnelDto {
     private Integer inx;
 
     private String interfaceName;
+
+    /** Current durable node-operation state, omitted for settled forwards. */
+    private String syncOperation;
+    private String syncState;
+    private String syncError;
 }

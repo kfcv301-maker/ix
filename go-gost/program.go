@@ -73,6 +73,7 @@ func (p *program) Start() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	p.cancel = cancel
 	go p.reload(ctx)
+	xservice.StartTrafficReporter(ctx)
 
 	go func() {
 		select {

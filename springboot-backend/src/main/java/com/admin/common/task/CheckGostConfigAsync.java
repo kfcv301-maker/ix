@@ -20,10 +20,21 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Slf4j
 @Service
 public class CheckGostConfigAsync {
+
+    private static final long DUPLICATE_INVENTORY_WINDOW_MILLIS = 20_000L;
+
+    /**
+     * An Agent reports its complete inventory immediately after reconnecting.
+     * Keep a short fingerprint per node so an overlapping startup report does
+     * not trigger the same full database reconciliation twice. The periodic
+     * ten-minute report is well outside this window and remains authoritative.
+     */
+    private final Map<Long, InventoryFingerprint> recentInventories = new ConcurrentHashMap<>();
 
     @Resource
     private NodeService nodeService;
@@ -53,6 +64,10 @@ public class CheckGostConfigAsync {
     private ForwardPauseTaskService forwardPauseTaskService;
 
     @Resource
+    @Lazy
+    private ForwardSyncTaskService forwardSyncTaskService;
+
+    @Resource
     private TunnelEntryNodeMapper tunnelEntryNodeMapper;
 
 
@@ -67,19 +82,24 @@ public class CheckGostConfigAsync {
         }
         Node node = nodeService.getById(node_id);
         if (node != null) {
-            cleanOrphanedServices(gostConfig, node);
-            cleanOrphanedChains(gostConfig, node);
-            cleanOrphanedLimiters(gostConfig, node);
-            // Restore limiters first. A recovered service that references a
-            // limiter before it exists can start without its assigned cap.
-            syncLimiters(gostConfig, node);
-            // 重装节点会让 GOST 侧的运行时服务消失，但数据库中的转发记录仍然存在。
-            // 配置上报发生在 WebSocket 建立之后，正是无人工编辑即可恢复缺失服务的安全时机。
-            syncMissingForwards(gostConfig, node);
+            if (isDuplicateInventory(node.getId(), gostConfig)) {
+                log.debug("节点 {} 的配置清单未变化，跳过重复全量对账", node.getId());
+            } else {
+                cleanOrphanedServices(gostConfig, node);
+                cleanOrphanedChains(gostConfig, node);
+                cleanOrphanedLimiters(gostConfig, node);
+                // Restore limiters first. A recovered service that references a
+                // limiter before it exists can start without its assigned cap.
+                syncLimiters(gostConfig, node);
+                // 重装节点会让 GOST 侧的运行时服务消失，但数据库中的转发记录仍然存在。
+                // 配置上报发生在 WebSocket 建立之后，正是无人工编辑即可恢复缺失服务的安全时机。
+                syncMissingForwards(gostConfig, node);
+            }
             // Run durable quota/expiry pauses after the inventory has been
             // reconciled. This avoids a reconnect briefly restoring a service
             // while a prior pause command was waiting for that node.
             forwardPauseTaskService.retryPendingForNode(node.getId());
+            forwardSyncTaskService.retryPendingForNode(node.getId());
         }
     }
 
@@ -116,11 +136,6 @@ public class CheckGostConfigAsync {
                             if (forward == null) {
                                 log.info("删除孤立的服务: {} (节点: {})", service.getName(), node.getId());
                                 GostUtil.DeleteService(node.getId(), baseServiceName);
-                            } else if (!Objects.equals(forward.getStatus(), 1)) {
-                                // Older versions could mark a forward paused
-                                // even when the node command timed out. A fresh
-                                // inventory lets us reconcile that drift.
-                                GostUtil.PauseService(node.getId(), baseServiceName);
                             }
                         }
 
@@ -129,8 +144,6 @@ public class CheckGostConfigAsync {
                             if (forward == null) {
                                 log.info("删除孤立的服务: {} (节点: {})", service.getName(), node.getId());
                                 GostUtil.DeleteRemoteService(node.getId(), baseServiceName);
-                            } else if (!Objects.equals(forward.getStatus(), 1)) {
-                                GostUtil.PauseRemoteService(node.getId(), baseServiceName);
                             }
                         }
 
@@ -488,5 +501,45 @@ public class CheckGostConfigAsync {
      */
     private String[] parseServiceName(String serviceName) {
         return serviceName == null ? new String[0] : serviceName.split("_");
+    }
+
+    private boolean isDuplicateInventory(Long nodeId, GostConfigDto config) {
+        if (nodeId == null) return false;
+        long now = System.currentTimeMillis();
+        InventoryFingerprint previous = recentInventories.put(nodeId,
+                new InventoryFingerprint(configSignature(config.getServices()), configSignature(config.getChains()),
+                        configSignature(config.getLimiters()), now));
+        return previous != null
+                && now - previous.receivedAt < DUPLICATE_INVENTORY_WINDOW_MILLIS
+                && previous.sameContents(recentInventories.get(nodeId));
+    }
+
+    private String configSignature(List<ConfigItem> items) {
+        if (items == null || items.isEmpty()) return "";
+        List<String> names = new ArrayList<>();
+        for (ConfigItem item : items) {
+            if (item != null && item.getName() != null) names.add(item.getName());
+        }
+        names.sort(String::compareTo);
+        return String.join("\u001f", names);
+    }
+
+    private static final class InventoryFingerprint {
+        private final String services;
+        private final String chains;
+        private final String limiters;
+        private final long receivedAt;
+
+        private InventoryFingerprint(String services, String chains, String limiters, long receivedAt) {
+            this.services = services;
+            this.chains = chains;
+            this.limiters = limiters;
+            this.receivedAt = receivedAt;
+        }
+
+        private boolean sameContents(InventoryFingerprint other) {
+            return other != null && Objects.equals(services, other.services)
+                    && Objects.equals(chains, other.chains) && Objects.equals(limiters, other.limiters);
+        }
     }
 }

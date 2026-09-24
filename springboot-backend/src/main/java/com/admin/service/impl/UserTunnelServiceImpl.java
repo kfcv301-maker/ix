@@ -12,14 +12,12 @@ import com.admin.mapper.UserTunnelMapper;
 import com.admin.service.TunnelService;
 import com.admin.service.UserTunnelService;
 import com.admin.service.ForwardService;
-import com.admin.service.NodeService;
 import com.admin.service.TunnelEntryDomainService;
 import com.admin.common.utils.GostUtil;
 import com.admin.common.utils.TunnelIngressNodeResolver;
 import com.admin.common.utils.WebSocketServer;
 import com.admin.entity.Forward;
 import com.admin.entity.Tunnel;
-import com.admin.entity.Node;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
@@ -75,9 +73,6 @@ public class UserTunnelServiceImpl extends ServiceImpl<UserTunnelMapper, UserTun
     @Lazy
     private TunnelService tunnelService;
     
-    @Autowired
-    private NodeService nodeService;
-
     @Autowired
     private TunnelEntryDomainService tunnelEntryDomainService;
 
@@ -156,16 +151,17 @@ public class UserTunnelServiceImpl extends ServiceImpl<UserTunnelMapper, UserTun
         if (userTunnel == null) {
             return R.err(ERROR_PERMISSION_NOT_FOUND);
         }
-        
-        // 2. 删除该用户在该隧道下的所有转发
-        try {
-            removeUserTunnelForwards(userTunnel.getUserId(), userTunnel.getTunnelId());
-        } catch (Exception e) {
-            // 转发删除失败，记录日志但不阻止权限删除
+
+        // Do not let a permission deletion fall back to direct database
+        // removal of forwards. Each forward must first enter the durable
+        // per-node delete workflow and remain visible until every Agent ACKs.
+        long forwardCount = forwardService.count(new QueryWrapper<Forward>()
+                .eq("user_id", userTunnel.getUserId()).eq("tunnel_id", userTunnel.getTunnelId()));
+        if (forwardCount > 0) {
+            return R.err("该权限下仍有 " + forwardCount + " 条转发，请先在转发管理中删除并等待节点清理完成");
         }
 
-        
-        // 4. 删除用户隧道权限记录
+        // 删除用户隧道权限记录
         boolean success = this.removeById(id);
         if (success) {
             WebSocketServer.closeUserSessions(userTunnel.getUserId().longValue());
@@ -330,91 +326,6 @@ public class UserTunnelServiceImpl extends ServiceImpl<UserTunnelMapper, UserTun
     }
     
 
-    
-    /**
-     * 删除用户在指定隧道下的所有转发
-     * 
-     * @param userId 用户ID
-     * @param tunnelId 隧道ID
-     */
-    private void removeUserTunnelForwards(Integer userId, Integer tunnelId) {
-        // 查询该用户在该隧道下的所有转发
-        QueryWrapper<Forward> queryWrapper = new QueryWrapper<>();
-        queryWrapper.eq("user_id", userId).eq("tunnel_id", tunnelId);
-
-        List<Forward> userTunnelForwards = forwardService.list(queryWrapper);
-
-        if (!userTunnelForwards.isEmpty()) {
-            // 获取用户隧道权限信息，用于构建服务名称
-            UserTunnel userTunnel = getUserTunnelByUserAndTunnel(userId, tunnelId);
-
-            for (Forward forward : userTunnelForwards) {
-                try {
-                    // 先调用GostUtil删除/停止服务
-                    stopForwardService(forward, userId, userTunnel != null ? userTunnel.getId() : 0);
-
-                    // 然后删除数据库记录
-                    forwardService.removeById(forward.getId());
-
-                } catch (Exception e) {
-                    // 单个转发删除失败，记录错误但继续处理其他转发
-                }
-            }
-
-        }
-    }
-    
-    /**
-     * 删除转发服务（按创建的反向顺序删除：主服务 -> 远端服务 -> 转发链）
-     * 
-     * @param forward 转发对象
-     * @param userId 用户ID
-     * @param userTunnelId 用户隧道ID
-     */
-    private void stopForwardService(Forward forward, Integer userId, Integer userTunnelId) {
-        try {
-            Tunnel tunnel = tunnelService.getById(forward.getTunnelId());
-            if (tunnel == null) {
-                return;
-            }
-
-            Node outNode = nodeService.getById(tunnel.getOutNodeId());
-            
-            String serviceName = buildServiceName(forward.getId(), Long.valueOf(userId), userTunnelId);
-            
-            // 1. Each ingress owns a separate copy of the main service and
-            // chain. Cleaning only the legacy in_node_id leaves secondary
-            // entries forwarding after an entitlement is removed.
-            Set<Long> ingressNodeIds = ingressNodeResolver.resolveNodeIds(tunnel);
-            for (Long ingressNodeId : ingressNodeIds) {
-                try {
-                    GostUtil.DeleteService(ingressNodeId, serviceName);
-                } catch (Exception e) {
-                    // 主服务删除失败，记录但继续
-                }
-                if (tunnel.getType() == 2) {
-                    try {
-                        GostUtil.DeleteChains(ingressNodeId, serviceName);
-                    } catch (Exception e) {
-                        // 链删除失败，记录但继续
-                    }
-                }
-            }
-
-            // 2. 如果是隧道转发，删除远端服务
-            if (tunnel.getType() == 2 && outNode != null) {
-                try {
-                    GostUtil.DeleteRemoteService(outNode.getId(), serviceName);
-                } catch (Exception e) {
-                    // 远端服务删除失败，记录但继续
-                }
-            }
-
-        } catch (Exception e) {
-            // 服务删除失败，记录错误
-            throw new RuntimeException("删除转发服务失败，转发ID：" + forward.getId() + "，错误：" + e.getMessage(), e);
-        }
-    }
     
     /**
      * 根据用户ID和隧道ID获取用户隧道权限

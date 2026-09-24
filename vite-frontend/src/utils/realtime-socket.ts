@@ -9,7 +9,7 @@ import axios from 'axios';
  * against `window.location` also keeps WebView and custom panel addresses
  * working.
  */
-export const getRealtimeSocketUrl = (): string => {
+export const getRealtimeSocketUrl = (metrics: 'summary' | 'detail' = 'summary'): string => {
   const configuredBase = axios.defaults.baseURL
     || (import.meta.env.VITE_API_BASE ? `${import.meta.env.VITE_API_BASE}/api/v1/` : '/api/v1/');
   const apiUrl = new URL(configuredBase, window.location.href);
@@ -18,6 +18,7 @@ export const getRealtimeSocketUrl = (): string => {
   apiUrl.pathname = `${apiUrl.pathname.replace(/\/api\/v1\/?$/, '').replace(/\/$/, '')}/system-info`;
   apiUrl.search = '';
   apiUrl.searchParams.set('type', '0');
+  apiUrl.searchParams.set('metrics', metrics);
 
   const token = localStorage.getItem('token');
   if (token) {

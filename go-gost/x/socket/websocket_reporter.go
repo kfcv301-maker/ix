@@ -31,14 +31,15 @@ import (
 
 // SystemInfo 系统信息结构体
 type SystemInfo struct {
-	Uptime           uint64   `json:"uptime"`            // 开机时间	（秒）
-	BytesReceived    uint64   `json:"bytes_received"`    // 接收字节数
-	BytesTransmitted uint64   `json:"bytes_transmitted"` // 发送字节数
-	CPUUsage         float64  `json:"cpu_usage"`         // CPU使用率（百分比）
-	MemoryUsage      float64  `json:"memory_usage"`      // 内存使用率（百分比）
-	CPUCores         int      `json:"cpu_cores"`         // CPU逻辑核心数
-	MemoryTotal      uint64   `json:"memory_total"`      // 内存总量（字节）
-	DiskTotal        uint64   `json:"disk_total"`        // 根分区总量（字节）
+	MetricsLevel     string   `json:"metrics_level,omitempty"` // summary: 轻量心跳，detail: 完整采样
+	Uptime           uint64   `json:"uptime"`                  // 开机时间	（秒）
+	BytesReceived    uint64   `json:"bytes_received"`          // 接收字节数
+	BytesTransmitted uint64   `json:"bytes_transmitted"`       // 发送字节数
+	CPUUsage         float64  `json:"cpu_usage"`               // CPU使用率（百分比）
+	MemoryUsage      float64  `json:"memory_usage"`            // 内存使用率（百分比）
+	CPUCores         int      `json:"cpu_cores,omitempty"`     // CPU逻辑核心数
+	MemoryTotal      uint64   `json:"memory_total,omitempty"`  // 内存总量（字节）
+	DiskTotal        uint64   `json:"disk_total,omitempty"`    // 根分区总量（字节）
 	MemoryUsed       *uint64  `json:"memory_used,omitempty"`
 	MemoryAvailable  *uint64  `json:"memory_available,omitempty"`
 	MemoryCached     *uint64  `json:"memory_cached,omitempty"`
@@ -108,7 +109,10 @@ var extendedSystemInfoCache struct {
 	collectedAt time.Time
 }
 
-const extendedMetricInterval = 5 * time.Second
+// Scanning sockets and process memory is materially more expensive than a
+// connection heartbeat. Keep the detailed data fresh enough for the node
+// monitor without doing that scan every two seconds on busy hosts.
+const extendedMetricInterval = 15 * time.Second
 
 // CommandMessage 命令消息结构体
 type CommandMessage struct {
@@ -147,21 +151,22 @@ type TcpPingResponse struct {
 }
 
 type WebSocketReporter struct {
-	url            string
-	addr           string // 保存服务器地址
-	secret         string // 保存密钥
-	version        string // 保存版本号
-	conn           *websocket.Conn
-	reconnectTime  time.Duration
-	pingInterval   time.Duration
-	configInterval time.Duration
-	ctx            context.Context
-	cancel         context.CancelFunc
-	connected      bool
-	connecting     bool              // 新增：正在连接状态
-	connMutex      sync.Mutex        // 新增：连接状态锁
-	aesCrypto      *crypto.AESCrypto // 新增：AES加密器
-	onConnected    func()            // WebSocket 每次连通后的轻量回调
+	url                   string
+	addr                  string // 保存服务器地址
+	secret                string // 保存密钥
+	version               string // 保存版本号
+	conn                  *websocket.Conn
+	reconnectTime         time.Duration
+	pingInterval          time.Duration
+	configInterval        time.Duration
+	ctx                   context.Context
+	cancel                context.CancelFunc
+	connected             bool
+	connecting            bool              // 新增：正在连接状态
+	connMutex             sync.Mutex        // 新增：连接状态锁
+	aesCrypto             *crypto.AESCrypto // 新增：AES加密器
+	onConnected           func()            // WebSocket 每次连通后的轻量回调
+	lastDetailedMetricsAt time.Time
 }
 
 // NewWebSocketReporter 创建一个新的WebSocket报告器
@@ -418,51 +423,66 @@ func (w *WebSocketReporter) handleConnection() {
 				return
 			}
 
-			// 获取系统信息并发送
-			sysInfo := w.collectSystemInfo()
+			// The lightweight heartbeat preserves quick offline detection and
+			// real-time traffic rates. Full host/process/socket collection is
+			// deliberately throttled for nodes with many connections.
+			now := time.Now()
+			detailed := w.lastDetailedMetricsAt.IsZero() || now.Sub(w.lastDetailedMetricsAt) >= extendedMetricInterval
+			sysInfo := w.collectSystemInfo(detailed)
 			if err := w.sendSystemInfo(sysInfo); err != nil {
 				fmt.Printf("❌ 发送系统信息失败: %v，准备重连\n", err)
 				return
+			}
+			if detailed {
+				w.lastDetailedMetricsAt = now
 			}
 		}
 	}
 }
 
-// collectSystemInfo 收集系统信息
-func (w *WebSocketReporter) collectSystemInfo() SystemInfo {
+// collectSystemInfo 收集系统信息。摘要采样只包含看板实时所需的数据；
+// detail 采样额外收集套接字、进程和磁盘等较重指标。
+func (w *WebSocketReporter) collectSystemInfo(detailed bool) SystemInfo {
 	networkStats := getNetworkStats()
 	cpuInfo := getCPUInfo()
 	memoryInfo := getMemoryInfo()
-	extendedInfo := getExtendedSystemInfo()
 
-	return SystemInfo{
+	info := SystemInfo{
 		Uptime:           getUptime(),
 		BytesReceived:    networkStats.BytesReceived,
 		BytesTransmitted: networkStats.BytesTransmitted,
 		CPUUsage:         cpuInfo.Usage,
 		MemoryUsage:      memoryInfo.Usage,
-		CPUCores:         extendedInfo.CPUCores,
-		MemoryTotal:      extendedInfo.MemoryTotal,
-		DiskTotal:        extendedInfo.DiskTotal,
-		MemoryUsed:       extendedInfo.MemoryUsed,
-		MemoryAvailable:  extendedInfo.MemoryAvailable,
-		MemoryCached:     extendedInfo.MemoryCached,
-		SwapUsed:         extendedInfo.SwapUsed,
-		SwapTotal:        extendedInfo.SwapTotal,
-		AgentRSS:         extendedInfo.AgentRSS,
-		AgentHeapAlloc:   extendedInfo.AgentHeapAlloc,
-		Goroutines:       extendedInfo.Goroutines,
-		DiskUsed:         extendedInfo.DiskUsed,
-		DiskUsedPercent:  extendedInfo.DiskUsedPercent,
-		Load1:            extendedInfo.Load1,
-		TCPConnections:   extendedInfo.TCPConnections,
-		UDPConnections:   extendedInfo.UDPConnections,
-		TCPTuningMode:    extendedInfo.TCPTuningMode,
-		TCPTuningMinimum: extendedInfo.TCPTuningMinimum,
-		TCPTuningMaximum: extendedInfo.TCPTuningMaximum,
-		TCPTuningCurrent: extendedInfo.TCPTuningCurrent,
-		TCPTuningReason:  extendedInfo.TCPTuningReason,
+		MetricsLevel:     "summary",
 	}
+	if !detailed {
+		return info
+	}
+
+	extendedInfo := getExtendedSystemInfo()
+	info.MetricsLevel = "detail"
+	info.CPUCores = extendedInfo.CPUCores
+	info.MemoryTotal = extendedInfo.MemoryTotal
+	info.DiskTotal = extendedInfo.DiskTotal
+	info.MemoryUsed = extendedInfo.MemoryUsed
+	info.MemoryAvailable = extendedInfo.MemoryAvailable
+	info.MemoryCached = extendedInfo.MemoryCached
+	info.SwapUsed = extendedInfo.SwapUsed
+	info.SwapTotal = extendedInfo.SwapTotal
+	info.AgentRSS = extendedInfo.AgentRSS
+	info.AgentHeapAlloc = extendedInfo.AgentHeapAlloc
+	info.Goroutines = extendedInfo.Goroutines
+	info.DiskUsed = extendedInfo.DiskUsed
+	info.DiskUsedPercent = extendedInfo.DiskUsedPercent
+	info.Load1 = extendedInfo.Load1
+	info.TCPConnections = extendedInfo.TCPConnections
+	info.UDPConnections = extendedInfo.UDPConnections
+	info.TCPTuningMode = extendedInfo.TCPTuningMode
+	info.TCPTuningMinimum = extendedInfo.TCPTuningMinimum
+	info.TCPTuningMaximum = extendedInfo.TCPTuningMaximum
+	info.TCPTuningCurrent = extendedInfo.TCPTuningCurrent
+	info.TCPTuningReason = extendedInfo.TCPTuningReason
+	return info
 }
 
 // sendSystemInfo 发送系统信息

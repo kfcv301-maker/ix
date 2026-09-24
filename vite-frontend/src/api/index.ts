@@ -70,6 +70,8 @@ export const updateTunnel = (data: any) => Network.post("/tunnel/update", data);
 export const deleteTunnel = (id: number) => Network.post("/tunnel/delete", { id });
 export const diagnoseTunnel = (tunnelId: number) => Network.post("/tunnel/diagnose", { tunnelId });
 export const diagnoseTunnelForwards = (tunnelId: number) => Network.post("/tunnel/diagnose-forwards", { tunnelId });
+export const getTunnelForwardDiagnosisTask = (taskId: string) => Network.post("/tunnel/diagnose-forwards/task", { taskId });
+export const cancelTunnelForwardDiagnosisTask = (taskId: string) => Network.post("/tunnel/diagnose-forwards/cancel", { taskId });
 
 // 隧道解析域名池：仅管理用户可见入口地址，不会修改 DDNS 或节点配置。
 export const getTunnelEntryDomains = (tunnelId: number) => Network.post("/tunnel/domain/list", { tunnelId });

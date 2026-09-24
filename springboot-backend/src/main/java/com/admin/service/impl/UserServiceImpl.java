@@ -7,10 +7,8 @@ import cn.hutool.core.util.StrUtil;
 import com.admin.common.dto.*;
 import com.admin.common.lang.R;
 import com.admin.common.task.ForwardPauseTaskService;
-import com.admin.common.utils.GostUtil;
 import com.admin.common.utils.JwtUtil;
 import com.admin.common.utils.Md5Util;
-import com.admin.common.utils.TunnelIngressNodeResolver;
 import com.admin.common.utils.VpsTerminalWebSocketHandler;
 import com.admin.common.utils.WebSocketServer;
 import com.admin.entity.*;
@@ -20,6 +18,7 @@ import com.admin.mapper.UserTunnelMapper;
 import com.admin.service.*;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
@@ -30,7 +29,9 @@ import org.springframework.stereotype.Service;
 
 import javax.annotation.Resource;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -104,14 +105,6 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     private UserTunnelMapper userTunnelMapper;
     
     @Resource
-    @Lazy
-    private TunnelService tunnelService;
-    
-    @Resource
-    @Lazy
-    private NodeService nodeService;
-
-    @Resource
     UserTunnelService userTunnelService;
 
     @Resource
@@ -137,9 +130,6 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     @Resource
     @Lazy
     private ForwardPauseTaskService forwardPauseTaskService;
-
-    @Resource
-    private TunnelIngressNodeResolver ingressNodeResolver;
 
     // ========== 公共接口实现 ==========
 
@@ -220,6 +210,39 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     @Override
     public R getAllUsers() {
         return R.ok(this.list(new QueryWrapper<User>().ne("role_id", ADMIN_ROLE_ID)));
+    }
+
+    /**
+     * Keep filtering and pagination in MySQL.  The previous endpoint accepted
+     * current/size/keyword from the panel but silently loaded every user, so a
+     * keystroke could repeatedly fetch the complete account list.
+     */
+    @Override
+    public R getAllUsers(UserListQueryDto queryDto) {
+        int current = queryDto == null || queryDto.getCurrent() == null
+                ? 1 : Math.max(1, queryDto.getCurrent());
+        int size = queryDto == null || queryDto.getSize() == null
+                ? 20 : Math.max(1, Math.min(100, queryDto.getSize()));
+        String keyword = queryDto == null ? null : StringUtils.trimToNull(queryDto.getKeyword());
+        if (keyword != null && keyword.length() > 64) {
+            keyword = keyword.substring(0, 64);
+        }
+
+        QueryWrapper<User> query = new QueryWrapper<User>().ne("role_id", ADMIN_ROLE_ID);
+        if (keyword != null) {
+            String escapedKeyword = keyword;
+            query.and(wrapper -> wrapper.like("user", escapedKeyword).or().like("name", escapedKeyword));
+        }
+        query.orderByDesc("id");
+        Page<User> page = this.page(new Page<>(current, size), query);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("records", page.getRecords());
+        result.put("total", page.getTotal());
+        result.put("current", page.getCurrent());
+        result.put("size", page.getSize());
+        result.put("pages", page.getPages());
+        return R.ok(result);
     }
 
     /**
@@ -557,6 +580,15 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             return R.err(ERROR_CANNOT_DELETE_ADMIN);
         }
 
+        // A user deletion used to directly remove Forward rows after best-
+        // effort node calls. Refuse that unsafe cascade: the administrator
+        // must queue each forward's durable deletion and wait for all ingress
+        // and egress endpoints before deleting the owning account.
+        long forwardCount = forwardMapper.selectCount(new QueryWrapper<Forward>().eq("user_id", userId));
+        if (forwardCount > 0) {
+            return R.err("该用户仍有 " + forwardCount + " 条转发，请先在转发管理中删除并等待节点清理完成");
+        }
+
         return R.ok();
     }
 
@@ -585,104 +617,10 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
      * @param userId 用户ID
      */
     private void deleteUserRelatedData(Long userId) {
-        // 1. 删除用户的所有转发和对应的Gost服务
-        deleteUserForwardsAndGostServices(userId);
-        
-        // 2. 删除用户隧道权限
+        // validateUserDeletion already proves no Forward rows remain. Do not
+        // reintroduce a best-effort GOST cleanup here: that would bypass the
+        // durable per-endpoint deletion workflow.
         deleteUserTunnelPermissions(userId);
-    }
-
-    /**
-     * 删除用户转发和对应的Gost服务
-     * 
-     * @param userId 用户ID
-     */
-    private void deleteUserForwardsAndGostServices(Long userId) {
-        QueryWrapper<Forward> forwardQuery = new QueryWrapper<>();
-        forwardQuery.eq("user_id", userId);
-        List<Forward> userForwards = forwardMapper.selectList(forwardQuery);
-        
-        for (Forward forward : userForwards) {
-            try {
-                // 删除Gost服务
-                deleteGostServicesForForward(forward, userId);
-            } catch (Exception e) {
-                // 记录错误但继续删除，避免因为Gost服务删除失败而阻断用户删除
-                System.err.println("删除用户转发对应的Gost服务失败，转发ID: " + forward.getId() + ", 错误: " + e.getMessage());
-            }
-            
-            // 删除数据库中的转发记录
-            forwardMapper.deleteById(forward.getId());
-        }
-    }
-
-    /**
-     * 删除转发对应的Gost服务
-     * 
-     * @param forward 转发对象
-     * @param userId 用户ID
-     */
-    private void deleteGostServicesForForward(Forward forward, Long userId) {
-        Tunnel tunnel = tunnelService.getById(forward.getTunnelId());
-        if (tunnel == null) return;
-
-        // 获取用户隧道关系
-        UserTunnel userTunnel = getUserTunnelRelation(userId, tunnel.getId());
-        String serviceName = buildServiceName(forward.getId(), userId,
-                userTunnel == null ? 0 : userTunnel.getId());
-
-        // A multi-ingress tunnel publishes a separate service and chain on
-        // every entry. Remove each copy before deleting its database row.
-        for (Long ingressNodeId : ingressNodeResolver.resolveNodeIds(tunnel)) {
-            GostUtil.DeleteService(ingressNodeId, serviceName);
-            if (tunnel.getType() == TUNNEL_TYPE_TUNNEL_FORWARD) {
-                GostUtil.DeleteChains(ingressNodeId, serviceName);
-            }
-        }
-
-        // 如果是隧道转发，还需要删除链和远程服务
-        if (tunnel.getType() == TUNNEL_TYPE_TUNNEL_FORWARD) {
-            deleteGostTunnelForwardServices(tunnel, serviceName);
-        }
-    }
-
-    /**
-     * 删除隧道转发相关的Gost服务
-     * 
-     * @param tunnel 隧道对象
-     * @param serviceName 服务名称
-     * @param inNode 入口节点
-     */
-    private void deleteGostTunnelForwardServices(Tunnel tunnel, String serviceName) {
-        Node outNode = nodeService.getNodeById(tunnel.getOutNodeId());
-        if (outNode != null) {
-            GostUtil.DeleteRemoteService(outNode.getId(), serviceName);
-        }
-    }
-
-    /**
-     * 获取用户隧道关系
-     * 
-     * @param userId 用户ID
-     * @param tunnelId 隧道ID
-     * @return 用户隧道关系对象
-     */
-    private UserTunnel getUserTunnelRelation(Long userId, Long tunnelId) {
-        return userTunnelService.getOne(new QueryWrapper<UserTunnel>()
-                .eq("user_id", userId)
-                .eq("tunnel_id", tunnelId));
-    }
-
-    /**
-     * 构建服务名称
-     * 
-     * @param forwardId 转发ID
-     * @param userId 用户ID
-     * @param userTunnelId 用户隧道ID
-     * @return 服务名称
-     */
-    private String buildServiceName(Long forwardId, Long userId, Integer userTunnelId) {
-        return forwardId + "_" + userId + "_" + userTunnelId;
     }
 
 

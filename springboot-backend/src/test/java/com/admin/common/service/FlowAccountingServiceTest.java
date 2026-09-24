@@ -113,6 +113,26 @@ class FlowAccountingServiceTest {
                 eq(report.getReportSessionStartedAt()), eq(8L), anyLong());
     }
 
+    @Test
+    void acceptsOneSequencedTailReportImmediatelyAfterPause() {
+        Fixtures fixtures = fixtures();
+        FlowDto report = report("12_3_9", 8);
+        FlowReportCursor cursor = cursor(report, 7L);
+        FlowAccountingContext context = validContext();
+        context.setForwardStatus(0);
+        context.setFlowGraceUntil(System.currentTimeMillis() + 5_000L);
+        when(fixtures.accountingMapper.selectContext(12L, 9L, 5L)).thenReturn(context);
+        when(fixtures.cursorMapper.selectForUpdate(5L, "12_3_9")).thenReturn(cursor);
+        when(fixtures.accountingMapper.incrementForwardAndUser(12L, 3L, 2048L, 1024L)).thenReturn(2);
+        when(fixtures.accountingMapper.incrementUserTunnel(9, 3L, 42, 2048L, 1024L)).thenReturn(1);
+        when(fixtures.cursorMapper.updateCursor(eq(5L), eq("12_3_9"), eq(report.getReportSessionId()),
+                eq(report.getReportSessionStartedAt()), eq(8L), anyLong())).thenReturn(1);
+
+        FlowAccountingResult result = fixtures.service.account(node(), report);
+
+        assertTrue(result.isAccepted());
+    }
+
     private Fixtures fixtures() {
         FlowAccountingService service = new FlowAccountingService();
         FlowAccountingMapper accountingMapper = mock(FlowAccountingMapper.class);
@@ -162,9 +182,17 @@ class FlowAccountingServiceTest {
         context.setIngressNode(1);
         context.setOwnerId(3L);
         context.setOwnerRoleId(1);
+        context.setOwnerStatus(1);
+        context.setOwnerFlow(10L);
+        context.setOwnerInFlow(0L);
+        context.setOwnerOutFlow(0L);
         context.setUserTunnelId(9);
         context.setUserTunnelUserId(3);
         context.setUserTunnelTunnelId(42);
+        context.setUserTunnelStatus(1);
+        context.setUserTunnelFlow(10L);
+        context.setUserTunnelInFlow(0L);
+        context.setUserTunnelOutFlow(0L);
         return context;
     }
 

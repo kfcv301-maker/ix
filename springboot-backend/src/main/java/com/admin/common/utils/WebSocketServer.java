@@ -77,10 +77,20 @@ public class WebSocketServer extends TextWebSocketHandler {
                 // 尝试解密消息
                 String decryptedPayload = decryptMessageIfNeeded(message.getPayload(), nodeSecret);
 
-                if (decryptedPayload.contains("memory_usage")){
-                    // 先发送确认消息
+                JSONObject nodeMetric = Objects.equals(type, "1") ? tryParseJson(decryptedPayload) : null;
+                if (isNodeMetricReport(nodeMetric)) {
+                    // Only the Agent's metric heartbeat needs an acknowledgement.
+                    // Do not use substring matching here: a command response can
+                    // legitimately contain fields with metric-like names.
                     sendToUser(session, "{\"type\":\"call\"}", nodeSecret);
-                }else if (decryptedPayload.contains("requestId")) {
+
+                    JSONObject jsonObject = new JSONObject();
+                    jsonObject.put("id", id);
+                    jsonObject.put("type", "info");
+                    jsonObject.put("data", decryptedPayload);
+                    broadcastNodeMessage(Long.valueOf(id), jsonObject.toJSONString(),
+                            isDetailedMetricReport(nodeMetric));
+                } else if (decryptedPayload.contains("requestId")) {
                     log.info("收到消息: {}", decryptedPayload);
                     // 处理命令响应消息
                     try {
@@ -119,17 +129,6 @@ public class WebSocketServer extends TextWebSocketHandler {
                     log.info("收到消息: {}", decryptedPayload);
                 }
 
-                // 如果是节点类型，转发消息给其他会话
-                if (Objects.equals(type, "1")) {
-                    JSONObject jsonObject = new JSONObject();
-                    jsonObject.put("id", id);
-                    jsonObject.put("type", "info");
-                    jsonObject.put("data", decryptedPayload);
-                    String broadcastMessage = jsonObject.toJSONString();
-                    
-                    // 异步处理广播消息，避免阻塞当前线程
-                    broadcastNodeMessage(Long.valueOf(id), broadcastMessage);
-                }
             }
         } catch (Exception e) {
             log.info("处理WebSocket消息时发生异常: {}", e.getMessage(), e);
@@ -166,6 +165,27 @@ public class WebSocketServer extends TextWebSocketHandler {
         }
         
         return payload;
+    }
+
+    private static JSONObject tryParseJson(String payload) {
+        try {
+            return JSONObject.parseObject(payload);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private static boolean isNodeMetricReport(JSONObject payload) {
+        return payload != null
+                && payload.containsKey("bytes_received")
+                && payload.containsKey("bytes_transmitted")
+                && payload.containsKey("cpu_usage");
+    }
+
+    private static boolean isDetailedMetricReport(JSONObject payload) {
+        // Existing agents do not include metrics_level. Treat them as detailed
+        // so an upgraded panel remains compatible with deployed agents.
+        return payload == null || !"summary".equalsIgnoreCase(payload.getString("metrics_level"));
     }
 
     /**
@@ -263,7 +283,7 @@ public class WebSocketServer extends TextWebSocketHandler {
                         res.put("id", id);
                         res.put("type", "status");
                         res.put("data", 1);
-                        broadcastNodeMessage(nodeId, res.toJSONString());
+                        broadcastNodeMessage(nodeId, res.toJSONString(), false);
 
                         // config.json 会在重装 agent 时被重新创建，协议开关会回到
                         // 默认值。面板中的节点设置才是权威来源：连接建立后自动下发
@@ -368,7 +388,7 @@ public class WebSocketServer extends TextWebSocketHandler {
                             res.put("id", id);
                             res.put("type", "status");
                             res.put("data", 0);
-                            broadcastNodeMessage(nodeId, res.toJSONString());
+                            broadcastNodeMessage(nodeId, res.toJSONString(), false);
                         } else {
                             log.info("节点 {} 状态更新为离线失败", nodeId);
                         }
@@ -449,12 +469,16 @@ public class WebSocketServer extends TextWebSocketHandler {
      * Browser sessions never decide the filter themselves: the handshake stores
      * the role and the allowed node IDs as server-side session attributes.
      */
-    private static void broadcastNodeMessage(Long nodeId, String message) {
+    private static void broadcastNodeMessage(Long nodeId, String message, boolean detailedMetrics) {
         for (WebSocketSession session : activeSessions) {
-            if (canViewNode(session, nodeId)) {
+            if (canViewNode(session, nodeId) && (!detailedMetrics || wantsDetailedMetrics(session))) {
                 sendToUser(session, message);
             }
         }
+    }
+
+    private static boolean wantsDetailedMetrics(WebSocketSession session) {
+        return !"summary".equalsIgnoreCase(String.valueOf(session.getAttributes().get("monitorMetrics")));
     }
 
     /** Immediately close dashboard sockets for an account whose JWT was revoked. */

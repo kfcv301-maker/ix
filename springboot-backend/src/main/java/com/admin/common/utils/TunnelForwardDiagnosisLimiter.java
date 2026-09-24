@@ -7,9 +7,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Semaphore;
 
 /**
- * Bounds expensive, node-side tunnel diagnostics. Each request still runs
- * sequentially by design, but only a small number may be active globally and
- * one actor cannot repeatedly start the same tunnel scan.
+ * Bounds expensive, node-side tunnel diagnostics. Individual jobs use a small
+ * probe concurrency, while this limiter keeps only a few jobs active globally
+ * and prevents one actor from repeatedly starting the same tunnel scan.
  */
 @Component
 public class TunnelForwardDiagnosisLimiter {

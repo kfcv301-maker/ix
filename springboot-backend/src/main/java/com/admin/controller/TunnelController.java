@@ -184,4 +184,16 @@ public class TunnelController extends BaseController {
         return tunnelService.diagnoseTunnelForwards(tunnelId);
     }
 
+    @LogAnnotation
+    @PostMapping("/diagnose-forwards/task")
+    public R getTunnelForwardDiagnosisTask(@RequestBody Map<String, Object> params) {
+        return tunnelService.getTunnelForwardDiagnosisTask(String.valueOf(params.get("taskId")));
+    }
+
+    @LogAnnotation
+    @PostMapping("/diagnose-forwards/cancel")
+    public R cancelTunnelForwardDiagnosisTask(@RequestBody Map<String, Object> params) {
+        return tunnelService.cancelTunnelForwardDiagnosisTask(String.valueOf(params.get("taskId")));
+    }
+
 }

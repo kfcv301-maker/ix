@@ -265,7 +265,7 @@ export default function NodePage() {
     }
     
     try {
-      websocketRef.current = new WebSocket(getRealtimeSocketUrl());
+      websocketRef.current = new WebSocket(getRealtimeSocketUrl('detail'));
       
       websocketRef.current.onopen = () => {
         reconnectAttemptsRef.current = 0;
@@ -340,9 +340,22 @@ export default function NodePage() {
             const currentUpload = toFiniteNumber(systemInfo.bytes_transmitted);
             const currentDownload = toFiniteNumber(systemInfo.bytes_received);
             const currentUptime = toFiniteNumber(systemInfo.uptime);
-            const cpuCores = Math.floor(toFiniteNumber(systemInfo.cpu_cores));
-            const memoryTotal = toFiniteNumber(systemInfo.memory_total);
-            const diskTotal = toFiniteNumber(systemInfo.disk_total);
+            const previousInfo = node.systemInfo || undefined;
+            const keepPreviousNumber = (value: unknown, fallback = 0): number => {
+              const parsed = toOptionalNumber(value);
+              return parsed === undefined ? fallback : parsed;
+            };
+            const keepPreviousOptionalNumber = (value: unknown, fallback?: number): number | undefined => {
+              const parsed = toOptionalNumber(value);
+              return parsed === undefined ? fallback : parsed;
+            };
+            const keepPreviousOptionalString = (value: unknown, fallback?: string): string | undefined => {
+              const parsed = toOptionalString(value);
+              return parsed === undefined ? fallback : parsed;
+            };
+            const cpuCores = Math.floor(keepPreviousNumber(systemInfo.cpu_cores, previousInfo?.cpuCores || 0));
+            const memoryTotal = keepPreviousNumber(systemInfo.memory_total, previousInfo?.memoryTotal || 0);
+            const diskTotal = keepPreviousNumber(systemInfo.disk_total, previousInfo?.diskTotal || 0);
             const reportedAt = Date.now();
             
             let uploadSpeed = 0;
@@ -385,24 +398,24 @@ export default function NodePage() {
               cpuCores,
               memoryTotal,
               diskTotal,
-              memoryUsed: toOptionalNumber(systemInfo.memory_used),
-              memoryAvailable: toOptionalNumber(systemInfo.memory_available),
-              memoryCached: toOptionalNumber(systemInfo.memory_cached),
-              swapUsed: toOptionalNumber(systemInfo.swap_used),
-              swapTotal: toOptionalNumber(systemInfo.swap_total),
-              agentRss: toOptionalNumber(systemInfo.agent_rss),
-              agentHeapAlloc: toOptionalNumber(systemInfo.agent_heap_alloc),
-              goroutines: toOptionalNumber(systemInfo.goroutines),
-              diskUsed: toOptionalNumber(systemInfo.disk_used),
-              diskUsedPercent: toOptionalNumber(systemInfo.disk_used_percent),
-              load1: toOptionalNumber(systemInfo.load_1),
-              tcpConnections: toOptionalNumber(systemInfo.tcp_connections),
-              udpConnections: toOptionalNumber(systemInfo.udp_connections),
-              tcpTuningMode: toOptionalString(systemInfo.tcp_tuning_mode),
-              tcpTuningMinimum: toOptionalString(systemInfo.tcp_tuning_minimum),
-              tcpTuningMaximum: toOptionalString(systemInfo.tcp_tuning_maximum),
-              tcpTuningCurrent: toOptionalString(systemInfo.tcp_tuning_current),
-              tcpTuningReason: toOptionalString(systemInfo.tcp_tuning_reason),
+              memoryUsed: keepPreviousOptionalNumber(systemInfo.memory_used, previousInfo?.memoryUsed),
+              memoryAvailable: keepPreviousOptionalNumber(systemInfo.memory_available, previousInfo?.memoryAvailable),
+              memoryCached: keepPreviousOptionalNumber(systemInfo.memory_cached, previousInfo?.memoryCached),
+              swapUsed: keepPreviousOptionalNumber(systemInfo.swap_used, previousInfo?.swapUsed),
+              swapTotal: keepPreviousOptionalNumber(systemInfo.swap_total, previousInfo?.swapTotal),
+              agentRss: keepPreviousOptionalNumber(systemInfo.agent_rss, previousInfo?.agentRss),
+              agentHeapAlloc: keepPreviousOptionalNumber(systemInfo.agent_heap_alloc, previousInfo?.agentHeapAlloc),
+              goroutines: keepPreviousOptionalNumber(systemInfo.goroutines, previousInfo?.goroutines),
+              diskUsed: keepPreviousOptionalNumber(systemInfo.disk_used, previousInfo?.diskUsed),
+              diskUsedPercent: keepPreviousOptionalNumber(systemInfo.disk_used_percent, previousInfo?.diskUsedPercent),
+              load1: keepPreviousOptionalNumber(systemInfo.load_1, previousInfo?.load1),
+              tcpConnections: keepPreviousOptionalNumber(systemInfo.tcp_connections, previousInfo?.tcpConnections),
+              udpConnections: keepPreviousOptionalNumber(systemInfo.udp_connections, previousInfo?.udpConnections),
+              tcpTuningMode: keepPreviousOptionalString(systemInfo.tcp_tuning_mode, previousInfo?.tcpTuningMode),
+              tcpTuningMinimum: keepPreviousOptionalString(systemInfo.tcp_tuning_minimum, previousInfo?.tcpTuningMinimum),
+              tcpTuningMaximum: keepPreviousOptionalString(systemInfo.tcp_tuning_maximum, previousInfo?.tcpTuningMaximum),
+              tcpTuningCurrent: keepPreviousOptionalString(systemInfo.tcp_tuning_current, previousInfo?.tcpTuningCurrent),
+              tcpTuningReason: keepPreviousOptionalString(systemInfo.tcp_tuning_reason, previousInfo?.tcpTuningReason),
             };
 
             appendMetricSample(node.id, {

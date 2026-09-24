@@ -40,6 +40,9 @@ public class Forward extends BaseEntity{
 
     private Long outFlow;
 
+    /** Short sequenced-report window after every endpoint acknowledged a pause. */
+    private Long flowGraceUntil;
+
     private Integer inx;
 
 }

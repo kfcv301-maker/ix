@@ -4,9 +4,9 @@ import cn.hutool.core.util.StrUtil;
 import com.admin.common.dto.*;
 
 import com.admin.common.lang.R;
+import com.admin.common.task.TunnelForwardDiagnosisTaskService;
 import com.admin.common.utils.GostUtil;
 import com.admin.common.utils.JwtUtil;
-import com.admin.common.utils.TunnelForwardDiagnosisLimiter;
 import com.admin.common.utils.WebSocketServer;
 import com.admin.entity.Forward;
 import com.admin.entity.Node;
@@ -24,8 +24,6 @@ import com.admin.service.NodeService;
 import com.admin.service.TunnelService;
 import com.admin.service.TunnelEntryDomainService;
 import com.admin.service.UserTunnelService;
-import com.alibaba.fastjson.JSON;
-import com.alibaba.fastjson.JSONArray;
 import com.alibaba.fastjson.JSONObject;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
@@ -118,7 +116,7 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
     UserTunnelService userTunnelService;
 
     @Resource
-    private TunnelForwardDiagnosisLimiter tunnelForwardDiagnosisLimiter;
+    private TunnelForwardDiagnosisTaskService tunnelForwardDiagnosisTaskService;
 
     // ========== 公共接口实现 ==========
 
@@ -912,11 +910,9 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
     }
 
     /**
-     * 对隧道关联的所有转发进行一次完整连通性检测。
-     *
-     * 这里刻意复用 ForwardService 的单条诊断逻辑：端口转发会从每个入口
-     * 节点检测目标地址，隧道转发会检测入口到出口与出口到目标两段链路。
-     * 顺序执行可避免在同一节点上同时堆积大量 TCP 探测请求。
+     * Starts a bounded asynchronous scan. The HTTP response is immediate;
+     * progress and results are read through the task endpoint instead of
+     * holding a browser/API request open longer than its timeout.
      */
     @Override
     public R diagnoseTunnelForwards(Long tunnelId) {
@@ -945,69 +941,21 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
             return R.err("一次最多检测 " + MAX_BATCH_FORWARD_DIAGNOSIS + " 条转发，请使用单条诊断或稍后分批处理");
         }
 
-        final TunnelForwardDiagnosisLimiter.Lease lease;
-        try {
-            lease = tunnelForwardDiagnosisLimiter.acquire(currentUser.getUserId(), tunnelId);
-        } catch (IllegalArgumentException | IllegalStateException exception) {
-            return R.err(429, exception.getMessage());
-        }
-
-        try (TunnelForwardDiagnosisLimiter.Lease ignored = lease) {
-            return diagnoseTunnelForwardsSequentially(tunnel, forwards);
-        }
+        return tunnelForwardDiagnosisTaskService.start(tunnel, currentUser.getUserId(), forwards);
     }
 
-    private R diagnoseTunnelForwardsSequentially(Tunnel tunnel, List<Forward> forwards) {
-
-        List<JSONObject> forwardReports = new ArrayList<>();
-        int successfulForwards = 0;
-
-        for (Forward forward : forwards) {
-            R diagnosis = forwardService.diagnoseForward(forward.getId());
-            JSONObject forwardReport = diagnosis.getData() == null
-                    ? new JSONObject()
-                    : JSONObject.parseObject(JSON.toJSONString(diagnosis.getData()));
-
-            forwardReport.put("forwardId", forward.getId());
-            forwardReport.put("forwardName", forward.getName());
-            forwardReport.put("remoteAddress", forward.getRemoteAddr());
-
-            boolean success = diagnosis.getCode() == 0
-                    && areAllPingChecksSuccessful(forwardReport.getJSONArray("results"));
-            forwardReport.put("success", success);
-            if (!success && StringUtils.isBlank(forwardReport.getString("message"))) {
-                forwardReport.put("message", diagnosis.getCode() == 0
-                        ? "至少一个链路检测未通过"
-                        : diagnosis.getMsg());
-            }
-            forwardReports.add(forwardReport);
-            if (success) {
-                successfulForwards++;
-            }
-        }
-
-        Map<String, Object> report = new LinkedHashMap<>();
-        report.put("tunnelId", tunnel.getId());
-        report.put("tunnelName", tunnel.getName());
-        report.put("timestamp", System.currentTimeMillis());
-        report.put("totalForwards", forwards.size());
-        report.put("successfulForwards", successfulForwards);
-        report.put("failedForwards", forwards.size() - successfulForwards);
-        report.put("forwards", forwardReports);
-        return R.ok(report);
+    @Override
+    public R getTunnelForwardDiagnosisTask(String taskId) {
+        UserInfo currentUser = getCurrentUserInfo();
+        return tunnelForwardDiagnosisTaskService.get(taskId, currentUser.getUserId(),
+                Objects.equals(currentUser.getRoleId(), ADMIN_ROLE_ID));
     }
 
-    private boolean areAllPingChecksSuccessful(JSONArray results) {
-        if (results == null || results.isEmpty()) {
-            return false;
-        }
-        for (int index = 0; index < results.size(); index++) {
-            JSONObject result = results.getJSONObject(index);
-            if (result == null || !result.getBooleanValue("success")) {
-                return false;
-            }
-        }
-        return true;
+    @Override
+    public R cancelTunnelForwardDiagnosisTask(String taskId) {
+        UserInfo currentUser = getCurrentUserInfo();
+        return tunnelForwardDiagnosisTaskService.cancel(taskId, currentUser.getUserId(),
+                Objects.equals(currentUser.getRoleId(), ADMIN_ROLE_ID));
     }
 
     /**

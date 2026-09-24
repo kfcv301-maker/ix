@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-gost/core/observer/stats"
@@ -36,6 +38,190 @@ type TrafficReportItem struct {
 	I string `json:"i"` // Agent session / boot identifier
 	Q uint64 `json:"q"` // Per-service report sequence
 	B int64  `json:"b"` // Agent session start time in milliseconds
+}
+
+const (
+	trafficBatchInterval = 750 * time.Millisecond
+	trafficBatchLimit    = 128
+)
+
+type trafficReportDelivery struct {
+	acknowledged bool
+}
+
+type queuedTrafficReport struct {
+	item   TrafficReportItem
+	result chan trafficReportDelivery
+}
+
+type trafficBatchRequest struct {
+	Version int                 `json:"v"`
+	Items   []TrafficReportItem `json:"items"`
+}
+
+type trafficBatchAck struct {
+	N string `json:"n"`
+	I string `json:"i"`
+	Q uint64 `json:"q"`
+	B int64  `json:"b"`
+}
+
+type trafficBatchResponse struct {
+	Type         string            `json:"type"`
+	Acknowledged []trafficBatchAck `json:"acknowledged"`
+}
+
+type trafficBatchCapability uint8
+
+const (
+	trafficBatchUnknown trafficBatchCapability = iota
+	trafficBatchSupported
+	trafficBatchLegacy
+)
+
+// trafficBatcher owns at most one unsent report per service. A service keeps
+// its counters until the matching delivery channel is acknowledged, so a
+// timeout can neither duplicate nor lose a report.
+var trafficBatcher = struct {
+	sync.Mutex
+	pending    map[string]*queuedTrafficReport
+	wake       chan struct{}
+	started    bool
+	capability trafficBatchCapability
+}{
+	pending: make(map[string]*queuedTrafficReport),
+	wake:    make(chan struct{}, 1),
+}
+
+var trafficHTTPClient = &http.Client{Timeout: 5 * time.Second}
+
+// StartTrafficReporter coalesces the per-service snapshots that arrive every
+// few seconds into bounded HTTP batches. It is deliberately separate from the
+// config reporter, whose full inventory has very different timing needs.
+func StartTrafficReporter(ctx context.Context) {
+	trafficBatcher.Lock()
+	if trafficBatcher.started {
+		trafficBatcher.Unlock()
+		return
+	}
+	trafficBatcher.started = true
+	trafficBatcher.Unlock()
+	go runTrafficBatcher(ctx)
+}
+
+// enqueueTrafficReport returns a single completion channel for this exact
+// report. Calling code should retain it until it receives a delivery result.
+func enqueueTrafficReport(report TrafficReportItem) <-chan trafficReportDelivery {
+	key := trafficReportKey(report)
+	trafficBatcher.Lock()
+	if existing := trafficBatcher.pending[key]; existing != nil {
+		result := existing.result
+		trafficBatcher.Unlock()
+		return result
+	}
+	queued := &queuedTrafficReport{item: report, result: make(chan trafficReportDelivery, 1)}
+	trafficBatcher.pending[key] = queued
+	trafficBatcher.Unlock()
+	notifyTrafficBatcher()
+	return queued.result
+}
+
+func cancelTrafficReport(report TrafficReportItem) {
+	trafficBatcher.Lock()
+	delete(trafficBatcher.pending, trafficReportKey(report))
+	trafficBatcher.Unlock()
+}
+
+func notifyTrafficBatcher() {
+	select {
+	case trafficBatcher.wake <- struct{}{}:
+	default:
+	}
+}
+
+func runTrafficBatcher(ctx context.Context) {
+	ticker := time.NewTicker(trafficBatchInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-trafficBatcher.wake:
+			// Let the short ticker collect reports from other services first.
+		case <-ticker.C:
+			flushTrafficBatch(ctx)
+		}
+	}
+}
+
+func flushTrafficBatch(ctx context.Context) {
+	queued, capability := takeTrafficBatch()
+	if len(queued) == 0 {
+		return
+	}
+
+	if capability == trafficBatchLegacy {
+		deliverLegacyTrafficReports(ctx, queued)
+		return
+	}
+
+	items := make([]TrafficReportItem, 0, len(queued))
+	for _, pending := range queued {
+		items = append(items, pending.item)
+	}
+	acknowledged, compatibilityKnown, err := sendTrafficReportBatch(ctx, items)
+	if err != nil {
+		for _, pending := range queued {
+			pending.result <- trafficReportDelivery{}
+		}
+		return
+	}
+	if !compatibilityKnown {
+		// Older panels return plain "ok" for an unknown object. That request
+		// did not contain a top-level flow item, so resend each exact sequence
+		// through the legacy protocol without acknowledging it prematurely.
+		trafficBatcher.Lock()
+		trafficBatcher.capability = trafficBatchLegacy
+		trafficBatcher.Unlock()
+		deliverLegacyTrafficReports(ctx, queued)
+		return
+	}
+
+	trafficBatcher.Lock()
+	trafficBatcher.capability = trafficBatchSupported
+	trafficBatcher.Unlock()
+	for _, pending := range queued {
+		_, ok := acknowledged[trafficReportKey(pending.item)]
+		pending.result <- trafficReportDelivery{acknowledged: ok}
+	}
+}
+
+func takeTrafficBatch() ([]*queuedTrafficReport, trafficBatchCapability) {
+	trafficBatcher.Lock()
+	defer trafficBatcher.Unlock()
+	queued := make([]*queuedTrafficReport, 0, trafficBatchLimit)
+	for key, pending := range trafficBatcher.pending {
+		queued = append(queued, pending)
+		delete(trafficBatcher.pending, key)
+		if len(queued) == trafficBatchLimit {
+			break
+		}
+	}
+	return queued, trafficBatcher.capability
+}
+
+func deliverLegacyTrafficReports(ctx context.Context, queued []*queuedTrafficReport) {
+	for _, pending := range queued {
+		success, err := sendTrafficReport(ctx, pending.item)
+		if err != nil {
+			fmt.Printf("发送流量报告失败: %v", err)
+		}
+		pending.result <- trafficReportDelivery{acknowledged: success}
+	}
+}
+
+func trafficReportKey(report TrafficReportItem) string {
+	return report.N + "\x00" + report.I + "\x00" + strconv.FormatUint(report.Q, 10) + "\x00" + strconv.FormatInt(report.B, 10)
 }
 
 func SetHTTPReportURL(addr string, secret string) {
@@ -68,6 +254,50 @@ func sendTrafficReport(ctx context.Context, reportItems TrafficReportItem) (bool
 	if err != nil {
 		return false, fmt.Errorf("序列化报告数据失败: %v", err)
 	}
+	responseText, err := postTrafficPayload(ctx, jsonData)
+	if err != nil {
+		return false, err
+	}
+	if responseText == "ok" {
+		return true, nil
+	}
+	return false, fmt.Errorf("服务器响应: %s (期望: ok)", responseText)
+}
+
+// sendTrafficReportBatch returns an acknowledgement map for the exact report
+// keys the panel committed. A literal "ok" means an older panel and triggers
+// the caller's safe single-report fallback.
+func sendTrafficReportBatch(ctx context.Context, items []TrafficReportItem) (map[string]struct{}, bool, error) {
+	jsonData, err := json.Marshal(trafficBatchRequest{Version: 2, Items: items})
+	if err != nil {
+		return nil, false, fmt.Errorf("序列化批量流量报告失败: %v", err)
+	}
+	responseText, err := postTrafficPayload(ctx, jsonData)
+	if err != nil {
+		return nil, false, err
+	}
+	if responseText == "ok" {
+		return nil, false, nil
+	}
+
+	var response trafficBatchResponse
+	if err := json.Unmarshal([]byte(responseText), &response); err != nil {
+		return nil, true, fmt.Errorf("解析批量流量响应失败: %v", err)
+	}
+	if response.Type != "flow_batch" {
+		return nil, true, fmt.Errorf("未知批量流量响应: %s", responseText)
+	}
+	acknowledged := make(map[string]struct{}, len(response.Acknowledged))
+	for _, ack := range response.Acknowledged {
+		acknowledged[trafficReportKey(TrafficReportItem{N: ack.N, I: ack.I, Q: ack.Q, B: ack.B})] = struct{}{}
+	}
+	return acknowledged, true, nil
+}
+
+func postTrafficPayload(ctx context.Context, jsonData []byte) (string, error) {
+	if httpReportURL == "" {
+		return "", fmt.Errorf("流量上报URL未设置")
+	}
 
 	var requestBody []byte
 
@@ -96,42 +326,30 @@ func sendTrafficReport(ctx context.Context, reportItems TrafficReportItem) (bool
 
 	req, err := http.NewRequestWithContext(ctx, "POST", httpReportURL, bytes.NewBuffer(requestBody))
 	if err != nil {
-		return false, fmt.Errorf("创建HTTP请求失败: %v", err)
+		return "", fmt.Errorf("创建HTTP请求失败: %v", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "GOST-Traffic-Reporter/1.0")
 	req.Header.Set("Authorization", "Bearer "+httpReportToken)
 
-	client := &http.Client{
-		Timeout: 5 * time.Second,
-	}
-
-	resp, err := client.Do(req)
+	resp, err := trafficHTTPClient.Do(req)
 	if err != nil {
-		return false, fmt.Errorf("发送HTTP请求失败: %v", err)
+		return "", fmt.Errorf("发送HTTP请求失败: %v", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return false, fmt.Errorf("HTTP响应错误: %d %s", resp.StatusCode, resp.Status)
+		return "", fmt.Errorf("HTTP响应错误: %d %s", resp.StatusCode, resp.Status)
 	}
 
 	// 读取响应内容
 	var responseBytes bytes.Buffer
 	_, err = responseBytes.ReadFrom(resp.Body)
 	if err != nil {
-		return false, fmt.Errorf("读取响应内容失败: %v", err)
+		return "", fmt.Errorf("读取响应内容失败: %v", err)
 	}
-
-	responseText := strings.TrimSpace(responseBytes.String())
-
-	// 检查响应是否为"ok"
-	if responseText == "ok" {
-		return true, nil
-	} else {
-		return false, fmt.Errorf("服务器响应: %s (期望: ok)", responseText)
-	}
+	return strings.TrimSpace(responseBytes.String()), nil
 }
 
 // sendConfigReport 发送配置报告到HTTP接口
@@ -218,21 +436,11 @@ func StartConfigReporter(ctx context.Context) {
 		return
 	}
 
-	fmt.Printf("🚀 配置定时上报器已启动，每10分钟上报一次（WebSocket连接稳定后启动）\n")
+	fmt.Printf("🚀 配置定时上报器已启动，每10分钟上报一次（首次上报由 WebSocket 连接完成后触发）\n")
 
 	// 创建10分钟定时器
 	ticker := time.NewTicker(10 * time.Minute)
 	defer ticker.Stop()
-
-	// 立即执行一次配置上报
-	go func() {
-		success, err := sendConfigReport(ctx)
-		if err != nil {
-			fmt.Printf("❌ 初始配置上报失败: %v\n", err)
-		} else if success {
-			fmt.Printf("✅ 初始配置上报成功\n")
-		}
-	}()
 
 	// 定时上报循环
 	for {

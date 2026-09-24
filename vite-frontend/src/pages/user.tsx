@@ -24,6 +24,7 @@ import { RadioGroup, Radio } from "@heroui/radio";
 import { DatePicker } from "@heroui/date-picker";
 import { Spinner } from "@heroui/spinner";
 import { Progress } from "@heroui/progress";
+import { Pagination } from "@heroui/pagination";
 
 import toast from 'react-hot-toast';
 import { 
@@ -108,6 +109,7 @@ export default function UserPage() {
   // 状态管理
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(false);
+  const [searchInput, setSearchInput] = useState('');
   const [searchKeyword, setSearchKeyword] = useState('');
   const [pagination, setPagination] = useState<PaginationType>({
     current: 1,
@@ -181,9 +183,23 @@ export default function UserPage() {
 
   // 生命周期
   useEffect(() => {
-    loadUsers();
     loadTunnels();
     loadSpeedLimits();
+  }, []);
+
+  // Debounce only the user-list request.  Tunnels and speed rules are static
+  // page data and should not reload for every typed character.
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const keyword = searchInput.trim();
+      setSearchKeyword(previous => previous === keyword ? previous : keyword);
+      setPagination(previous => previous.current === 1 ? previous : { ...previous, current: 1 });
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [searchInput]);
+
+  useEffect(() => {
+    loadUsers();
   }, [pagination.current, pagination.size, searchKeyword]);
 
   // 数据加载函数
@@ -198,7 +214,16 @@ export default function UserPage() {
       
       if (response.code === 0) {
         const data = response.data || {};
-        setUsers(data || []);
+        // Accept the old array response during a rolling backend upgrade, but
+        // use the paged shape as soon as the server supports it.
+        const records = Array.isArray(data) ? data : (data.records || []);
+        setUsers(records);
+        setPagination(previous => ({
+          ...previous,
+          current: Number(Array.isArray(data) ? previous.current : data.current) || previous.current,
+          size: Number(Array.isArray(data) ? previous.size : data.size) || previous.size,
+          total: Number(Array.isArray(data) ? records.length : data.total) || 0
+        }));
       } else {
         toast.error(response.msg || '获取用户列表失败');
       }
@@ -286,7 +311,7 @@ export default function UserPage() {
   // 用户管理操作
   const handleSearch = () => {
     setPagination(prev => ({ ...prev, current: 1 }));
-    loadUsers();
+    setSearchKeyword(searchInput.trim());
   };
 
   const handleAdd = () => {
@@ -605,8 +630,8 @@ export default function UserPage() {
         <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center justify-between">
           <div className="flex items-center gap-3 flex-1 max-w-md">
             <Input
-              value={searchKeyword}
-              onChange={(e) => setSearchKeyword(e.target.value)}
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
               placeholder="搜索用户名"
               startContent={<SearchIcon className="w-4 h-4 text-default-400" />}
               onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
@@ -805,6 +830,18 @@ export default function UserPage() {
               </Card>
             );
           })}
+        </div>
+      )}
+
+      {pagination.total > pagination.size && (
+        <div className="mt-6 flex justify-center">
+          <Pagination
+            page={pagination.current}
+            total={Math.max(1, Math.ceil(pagination.total / pagination.size))}
+            onChange={(current) => setPagination(previous => ({ ...previous, current }))}
+            showControls
+            isDisabled={loading}
+          />
         </div>
       )}
 

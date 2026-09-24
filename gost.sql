@@ -40,6 +40,7 @@ CREATE TABLE `forward` (
   `interface_name` varchar(200) DEFAULT NULL,
   `in_flow` bigint(20) NOT NULL DEFAULT '0',
   `out_flow` bigint(20) NOT NULL DEFAULT '0',
+  `flow_grace_until` bigint(20) DEFAULT NULL,
   `created_time` bigint(20) NOT NULL,
   `updated_time` bigint(20) NOT NULL,
   `status` int(10) NOT NULL,
@@ -62,6 +63,46 @@ CREATE TABLE `forward_pause_task` (
   `created_time` bigint(20) NOT NULL,
   `updated_time` bigint(20) NOT NULL,
   `status` int(10) NOT NULL DEFAULT '1'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+--
+-- Durable per-endpoint cleanup/pause/resume acknowledgements. A forward stays
+-- visible and billable until every affected GOST endpoint confirms the state.
+--
+
+CREATE TABLE `forward_sync_task` (
+  `id` bigint(20) NOT NULL,
+  `operation_id` varchar(48) NOT NULL,
+  `forward_id` bigint(20) NOT NULL,
+  `node_id` bigint(20) NOT NULL,
+  `endpoint` varchar(16) NOT NULL,
+  `operation` varchar(16) NOT NULL,
+  `service_name` varchar(160) NOT NULL,
+  `target_status` int(10) NOT NULL,
+  `task_status` varchar(16) NOT NULL,
+  `attempts` int(10) NOT NULL DEFAULT '0',
+  `next_retry_time` bigint(20) NOT NULL,
+  `last_error` varchar(500) DEFAULT NULL,
+  `created_time` bigint(20) NOT NULL,
+  `updated_time` bigint(20) NOT NULL,
+  `status` int(10) NOT NULL DEFAULT '1'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+--
+-- Atomic node-port claims. The unique key prevents two concurrent forwarding
+-- creates from selecting the same port on the same Agent.
+--
+
+CREATE TABLE `forward_port_reservation` (
+  `id` bigint(20) NOT NULL AUTO_INCREMENT,
+  `node_id` bigint(20) NOT NULL,
+  `port` int(10) NOT NULL,
+  `forward_id` bigint(20) NOT NULL,
+  `endpoint` varchar(16) NOT NULL,
+  `created_time` bigint(20) NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_forward_port_reservation_node_port` (`node_id`,`port`),
+  KEY `idx_forward_port_reservation_forward` (`forward_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- --------------------------------------------------------
@@ -333,6 +374,16 @@ ALTER TABLE `forward_pause_task`
   ADD KEY `idx_forward_pause_task_state` (`task_status`,`updated_time`);
 
 --
+-- 表的索引 `forward_sync_task`
+--
+ALTER TABLE `forward_sync_task`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uk_forward_sync_endpoint` (`operation_id`,`node_id`,`endpoint`),
+  ADD KEY `idx_forward_sync_ready` (`task_status`,`next_retry_time`),
+  ADD KEY `idx_forward_sync_node_ready` (`node_id`,`task_status`,`next_retry_time`),
+  ADD KEY `idx_forward_sync_forward` (`forward_id`,`created_time`);
+
+--
 -- 表的索引 `node`
 --
 ALTER TABLE `node`
@@ -423,6 +474,12 @@ ALTER TABLE `forward`
 -- 使用表AUTO_INCREMENT `forward_pause_task`
 --
 ALTER TABLE `forward_pause_task`
+  MODIFY `id` bigint(20) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
+
+--
+-- 使用表AUTO_INCREMENT `forward_sync_task`
+--
+ALTER TABLE `forward_sync_task`
   MODIFY `id` bigint(20) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
 
 --

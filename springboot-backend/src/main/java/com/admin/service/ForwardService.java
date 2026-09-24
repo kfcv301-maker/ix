@@ -74,6 +74,12 @@ public interface ForwardService extends IService<Forward> {
     R diagnoseForward(Long id);
 
     /**
+     * Trusted background diagnostic entry point. Authorization is checked when
+     * a tunnel task is created; workers must not depend on a request JWT.
+     */
+    R diagnoseForwardForSystem(Long id);
+
+    /**
      * 更新转发排序
      * @param params 包含forwards数组的参数
      * @return 更新结果
