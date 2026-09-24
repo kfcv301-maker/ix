@@ -62,7 +62,7 @@ curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/panel_install
 
 前端默认只监听 `127.0.0.1:6366`，适合由宿主机 Nginx/Caddy 反向代理并管理 HTTPS；确需直接暴露前端端口时，在 `.env` 设置 `FRONTEND_BIND_ADDRESS=0.0.0.0` 后重新执行更新。
 
-网页终端默认只接受与面板同源的浏览器请求。若在前端容器前另设 HTTPS 反向代理，需将原始 `Host` 和 `X-Forwarded-Proto` 传给前端；内置 Nginx 会继续将公网协议传给后端。若前端和 API 刻意部署在不同域名，需在服务器 `.env` 设置 `VPS_TERMINAL_ALLOWED_ORIGINS=https://你的前端域名`；普通用户托管的 SSH 地址始终只允许公网地址。管理员确有内网库存 VPS 需求时，才可显式设置 `VPS_ALLOW_PRIVATE_ADMIN_TARGETS=true`。
+网页终端默认只接受与面板同源的浏览器请求。若在前端容器前另设 HTTPS 反向代理，需将原始 `Host` 和 `X-Forwarded-Proto` 传给前端，并对 `/vps-terminal` 关闭访问日志（URL 中包含短时一次性票据）；内置 Nginx 会继续将公网协议传给后端。若前端和 API 刻意部署在不同域名，需在服务器 `.env` 设置 `VPS_TERMINAL_ALLOWED_ORIGINS=https://你的前端域名`；普通用户托管的 SSH 地址始终只允许公网地址。管理员确有内网库存 VPS 需求时，才可显式设置 `VPS_ALLOW_PRIVATE_ADMIN_TARGETS=true`。
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/panel_install.sh | sudo env FRONTEND_PORT=8080 BACKEND_PORT=6365 bash
