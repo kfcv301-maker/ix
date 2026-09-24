@@ -24,6 +24,9 @@ spring:
 
 server:
   port: 6365
+  # Honor the public scheme supplied by a trusted TLS reverse proxy so
+  # WebSocket same-origin checks compare HTTPS with HTTPS.
+  forward-headers-strategy: framework
   tomcat:
     uri-encoding: UTF-8
     threads:
