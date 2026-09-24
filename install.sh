@@ -594,18 +594,33 @@ download_agent() {
 
 write_config() {
   umask 077
+  # Reinstalling the Agent must not silently enable protocols that the panel
+  # administrator has disabled on this node.
+  local current_config="$INSTALL_DIR/config.json" http tls socks
+  http="$(existing_protocol_flag "$current_config" http)"
+  tls="$(existing_protocol_flag "$current_config" tls)"
+  socks="$(existing_protocol_flag "$current_config" socks)"
   cat > "$INSTALL_DIR/config.json" <<EOF
 {
   "addr": "$SERVER_ADDR",
   "secret": "$NODE_SECRET",
-  "http": 1,
-  "tls": 1,
-  "socks": 1
+  "http": $http,
+  "tls": $tls,
+  "socks": $socks
 }
 EOF
   chmod 600 "$INSTALL_DIR/config.json"
   [[ -f "$INSTALL_DIR/gost.json" ]] || printf '{}\n' > "$INSTALL_DIR/gost.json"
   chmod 600 "$INSTALL_DIR/gost.json"
+}
+
+existing_protocol_flag() {
+  local config="$1" name="$2" value=""
+  if [[ -r "$config" ]]; then
+    value="$(sed -n "s/.*\"${name}\"[[:space:]]*:[[:space:]]*\([01]\).*/\1/p" "$config" | tail -n 1)"
+  fi
+  [[ "$value" == 0 || "$value" == 1 ]] || value=1
+  printf '%s' "$value"
 }
 
 write_service() {

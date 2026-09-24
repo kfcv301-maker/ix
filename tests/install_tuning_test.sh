@@ -33,4 +33,11 @@ INSTALL_DIR="$(mktemp -d)"
 trap 'rm -rf "$INSTALL_DIR"' EXIT
 write_tcp_tuning_guard
 bash -n "$INSTALL_DIR/tcp-tuning-guard.sh"
+printf '{"http":0,"tls":0,"socks":0}\n' > "$INSTALL_DIR/config.json"
+SERVER_ADDR='https://panel.example.com'
+NODE_SECRET='test-only-token'
+write_config
+grep -q '"http": 0' "$INSTALL_DIR/config.json"
+grep -q '"tls": 0' "$INSTALL_DIR/config.json"
+grep -q '"socks": 0' "$INSTALL_DIR/config.json"
 printf 'TCP tuning profile and generated guard checks passed\n'
