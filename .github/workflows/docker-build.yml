@@ -99,9 +99,13 @@ jobs:
           tar -xf upx-4.2.1-amd64_linux.tar.xz
           sudo install -m 0755 upx-4.2.1-amd64_linux/upx /usr/local/bin/upx
 
-      - name: Test Agent limiter cache
+      - name: Test Agent main module
+        working-directory: ./go-gost
+        run: go test ./...
+
+      - name: Test Agent modules
         working-directory: ./go-gost/x
-        run: go test ./internal/util/cache ./limiter/traffic/cache
+        run: go test ./...
 
       - name: Build GOST binary (AMD64)
         working-directory: ./go-gost
@@ -196,7 +200,7 @@ jobs:
 
       - name: Build Java JAR
         working-directory: ./springboot-backend
-        run: mvn -B clean package -DskipTests
+        run: mvn -B clean package
 
       - name: Set up Docker Buildx
         if: needs.prepare.outputs.publish_release == 'true'
