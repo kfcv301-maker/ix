@@ -2,6 +2,7 @@ package com.admin.config;
 
 import com.admin.service.VpsHostService;
 import com.admin.service.VpsTerminalTicketService;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.server.ServerHttpRequest;
 import org.springframework.http.server.ServerHttpResponse;
 import org.springframework.http.server.ServletServerHttpRequest;
@@ -34,19 +35,24 @@ public class VpsTerminalHandshakeInterceptor extends HttpSessionHandshakeInterce
     @Override
     public boolean beforeHandshake(ServerHttpRequest request, ServerHttpResponse response,
                                    WebSocketHandler wsHandler, Map<String, Object> attributes) {
-        if (!(request instanceof ServletServerHttpRequest)) return false;
+        if (!(request instanceof ServletServerHttpRequest)) return forbidden(response);
         HttpServletRequest servletRequest = ((ServletServerHttpRequest) request).getServletRequest();
-        if (!isAllowedOrigin(servletRequest)) return false;
+        if (!isAllowedOrigin(servletRequest)) return forbidden(response);
         VpsTerminalTicketService.TerminalAccess access = vpsTerminalTicketService.consume(
                 servletRequest.getParameter("ticket"));
         if (access == null || !vpsHostService.canOperate(access.getUserId(), access.isAdministrator(), access.getVpsId())) {
-            return false;
+            return forbidden(response);
         }
 
         attributes.put("vpsId", access.getVpsId());
         attributes.put("userId", access.getUserId());
         attributes.put("administrator", access.isAdministrator());
         return true;
+    }
+
+    private boolean forbidden(ServerHttpResponse response) {
+        response.setStatusCode(HttpStatus.FORBIDDEN);
+        return false;
     }
 
     private boolean isAllowedOrigin(HttpServletRequest request) {
