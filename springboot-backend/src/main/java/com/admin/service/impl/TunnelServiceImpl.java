@@ -253,7 +253,8 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
                     .map(UserTunnel::getTunnelId).collect(Collectors.toList());
             QueryWrapper<Tunnel> query = new QueryWrapper<>();
             if (grantIds.isEmpty()) query.eq("owner_user_id", userId);
-            else query.and(wrapper -> wrapper.eq("owner_user_id", userId).or().in("id", grantIds));
+            else query.and(wrapper -> wrapper.eq("owner_user_id", userId)
+                    .or(shared -> shared.isNull("owner_user_id").in("id", grantIds)));
             tunnelList = this.list(query);
         }
         tunnelList.forEach(tunnel -> tunnel.setCanManage(administrator || Objects.equals(tunnel.getOwnerUserId(), userId)));
@@ -854,6 +855,7 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
                 
         return this.list(new QueryWrapper<Tunnel>()
                 .in("id", tunnelIds)
+                .and(wrapper -> wrapper.isNull("owner_user_id").or().eq("owner_user_id", userId))
                 .eq("status", TUNNEL_STATUS_ACTIVE));
     }
 
@@ -1005,6 +1007,10 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
                 .orderByAsc("inx")
                 .orderByAsc("id");
         if (!Objects.equals(currentUser.getRoleId(), ADMIN_ROLE_ID)) {
+            if (tunnel.getOwnerUserId() != null
+                    && !Objects.equals(tunnel.getOwnerUserId(), currentUser.getUserId().longValue())) {
+                return R.err(403, "没有检测此隧道的权限");
+            }
             UserTunnel assignment = userTunnelMapper.selectOne(new QueryWrapper<UserTunnel>()
                     .eq("user_id", currentUser.getUserId())
                     .eq("tunnel_id", tunnelId));

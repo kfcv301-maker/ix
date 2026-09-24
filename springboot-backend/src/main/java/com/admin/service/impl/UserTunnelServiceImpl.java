@@ -96,6 +96,12 @@ public class UserTunnelServiceImpl extends ServiceImpl<UserTunnelMapper, UserTun
      */
     @Override
     public R assignUserTunnel(UserTunnelDto userTunnelDto) {
+        Tunnel tunnel = tunnelService.getById(userTunnelDto.getTunnelId());
+        if (tunnel == null) return R.err("隧道不存在");
+        if (tunnel.getOwnerUserId() != null
+                && !tunnel.getOwnerUserId().equals(userTunnelDto.getUserId().longValue())) {
+            return R.err(403, "用户自建隧道不能授权给其他用户");
+        }
         // 1. 检查权限是否已存在
         if (isUserTunnelPermissionExists(userTunnelDto.getUserId(), userTunnelDto.getTunnelId())) {
             return R.err(ERROR_PERMISSION_EXISTS);

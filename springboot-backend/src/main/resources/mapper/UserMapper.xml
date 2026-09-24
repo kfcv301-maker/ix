@@ -23,6 +23,7 @@
         LEFT JOIN tunnel t ON ut.tunnel_id = t.id
         LEFT JOIN speed_limit sl ON ut.speed_id = sl.id
         WHERE ut.user_id = #{userId}
+          AND (t.owner_user_id IS NULL OR t.owner_user_id = #{userId})
         ORDER BY ut.id
     </select>
 

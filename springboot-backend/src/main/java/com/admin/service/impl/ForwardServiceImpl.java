@@ -755,6 +755,12 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
             return UserPermissionResult.success(null, null);
         }
 
+        // A legacy assignment must never expose another user's private tunnel.
+        if (tunnel.getOwnerUserId() != null
+                && !Objects.equals(tunnel.getOwnerUserId(), currentUser.getUserId().longValue())) {
+            return UserPermissionResult.error("你没有该隧道权限");
+        }
+
         // 获取用户信息
         User userInfo = userService.getById(currentUser.getUserId());
         if (userInfo == null) {
