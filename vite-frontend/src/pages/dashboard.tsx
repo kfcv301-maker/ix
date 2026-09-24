@@ -212,30 +212,27 @@ export default function DashboardPage() {
     const currentUserIsAdmin = adminStatus === 'true' || roleId === '0';
     setIsAdmin(currentUserIsAdmin);
 
-    // 节点监控的 WebSocket 只携带节点 ID；管理员额外复用既有列表接口
-    // 补充节点名称。普通用户不请求该管理接口，仍只看到服务端已授权的节点 ID。
-    if (currentUserIsAdmin) {
-      void getNodeList().then((res) => {
-        if (res.code !== 0 || !Array.isArray(res.data)) return;
-        const names: Record<number, string> = {};
-        res.data.forEach((node: { id?: unknown; name?: unknown }) => {
-          const nodeId = Number(node.id);
-          if (Number.isFinite(nodeId) && nodeId > 0) {
-            names[nodeId] = String(node.name || `节点 #${nodeId}`);
-          }
-        });
-        setNodeNames(names);
-      }).catch(() => {
-        // 名称只是展示增强；实时流量本身不应被一次列表请求失败阻断。
+    // 节点列表接口在服务端按归属过滤，普通用户也可显示自己的节点名称。
+    void getNodeList().then((res) => {
+      if (res.code !== 0 || !Array.isArray(res.data)) return;
+      const names: Record<number, string> = {};
+      res.data.forEach((node: { id?: unknown; name?: unknown }) => {
+        const nodeId = Number(node.id);
+        if (Number.isFinite(nodeId) && nodeId > 0) {
+          names[nodeId] = String(node.name || `节点 #${nodeId}`);
+        }
       });
-    }
+      setNodeNames(names);
+    }).catch(() => {
+      // 名称只是展示增强；实时流量本身不应被一次列表请求失败阻断。
+    });
     
     loadPackageData();
     localStorage.setItem('e', '/dashboard');
   }, []);
 
   // 仪表盘直接复用节点监控的只读实时上报。服务端会依据登录角色过滤节点，
-  // 普通用户只会收到已授权隧道关联节点的数据。
+  // 普通用户只会收到自己创建的节点数据。
   useEffect(() => {
     let disposed = false;
     const closeSocket = () => {
@@ -925,7 +922,7 @@ export default function DashboardPage() {
                      <p className="mt-1 font-mono text-2xl font-semibold tracking-tight text-foreground lg:text-3xl">
                        {formatFlow(realtimeTraffic.uploadSpeed + realtimeTraffic.downloadSpeed)}/s
                      </p>
-                     <p className="mt-1 text-xs text-default-500">{isAdmin ? '所有 15 秒内有监控上报的节点汇总' : '仅汇总已授权隧道关联节点'}</p>
+                     <p className="mt-1 text-xs text-default-500">{isAdmin ? '所有 15 秒内有监控上报的节点汇总' : '仅汇总自己创建的节点'}</p>
                    </div>
                    <div className="rounded-xl border border-primary-200 bg-primary-50 p-3 dark:border-primary-300/20 dark:bg-primary-100/20">
                      <p className="text-xs text-primary-700 dark:text-primary-300">↑ 上行</p>
@@ -974,7 +971,7 @@ export default function DashboardPage() {
                        <p className="mt-0.5 text-xs text-default-500">
                          {isAdmin
                            ? '按每台节点已上报的网卡实时流量展开。'
-                           : '仅显示服务端已授权给你的节点实时流量。'}
+                           : '仅显示自己创建的节点实时流量。'}
                        </p>
                      </div>
                      <span className="text-xs text-default-500">{realtimeNodeTraffic.length} 个节点正在上报</span>

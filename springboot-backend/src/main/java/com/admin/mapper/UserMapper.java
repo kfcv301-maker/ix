@@ -32,8 +32,8 @@ public interface UserMapper extends BaseMapper<User> {
     List<UserPackageDto.UserForwardDetailDto> getUserForwardDetails(@Param("userId") Integer userId);
 
     /**
-     * Return the ingress and egress nodes attached to tunnels the user may use.
-     * This is used by the monitoring WebSocket to enforce server-side isolation.
+     * Return only nodes created by this user, for both the node page and
+     * monitoring WebSocket. A shared tunnel does not grant node monitoring.
      */
     List<Long> getAccessibleNodeIds(@Param("userId") Long userId);
     

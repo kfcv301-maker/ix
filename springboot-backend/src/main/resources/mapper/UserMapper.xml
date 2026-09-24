@@ -46,44 +46,9 @@
         ORDER BY f.created_time DESC
     </select>
 
-    <!-- 用户只能收到其获授权隧道关联节点的实时监控上报。兼容旧的单入口字段，
-         同时纳入新的 tunnel_entry_node 多入口表以及出口节点。 -->
+    <!-- 普通用户只能查看本人创建的节点；隧道授权不授予共享节点的监控数据。 -->
     <select id="getAccessibleNodeIds" resultType="java.lang.Long">
-        SELECT DISTINCT permitted.node_id
-        FROM (
-            SELECT t.in_node_id AS node_id
-            FROM user_tunnel ut
-            INNER JOIN tunnel t ON t.id = ut.tunnel_id
-            WHERE ut.user_id = #{userId}
-              AND ut.status = 1 AND t.status = 1
-              AND (ut.exp_time IS NULL OR ut.exp_time > UNIX_TIMESTAMP(CURRENT_TIMESTAMP(3)) * 1000)
-
-            UNION ALL
-
-            SELECT ten.node_id AS node_id
-            FROM user_tunnel ut
-            INNER JOIN tunnel_entry_node ten ON ten.tunnel_id = ut.tunnel_id
-            INNER JOIN tunnel t ON t.id = ut.tunnel_id
-            WHERE ut.user_id = #{userId}
-              AND ut.status = 1 AND t.status = 1
-              AND (ut.exp_time IS NULL OR ut.exp_time > UNIX_TIMESTAMP(CURRENT_TIMESTAMP(3)) * 1000)
-
-            UNION ALL
-
-            SELECT t.out_node_id AS node_id
-            FROM user_tunnel ut
-            INNER JOIN tunnel t ON t.id = ut.tunnel_id
-            WHERE ut.user_id = #{userId}
-              AND ut.status = 1 AND t.status = 1
-              AND (ut.exp_time IS NULL OR ut.exp_time > UNIX_TIMESTAMP(CURRENT_TIMESTAMP(3)) * 1000)
-
-            UNION ALL
-
-            SELECT n.id AS node_id
-            FROM node n
-            WHERE n.owner_user_id = #{userId}
-        ) permitted
-        WHERE permitted.node_id IS NOT NULL
+        SELECT id FROM node WHERE owner_user_id = #{userId}
     </select>
 
     <!-- 管理员查询所有隧道（流量和转发设置为99999） -->
