@@ -54,7 +54,17 @@ def set_state(**values: Any) -> None:
 
 def current_state() -> dict[str, Any]:
     with STATE_LOCK:
-        return dict(STATE)
+        snapshot = dict(STATE)
+    # An administrator may deploy a reviewed commit on the host without using
+    # this long-running worker. Its last task state must not be presented as
+    # the currently installed version.
+    if snapshot["state"] not in {"queued", "backing_up", "checking", "updating"}:
+        installed = git_revision("HEAD")
+        if installed:
+            snapshot["currentRevision"] = installed
+            if snapshot["state"] == "completed":
+                snapshot["targetRevision"] = installed
+    return snapshot
 
 
 def run(command: list[str], *, stdout: Any | None = None) -> subprocess.CompletedProcess[str]:
@@ -73,6 +83,12 @@ def run(command: list[str], *, stdout: Any | None = None) -> subprocess.Complete
 def git_revision(reference: str) -> str | None:
     result = run(["git", "rev-parse", "--verify", reference])
     return result.stdout.strip() if result.returncode == 0 else None
+
+
+def ensure_clean_workspace() -> None:
+    dirty = run(["git", "status", "--porcelain", "--untracked-files=no"])
+    if dirty.returncode != 0 or dirty.stdout.strip():
+        raise RuntimeError("安装目录存在未提交的代码修改，已取消更新以保护本地修复")
 
 
 def compose_command(*args: str) -> list[str]:
@@ -108,6 +124,9 @@ def update_worker() -> None:
         if not (WORKSPACE / ".git").is_dir() or not (WORKSPACE / ".env").is_file():
             raise RuntimeError("安装目录不完整，无法安全更新")
 
+        # Avoid an unnecessary database dump when an update cannot proceed.
+        ensure_clean_workspace()
+
         set_state(state="backing_up", message="正在备份数据库", backup=None)
         backup_path = create_backup()
         set_state(state="checking", message="正在检查远程版本", backup=str(backup_path.relative_to(WORKSPACE)))
@@ -128,9 +147,7 @@ def update_worker() -> None:
 
         # A hard reset would discard fixes made directly in the installed checkout.
         # Refuse the update until those changes are reviewed and committed.
-        dirty = run(["git", "status", "--porcelain", "--untracked-files=no"])
-        if dirty.returncode != 0 or dirty.stdout.strip():
-            raise RuntimeError("安装目录存在未提交的代码修改，已取消更新以保护本地修复")
+        ensure_clean_workspace()
 
         set_state(state="updating", message="正在下载新版本并重建服务")
         reset = run(["git", "reset", "--hard", f"origin/{BRANCH}"])
