@@ -12,6 +12,8 @@ public class VpsHostView {
     private Integer sshPort;
     private String sshUsername;
     private String origin;
+    private Long createdByUserId;
+    private String createdByUserName;
     private Long ownerUserId;
     private String ownerUserName;
     private Long assignedUserId;

@@ -100,7 +100,7 @@ html, body {
   --panel-shadow: 0 16px 38px rgba(202, 111, 147, 0.13);
 }
 
-/* AKCDN 风格：仅在用户主动选择后生效，默认主题与其他皮肤保持原样。 */
+/* 运营蓝调：仅在用户主动选择后生效，默认主题与其他皮肤保持原样。 */
 :root[data-panel-theme='akcdn-console'] {
   --panel-bg: #f4f7fb;
   --panel-surface: rgba(255, 255, 255, 0.96);
@@ -115,7 +115,7 @@ html, body {
   --panel-shadow: 0 14px 32px rgba(27, 74, 119, 0.08);
 }
 
-/* Nvenix 参考风格：纸白底、墨色交互与克制的卡片层次，仅在用户选择后启用。 */
+/* 极简：纸白底、墨色交互与克制的卡片层次，仅在用户选择后启用。 */
 :root[data-panel-theme='nvenix-minimal'] {
   color-scheme: light;
   --panel-bg: #fafafa;

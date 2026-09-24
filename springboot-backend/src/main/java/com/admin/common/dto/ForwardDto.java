@@ -7,6 +7,7 @@ import javax.validation.constraints.NotBlank;
 import javax.validation.constraints.NotNull;
 import javax.validation.constraints.Min;
 import javax.validation.constraints.Max;
+import javax.validation.constraints.Positive;
 
 @Data
 public class ForwardDto {
@@ -20,6 +21,10 @@ public class ForwardDto {
     @NotBlank(message = "远程地址不能为空")
     private String remoteAddr;
 
+    /** Optional hosted VPS used as this forwarding rule's target. */
+    @Positive(message = "关联 VPS ID必须为正数")
+    private Long vpsHostId;
+
     private String strategy;
     
     /**
@@ -31,4 +36,4 @@ public class ForwardDto {
 
     private String interfaceName;
 
-} 
+}

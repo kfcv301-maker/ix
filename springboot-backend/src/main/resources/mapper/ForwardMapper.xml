@@ -12,6 +12,7 @@
             f.in_port AS inPort,
             f.out_port AS outPort,
             f.remote_addr AS remoteAddr,
+            f.vps_host_id AS vpsHostId,
             f.status,
             f.created_time AS createdTime,
             f.updated_time AS updatedTime,
@@ -21,6 +22,9 @@
             f.out_flow AS outFlow,
             f.inx AS inx,
             f.interface_name AS interfaceName,
+            vh.name AS vpsHostName,
+            vh.origin AS vpsHostOrigin,
+            vh.status AS vpsHostStatus,
             t.name AS tunnelName,
             t.in_ip AS inIp,
             t.out_ip AS outIp,
@@ -28,8 +32,10 @@
             t.protocol
         FROM 
             forward f
-        LEFT JOIN 
+        LEFT JOIN
             tunnel t ON f.tunnel_id = t.id
+        LEFT JOIN
+            vps_host vh ON f.vps_host_id = vh.id
         ORDER BY 
             f.created_time DESC
     </select>
@@ -44,6 +50,7 @@
             f.in_port AS inPort,
             f.out_port AS outPort,
             f.remote_addr AS remoteAddr,
+            f.vps_host_id AS vpsHostId,
             f.status,
             f.created_time AS createdTime,
             f.updated_time AS updatedTime,
@@ -53,6 +60,9 @@
             f.strategy AS strategy,
             f.inx AS inx,
             f.interface_name AS interfaceName,
+            vh.name AS vpsHostName,
+            vh.origin AS vpsHostOrigin,
+            vh.status AS vpsHostStatus,
             t.name AS tunnelName,
             t.in_ip AS inIp,
             t.out_ip AS outIp,
@@ -60,8 +70,10 @@
             t.protocol
         FROM 
             forward f
-        LEFT JOIN 
+        LEFT JOIN
             tunnel t ON f.tunnel_id = t.id
+        LEFT JOIN
+            vps_host vh ON f.vps_host_id = vh.id
         WHERE 
             f.user_id = #{userId}
         ORDER BY 

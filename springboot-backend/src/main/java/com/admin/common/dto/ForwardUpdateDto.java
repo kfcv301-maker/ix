@@ -7,6 +7,7 @@ import javax.validation.constraints.NotBlank;
 import javax.validation.constraints.NotNull;
 import javax.validation.constraints.Min;
 import javax.validation.constraints.Max;
+import javax.validation.constraints.Positive;
 
 @Data
 public class ForwardUpdateDto {
@@ -26,6 +27,16 @@ public class ForwardUpdateDto {
     @NotBlank(message = "远程地址不能为空")
     private String remoteAddr;
 
+    /**
+     * Optional hosted VPS used as this forwarding rule's target. Omitted
+     * values preserve legacy associations when an older client edits a rule.
+     */
+    @Positive(message = "关联 VPS ID必须为正数")
+    private Long vpsHostId;
+
+    /** Explicitly removes a previously associated hosted VPS. */
+    private Boolean clearVpsHost;
+
     private String strategy;
     
     /**
@@ -37,4 +48,4 @@ public class ForwardUpdateDto {
 
     @TableField(updateStrategy = FieldStrategy.IGNORED)
     private String interfaceName;
-} 
+}

@@ -7,6 +7,7 @@ import { Modal, ModalBody, ModalContent, ModalFooter, ModalHeader } from '@herou
 import { Spinner } from '@heroui/spinner';
 import { Textarea } from '@heroui/input';
 import toast from 'react-hot-toast';
+import { useNavigate } from 'react-router-dom';
 
 import {
   checkVpsHost,
@@ -31,6 +32,8 @@ interface VpsHost {
   sshPort: number;
   sshUsername: string;
   origin: 'USER' | 'ADMIN';
+  createdByUserId?: number;
+  createdByUserName?: string;
   ownerUserId?: number;
   ownerUserName?: string;
   assignedUserId?: number;
@@ -100,6 +103,7 @@ const taskMeta = (status: DeploymentTask['taskStatus']) => {
 };
 
 export default function VpsPage() {
+  const navigate = useNavigate();
   const [isAdmin, setIsAdmin] = useState(false);
   const [hosts, setHosts] = useState<VpsHost[]>([]);
   const [assignableUsers, setAssignableUsers] = useState<AssignableUser[]>([]);
@@ -290,7 +294,9 @@ export default function VpsPage() {
             <h1 className="text-xl font-bold text-foreground sm:text-2xl">VPS 托管</h1>
           </div>
           <p className="mt-1 text-sm text-default-500">
-            {isAdmin ? '管理管理员库存与用户托管的服务器。' : '托管自己的 VPS，或使用管理员分配给你的 VPS。'}
+            {isAdmin
+              ? '管理管理员库存与用户托管的服务器；托管来源、使用者和操作发起人均会保留，管理员可统一管理关联转发。'
+              : '托管自己的 VPS，或使用管理员分配给你的 VPS；可从 VPS 直接添加转发并选择已授权隧道。'}
           </p>
         </div>
         <Button color="primary" onPress={openCreate} className="min-h-10">
@@ -328,17 +334,19 @@ export default function VpsPage() {
                 </CardHeader>
                 <CardBody className="gap-3 pt-1">
                   <div className="grid grid-cols-1 gap-2 text-xs text-default-600 sm:grid-cols-2">
-                    <div className="rounded-lg bg-default-100/70 p-2 dark:bg-default-100/10"><span className="text-default-500">归属</span><p className="mt-1 font-medium text-foreground">{host.origin === 'USER' ? `${host.ownerUserName || '用户'} 托管` : '管理员库存'}</p></div>
-                    <div className="rounded-lg bg-default-100/70 p-2 dark:bg-default-100/10"><span className="text-default-500">分配</span><p className="mt-1 font-medium text-foreground">{host.assignedUserName || (host.origin === 'ADMIN' ? '尚未分配' : '托管用户可用')}</p></div>
+                    <div className="rounded-lg bg-default-100/70 p-2 dark:bg-default-100/10"><span className="text-default-500">托管来源 / 创建者</span><p className="mt-1 font-medium text-foreground">{host.origin === 'USER' ? `用户托管 · ${host.createdByUserName || host.ownerUserName || '用户'}` : `管理员库存 · ${host.createdByUserName || '历史管理员录入'}`}</p></div>
+                    <div className="rounded-lg bg-default-100/70 p-2 dark:bg-default-100/10"><span className="text-default-500">可使用者</span><p className="mt-1 font-medium text-foreground">{host.assignedUserName || (host.origin === 'ADMIN' ? '尚未分配' : '托管用户可用')}</p></div>
                   </div>
                   <div className="text-xs text-default-500">
                     <p>{host.lastCheckMessage || '等待首次 SSH 操作或手动检测'}</p>
                     <p className="mt-1">最近 SSH 操作 / 检测：{formatTime(host.lastCheckTime)}{host.lastLatencyMs !== undefined && host.lastLatencyMs !== null ? ` · ${host.lastLatencyMs} ms` : ''}</p>
+                    <p className="mt-1">转发规则会记录关联 VPS 与创建/归属用户；管理员始终可以查看、诊断和管理这些规则。</p>
                   </div>
                   {host.remark && <p className="rounded-lg border border-divider px-2 py-1.5 text-xs text-default-500">{host.remark}</p>}
                   <div className="flex flex-wrap gap-2 border-t border-divider pt-3">
                     <Button size="sm" variant="flat" color="primary" onPress={() => void checkHost(host)} isDisabled={!host.canOperate}>一键 Ping</Button>
                     <Button size="sm" variant="flat" color="secondary" onPress={() => setTerminalHost(host)} isDisabled={!host.canOperate}>在线 SSH</Button>
+                    <Button size="sm" variant="flat" color="success" onPress={() => navigate(`/forward?vpsHostId=${host.id}`)} isDisabled={!host.canOperate}>添加转发</Button>
                     <Button size="sm" variant="flat" onPress={() => setDeploymentHost(host)} isDisabled={!host.canOperate}>一键部署</Button>
                     <Button size="sm" variant="light" onPress={() => setTasksHost(host)} isDisabled={!host.canOperate}>任务日志</Button>
                     {host.canManage && <Button size="sm" variant="light" onPress={() => openEdit(host)}>编辑</Button>}
@@ -386,11 +394,11 @@ export default function VpsPage() {
       </Modal>
 
       <Modal isOpen={deploymentHost !== null} onOpenChange={(open) => { if (!open) setDeploymentHost(null); }} size="lg" backdrop="blur">
-        <ModalContent>{deploymentHost && <><ModalHeader>一键部署 · {deploymentHost.name}</ModalHeader><ModalBody><p className="text-sm text-default-600">只可执行经过审核的模板，不支持从浏览器提交任意 Shell 命令。执行日志会保存在此 VPS 的任务记录中。</p><label className="rounded-lg border border-divider p-3"><input type="radio" name="deployment-template" checked={deploymentTemplate === 'docker'} onChange={() => setDeploymentTemplate('docker')} className="mr-2" /><span className="font-medium">安装 / 检查 Docker</span><p className="mt-1 pl-5 text-xs text-default-500">若 Docker 已存在则仅检查版本；否则使用 Docker 官方安装脚本。</p></label><label className="rounded-lg border border-divider p-3"><input type="radio" name="deployment-template" checked={deploymentTemplate === 'flux_panel'} onChange={() => setDeploymentTemplate('flux_panel')} className="mr-2" /><span className="font-medium">部署 Flux Panel 后端与前端</span><p className="mt-1 pl-5 text-xs text-default-500">先确保 Docker 可用，再运行本项目 main 分支的面板安装脚本。</p></label><div className="rounded-lg bg-warning-50 p-3 text-xs text-warning-800 dark:bg-warning-100/10 dark:text-warning-200">该操作会在远程 VPS 上安装软件或创建服务。请确认目标服务器和 SSH 账号正确。</div></ModalBody><ModalFooter><Button variant="light" onPress={() => setDeploymentHost(null)}>取消</Button><Button color="primary" isLoading={deploymentSubmitting} onPress={() => void startDeployment}>确认执行</Button></ModalFooter></>}</ModalContent>
+        <ModalContent>{deploymentHost && <><ModalHeader>一键部署 · {deploymentHost.name}</ModalHeader><ModalBody><p className="text-sm text-default-600">只可执行经过审核的模板，不支持从浏览器提交任意 Shell 命令。执行日志会保存在此 VPS 的任务记录中。</p><label className="rounded-lg border border-divider p-3"><input type="radio" name="deployment-template" checked={deploymentTemplate === 'docker'} onChange={() => setDeploymentTemplate('docker')} className="mr-2" /><span className="font-medium">安装 / 检查 Docker</span><p className="mt-1 pl-5 text-xs text-default-500">若 Docker 已存在则仅检查版本；否则使用 Docker 官方安装脚本。</p></label><label className="rounded-lg border border-divider p-3"><input type="radio" name="deployment-template" checked={deploymentTemplate === 'flux_panel'} onChange={() => setDeploymentTemplate('flux_panel')} className="mr-2" /><span className="font-medium">部署 Flux Panel 后端与前端</span><p className="mt-1 pl-5 text-xs text-default-500">先确保 Docker 可用，再运行本项目 main 分支的面板安装脚本。</p></label><div className="rounded-lg bg-primary-50 p-3 text-xs text-primary-800 dark:bg-primary-100/10 dark:text-primary-200">部署环境不会自动创建转发。完成后请点击“添加转发”，选择你已获授权的隧道，并填写此 VPS 上服务的端口。</div><div className="rounded-lg bg-warning-50 p-3 text-xs text-warning-800 dark:bg-warning-100/10 dark:text-warning-200">该操作会在远程 VPS 上安装软件或创建服务。请确认目标服务器和 SSH 账号正确。</div></ModalBody><ModalFooter><Button variant="light" onPress={() => setDeploymentHost(null)}>取消</Button><Button color="primary" isLoading={deploymentSubmitting} onPress={() => void startDeployment}>确认执行</Button></ModalFooter></>}</ModalContent>
       </Modal>
 
       <Modal isOpen={tasksHost !== null} onOpenChange={(open) => { if (!open) setTasksHost(null); }} size="4xl" scrollBehavior="inside" backdrop="blur">
-        <ModalContent>{tasksHost && <><ModalHeader className="flex items-center justify-between gap-3"><span>{tasksHost.name} · 部署任务</span><Button size="sm" variant="flat" onPress={() => void loadTasks(tasksHost)} isLoading={tasksLoading}>刷新</Button></ModalHeader><ModalBody className="pb-5">{tasksLoading && tasks.length === 0 ? <div className="py-12 text-center"><Spinner label="正在加载任务…" /></div> : tasks.length === 0 ? <div className="py-12 text-center text-sm text-default-500">暂无部署任务</div> : <div className="space-y-3">{tasks.map((task) => { const meta = taskMeta(task.taskStatus); return <div key={task.id} className="rounded-xl border border-divider"><div className="flex flex-wrap items-center justify-between gap-2 border-b border-divider px-3 py-2"><div><span className="font-medium text-sm">{task.taskType === 'docker' ? 'Docker 环境' : 'Flux Panel 部署'}</span><p className="mt-0.5 text-xs text-default-500">{task.requestedByUserName || '用户'} · {formatTime(task.createdTime)}</p></div><Chip size="sm" color={meta.color} variant="flat">{meta.text}</Chip></div><pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words bg-slate-950 p-3 text-xs leading-5 text-slate-100">{task.outputLog || '等待输出…'}</pre></div>; })}</div>}</ModalBody></>}</ModalContent>
+        <ModalContent>{tasksHost && <><ModalHeader className="flex items-center justify-between gap-3"><span>{tasksHost.name} · 部署任务</span><Button size="sm" variant="flat" onPress={() => void loadTasks(tasksHost)} isLoading={tasksLoading}>刷新</Button></ModalHeader><ModalBody className="pb-5">{tasksLoading && tasks.length === 0 ? <div className="py-12 text-center"><Spinner label="正在加载任务…" /></div> : tasks.length === 0 ? <div className="py-12 text-center text-sm text-default-500">暂无部署任务</div> : <div className="space-y-3">{tasks.map((task) => { const meta = taskMeta(task.taskStatus); return <div key={task.id} className="rounded-xl border border-divider"><div className="flex flex-wrap items-center justify-between gap-2 border-b border-divider px-3 py-2"><div><span className="font-medium text-sm">{task.taskType === 'docker' ? 'Docker 环境' : 'Flux Panel 部署'}</span><p className="mt-0.5 text-xs text-default-500">发起人：{task.requestedByUserName || '用户'} · {formatTime(task.createdTime)}</p></div><Chip size="sm" color={meta.color} variant="flat">{meta.text}</Chip></div><pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words bg-slate-950 p-3 text-xs leading-5 text-slate-100">{task.outputLog || '等待输出…'}</pre></div>; })}</div>}</ModalBody></>}</ModalContent>
       </Modal>
     </div>
   );

@@ -83,6 +83,7 @@ public class VpsHostServiceImpl extends ServiceImpl<VpsHostMapper, VpsHost> impl
         host.setSshUsername(hostDto.getSshUsername().trim());
         host.setSshPassword(encryptCredential(hostDto.getSshPassword()));
         host.setOrigin(administrator ? ORIGIN_ADMIN : ORIGIN_USER);
+        host.setCreatedByUserId(actor.userId);
         host.setOwnerUserId(administrator ? null : actor.userId);
         host.setAssignedUserId(administrator ? hostDto.getAssignedUserId() : null);
         host.setRemark(trimToNull(hostDto.getRemark()));
@@ -336,6 +337,7 @@ public class VpsHostServiceImpl extends ServiceImpl<VpsHostMapper, VpsHost> impl
     private VpsHostView toView(VpsHost host, Actor actor, Map<Long, String> userNames) {
         VpsHostView view = new VpsHostView();
         BeanUtils.copyProperties(host, view, "sshPassword", "status");
+        view.setCreatedByUserName(userNames.get(host.getCreatedByUserId()));
         view.setOwnerUserName(userNames.get(host.getOwnerUserId()));
         view.setAssignedUserName(userNames.get(host.getAssignedUserId()));
         view.setCanOperate(canOperate(host, actor));
@@ -348,6 +350,7 @@ public class VpsHostServiceImpl extends ServiceImpl<VpsHostMapper, VpsHost> impl
         List<Long> userIds = hosts.stream()
                 .flatMap(host -> {
                     List<Long> ids = new ArrayList<>();
+                    if (host.getCreatedByUserId() != null) ids.add(host.getCreatedByUserId());
                     if (host.getOwnerUserId() != null) ids.add(host.getOwnerUserId());
                     if (host.getAssignedUserId() != null) ids.add(host.getAssignedUserId());
                     return ids.stream();

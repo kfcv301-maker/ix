@@ -32,6 +32,9 @@ public class Forward extends BaseEntity{
 
     private String remoteAddr;
 
+    /** Optional VPS record that supplies the target service for this forward. */
+    private Long vpsHostId;
+
     private String interfaceName;
 
     private String strategy;

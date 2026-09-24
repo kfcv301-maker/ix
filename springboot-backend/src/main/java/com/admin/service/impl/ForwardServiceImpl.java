@@ -80,6 +80,9 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
     @Resource
     private ForwardPortReservationService forwardPortReservationService;
 
+    @Resource
+    private VpsHostService vpsHostService;
+
 
     @Override
     public R createForward(ForwardDto forwardDto) {
@@ -99,6 +102,11 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
         UserPermissionResult permissionResult = checkUserPermissions(currentUser, tunnel, null);
         if (permissionResult.isHasError()) {
             return R.err(permissionResult.getErrorMessage());
+        }
+
+        R vpsAccess = validateVpsHostAccess(currentUser, forwardDto.getVpsHostId());
+        if (vpsAccess.getCode() != 0) {
+            return vpsAccess;
         }
 
         // The availability query is only an optimization. The reservation row
@@ -211,6 +219,12 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
             return R.err(permissionResult.getErrorMessage());
         }
 
+        Long nextVpsHostId = resolveVpsHostId(forwardUpdateDto, existForward);
+        R vpsAccess = validateUpdatedForwardVpsHost(existForward, nextVpsHostId);
+        if (vpsAccess.getCode() != 0) {
+            return vpsAccess;
+        }
+
         // 5. Keep the existing service-name convention for administrator-owned
         // forwards while using the validated assignment for regular users.
         UserTunnel userTunnel = permissionResult.getUserTunnel();
@@ -220,6 +234,7 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
 
         // 6. 更新Forward对象
         Forward updatedForward = updateForwardEntity(forwardUpdateDto, existForward, tunnel);
+        updatedForward.setVpsHostId(nextVpsHostId);
         boolean portLayoutChanged = tunnelChanged
                 || !Objects.equals(updatedForward.getInPort(), existForward.getInPort())
                 || !Objects.equals(updatedForward.getOutPort(), existForward.getOutPort());
@@ -916,6 +931,12 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
         Forward forward = new Forward();
         BeanUtils.copyProperties(forwardUpdateDto, forward);
 
+        // The owner is established when the forward is created. An
+        // administrator may operate another user's rule, but an edit must not
+        // silently transfer ownership simply because userId came from a form.
+        forward.setUserId(existForward.getUserId());
+        forward.setUserName(existForward.getUserName());
+
         // 处理端口分配逻辑
         boolean tunnelChanged = !existForward.getTunnelId().equals(forwardUpdateDto.getTunnelId());
         boolean inPortChanged = forwardUpdateDto.getInPort() != null &&
@@ -943,6 +964,59 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
 
         forward.setUpdatedTime(System.currentTimeMillis());
         return forward;
+    }
+
+    /**
+     * Resolves the optional VPS association without breaking older clients
+     * that do not include the new field on an edit request.
+     */
+    private Long resolveVpsHostId(ForwardUpdateDto updateDto, Forward existForward) {
+        if (Boolean.TRUE.equals(updateDto.getClearVpsHost())) {
+            return null;
+        }
+        return updateDto.getVpsHostId() == null ? existForward.getVpsHostId() : updateDto.getVpsHostId();
+    }
+
+    /**
+     * A VPS association is descriptive metadata, but it must still be checked
+     * at creation time so a user cannot attach someone else's SSH host to a
+     * rule. The target address remains independently validated by the normal
+     * forwarding flow.
+     */
+    private R validateVpsHostAccess(UserInfo user, Long vpsHostId) {
+        if (vpsHostId == null) {
+            return R.ok();
+        }
+        if (user == null || user.getUserId() == null) {
+            return R.err("当前登录用户无效");
+        }
+        boolean administrator = Objects.equals(user.getRoleId(), ADMIN_ROLE_ID);
+        VpsHost host = vpsHostService.findOperableHost(user.getUserId().longValue(), administrator, vpsHostId);
+        return host == null
+                ? R.err("关联 VPS 不存在、已移除或当前用户无权使用")
+                : R.ok();
+    }
+
+    /**
+     * Editing a regular user's rule is evaluated as that rule's owner even
+     * when an administrator clicks save. This keeps assigned VPS boundaries
+     * intact. A stale link to a VPS that was later removed is retained as
+     * history and does not prevent unrelated forward edits; any new link is
+     * always re-authorized.
+     */
+    private R validateUpdatedForwardVpsHost(Forward existForward, Long nextVpsHostId) {
+        if (Objects.equals(existForward.getVpsHostId(), nextVpsHostId)) {
+            return R.ok();
+        }
+        if (nextVpsHostId == null) {
+            return R.ok();
+        }
+        User owner = userService.getById(existForward.getUserId());
+        if (owner == null) {
+            return R.err("转发归属用户不存在");
+        }
+        return validateVpsHostAccess(new UserInfo(owner.getId().intValue(), owner.getRoleId(), owner.getUser()),
+                nextVpsHostId);
     }
 
     /**

@@ -35,6 +35,9 @@ public class VpsHost extends BaseEntity {
     /** USER for a user-submitted VPS, ADMIN for panel/administrator inventory. */
     private String origin;
 
+    /** Account that originally entered this VPS into the panel. */
+    private Long createdByUserId;
+
     /** The regular user who submitted a USER-origin host; null for ADMIN inventory. */
     private Long ownerUserId;
 

@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { Card, CardBody, CardHeader } from "@heroui/card";
 import { Button } from "@heroui/button";
 import { Input } from "@heroui/input";
@@ -45,7 +46,8 @@ import {
   diagnoseTunnelForwards,
   getTunnelForwardDiagnosisTask,
   cancelTunnelForwardDiagnosisTask,
-  updateForwardOrder
+  updateForwardOrder,
+  getVpsHosts
 } from "@/api";
 import { JwtUtil } from "@/utils/jwt";
 
@@ -66,6 +68,10 @@ interface Forward {
   createdTime: string;
   userName?: string;
   userId?: number;
+  vpsHostId?: number;
+  vpsHostName?: string;
+  vpsHostOrigin?: 'USER' | 'ADMIN';
+  vpsHostStatus?: number;
   inx?: number;
   syncOperation?: 'pause' | 'resume' | 'delete';
   syncState?: 'syncing' | 'partial';
@@ -91,8 +97,22 @@ interface ForwardForm {
   tunnelId: number | null;
   inPort: number | null;
   remoteAddr: string;
+  vpsHostId: number | null;
+  clearVpsHost: boolean;
+  vpsHostName?: string;
+  vpsHostOrigin?: 'USER' | 'ADMIN';
   interfaceName?: string;
   strategy: string;
+}
+
+interface VpsHost {
+  id: number;
+  name: string;
+  host: string;
+  origin: 'USER' | 'ADMIN';
+  ownerUserName?: string;
+  assignedUserName?: string;
+  canOperate: boolean;
 }
 
 interface AddressItem {
@@ -152,10 +172,22 @@ interface TunnelPingSummary {
   forwards: TunnelPingForwardReport[];
 }
 
+const formatVpsTargetAddress = (host: VpsHost) => {
+  const address = host.host.trim();
+  if (!address) return '';
+  return address.includes(':') && !address.startsWith('[') ? `[${address}]:` : `${address}:`;
+};
+
+const vpsOriginLabel = (origin?: VpsHost['origin']) => origin === 'ADMIN' ? '管理员托管' : '用户托管';
+
 export default function ForwardPage() {
+  const location = useLocation();
+  const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [forwards, setForwards] = useState<Forward[]>([]);
   const [tunnels, setTunnels] = useState<Tunnel[]>([]);
+  const [vpsHosts, setVpsHosts] = useState<VpsHost[]>([]);
+  const handledVpsLaunchRef = useRef<string | null>(null);
   
   // 检测是否为移动端
   const [isMobile, setIsMobile] = useState(false);
@@ -236,6 +268,8 @@ export default function ForwardPage() {
     tunnelId: null,
     inPort: null,
     remoteAddr: '',
+    vpsHostId: null,
+    clearVpsHost: false,
     interfaceName: '',
     strategy: 'fifo'
   });
@@ -245,6 +279,24 @@ export default function ForwardPage() {
   const [selectedTunnel, setSelectedTunnel] = useState<Tunnel | null>(null);
 
   const isAdministrator = JwtUtil.getRoleIdFromToken() === 0;
+  const selectedVpsHost = form.vpsHostId === null
+    ? undefined
+    : vpsHosts.find((host) => host.id === form.vpsHostId);
+  const vpsOptions: VpsHost[] = [{
+    id: 0,
+    name: '不关联托管 VPS',
+    host: '',
+    origin: 'USER',
+    canOperate: true,
+  }, ...(form.vpsHostId !== null && !selectedVpsHost
+    ? [...vpsHosts, {
+      id: form.vpsHostId,
+      name: form.vpsHostName ? `${form.vpsHostName}（历史关联）` : '已移除 VPS（历史关联）',
+      host: '',
+      origin: form.vpsHostOrigin || 'USER',
+      canOperate: false,
+    }]
+    : vpsHosts)];
 
   const getDirectVisibleForwards = (source: Forward[]) => {
     const currentUserId = JwtUtil.getUserIdFromToken();
@@ -372,9 +424,10 @@ export default function ForwardPage() {
   const loadData = async (lod = true) => {
     setLoading(lod);
     try {
-      const [forwardsRes, tunnelsRes] = await Promise.all([
+      const [forwardsRes, tunnelsRes, vpsHostsRes] = await Promise.all([
         getForwardList(),
-        userTunnel()
+        userTunnel(),
+        getVpsHosts()
       ]);
       
       if (forwardsRes.code === 0) {
@@ -437,6 +490,12 @@ export default function ForwardPage() {
         setTunnels(tunnelsRes.data || []);
       } else {
         console.warn('获取隧道列表失败:', tunnelsRes.msg);
+      }
+
+      if (vpsHostsRes.code === 0) {
+        setVpsHosts(Array.isArray(vpsHostsRes.data) ? vpsHostsRes.data : []);
+      } else {
+        console.warn('获取 VPS 列表失败:', vpsHostsRes.msg);
       }
     } catch (error) {
       console.error('加载数据失败:', error);
@@ -537,13 +596,17 @@ export default function ForwardPage() {
   };
 
   // 新增转发
-  const handleAdd = () => {
+  const handleAdd = (sourceHost?: VpsHost) => {
     setIsEdit(false);
     setForm({
       name: '',
       tunnelId: null,
       inPort: null,
-      remoteAddr: '',
+      remoteAddr: sourceHost ? formatVpsTargetAddress(sourceHost) : '',
+      vpsHostId: sourceHost?.id ?? null,
+      clearVpsHost: false,
+      vpsHostName: sourceHost?.name,
+      vpsHostOrigin: sourceHost?.origin,
       interfaceName: '',
       strategy: 'fifo'
     });
@@ -557,6 +620,9 @@ export default function ForwardPage() {
     // API payloads may encode IDs as either numbers or strings. Normalize the
     // selected key so HeroUI can find the matching SelectItem reliably.
     const tunnelId = Number(forward.tunnelId);
+    const vpsHostId = forward.vpsHostId === undefined || forward.vpsHostId === null
+      ? null
+      : Number(forward.vpsHostId);
     const selected = tunnels.find((tunnel) => String(tunnel.id) === String(forward.tunnelId));
     setIsEdit(true);
     setForm({
@@ -566,6 +632,10 @@ export default function ForwardPage() {
       tunnelId: Number.isInteger(tunnelId) ? tunnelId : null,
       inPort: forward.inPort,
       remoteAddr: forward.remoteAddr.split(',').join('\n'),
+      vpsHostId: Number.isInteger(vpsHostId) ? vpsHostId : null,
+      clearVpsHost: false,
+      vpsHostName: forward.vpsHostName,
+      vpsHostOrigin: forward.vpsHostOrigin,
       interfaceName: forward.interfaceName || '',
       strategy: forward.strategy || 'fifo'
     });
@@ -573,6 +643,25 @@ export default function ForwardPage() {
     setErrors({});
     setModalOpen(true);
   };
+
+  // The VPS page sends a concrete host ID instead of trusting browser state.
+  // The list endpoint is already permission-filtered, so only an operable host
+  // can open a pre-filled forwarding form for the current account.
+  useEffect(() => {
+    const requestedId = new URLSearchParams(location.search).get('vpsHostId');
+    if (!requestedId || handledVpsLaunchRef.current === requestedId || loading) return;
+    handledVpsLaunchRef.current = requestedId;
+    const host = vpsHosts.find((item) => String(item.id) === requestedId);
+    if (!host || !host.canOperate) {
+      toast.error('该 VPS 不存在或你没有使用权限');
+    } else {
+      handleAdd(host);
+    }
+    const remainingParams = new URLSearchParams(location.search);
+    remainingParams.delete('vpsHostId');
+    const remainingSearch = remainingParams.toString();
+    navigate({ pathname: '/forward', search: remainingSearch ? `?${remainingSearch}` : '' }, { replace: true });
+  }, [loading, location.search, navigate, vpsHosts]);
 
   // 显示删除确认
   const handleDelete = (forward: Forward) => {
@@ -646,6 +735,8 @@ export default function ForwardPage() {
           tunnelId: form.tunnelId,
           inPort: form.inPort,
           remoteAddr: processedRemoteAddr,
+          vpsHostId: form.vpsHostId,
+          clearVpsHost: form.clearVpsHost,
           interfaceName: form.interfaceName,
           strategy: addressCount > 1 ? form.strategy : 'fifo'
         };
@@ -657,6 +748,7 @@ export default function ForwardPage() {
           tunnelId: form.tunnelId,
           inPort: form.inPort,
           remoteAddr: processedRemoteAddr,
+          vpsHostId: form.vpsHostId,
           interfaceName: form.interfaceName,
           strategy: addressCount > 1 ? form.strategy : 'fifo'
         };
@@ -1482,6 +1574,19 @@ export default function ForwardPage() {
               </div>
             </div>
 
+            <div className="flex flex-wrap gap-1.5 border-t border-divider pt-2">
+              <Chip variant="flat" size="sm" className="max-w-full text-xs" color={isAdministrator ? 'secondary' : 'primary'}>
+                {isAdministrator ? `创建 / 归属：${forward.userName || '未知用户'}` : `归属：${forward.userName || '我的账号'}`}
+              </Chip>
+              <Chip variant="flat" size="sm" className="max-w-full text-xs" color={forward.vpsHostId ? 'success' : 'default'}>
+                {forward.vpsHostId
+                  ? forward.vpsHostName && forward.vpsHostStatus !== 0
+                    ? `关联 VPS：${forward.vpsHostName} · ${vpsOriginLabel(forward.vpsHostOrigin)}`
+                    : `关联 VPS：${forward.vpsHostName || '已移除 VPS'}（历史记录）`
+                  : '目标：手动填写'}
+              </Chip>
+            </div>
+
             {/* 统计信息 */}
             <div className="flex items-center justify-between pt-2 border-t border-divider">
               <Chip color={strategyDisplay.color as any} variant="flat" size="sm" className="text-xs">
@@ -1573,6 +1678,12 @@ export default function ForwardPage() {
         {/* 页面头部 */}
         <div className="flex items-center justify-between mb-6">
           <div className="flex-1">
+            <h1 className="text-xl font-bold text-foreground sm:text-2xl">转发管理</h1>
+            <p className="mt-1 text-sm text-default-500">
+              {isAdministrator
+                ? '可查看并管理所有用户创建的转发；规则会标明创建/归属用户和关联的托管 VPS。'
+                : '可为自己托管或管理员分配的 VPS 创建转发，并选择管理员已授权给你的隧道。'}
+            </p>
           </div>
           <div className="flex items-center gap-3">
             {isAdministrator && viewMode === 'direct' && (
@@ -1640,7 +1751,7 @@ export default function ForwardPage() {
               size="sm"
               variant="flat"
               color="primary"
-              onPress={handleAdd}
+              onPress={() => handleAdd()}
              
             >
               新增
@@ -1675,7 +1786,7 @@ export default function ForwardPage() {
                         </div>
                       </div>
                       <Chip color="primary" variant="flat" size="sm" className="text-xs flex-shrink-0 ml-2">
-                        用户
+                        创建 / 归属用户
                       </Chip>
                     </div>
                   </CardHeader>
@@ -1844,7 +1955,52 @@ export default function ForwardPage() {
                     />
                     
                     <Select
-                      label="选择隧道"
+                      label="关联托管 VPS（可选）"
+                      placeholder="选择目标服务所在的 VPS"
+                      selectedKeys={form.vpsHostId !== null ? [String(form.vpsHostId)] : ['0']}
+                      onSelectionChange={(keys) => {
+                        if (keys === 'all') return;
+                        const selectedKey = Array.from(keys)[0];
+                        if (selectedKey === undefined) return;
+                        if (String(selectedKey) === '0') {
+                          setForm((previous) => ({
+                            ...previous,
+                            vpsHostId: null,
+                            clearVpsHost: true,
+                            vpsHostName: undefined,
+                            vpsHostOrigin: undefined,
+                          }));
+                          return;
+                        }
+                        const host = vpsOptions.find((item) => String(item.id) === String(selectedKey));
+                        if (!host) return;
+                        setForm((previous) => ({
+                          ...previous,
+                          vpsHostId: host.id,
+                          clearVpsHost: false,
+                          vpsHostName: host.name.replace('（历史关联）', ''),
+                          vpsHostOrigin: host.origin,
+                          remoteAddr: previous.remoteAddr.trim() ? previous.remoteAddr : formatVpsTargetAddress(host),
+                        }));
+                      }}
+                      variant="bordered"
+                      description={
+                        selectedVpsHost
+                          ? `已关联 ${selectedVpsHost.name}；请在目标地址中补全该 VPS 上服务的端口。`
+                          : form.vpsHostId !== null
+                            ? '该 VPS 已从托管列表移除，历史关联会保留；可改选可用 VPS 或选择不关联。'
+                            : '可选择自己托管或管理员分配的 VPS。关联会记录在转发中，管理员可统一查看和管理。'
+                      }
+                    >
+                      {vpsOptions.map((host) => (
+                        <SelectItem key={String(host.id)} textValue={host.id === 0 ? host.name : `${host.name} · ${vpsOriginLabel(host.origin)}`}>
+                          {host.id === 0 ? host.name : <>{host.name} · {vpsOriginLabel(host.origin)}{host.host ? ` · ${host.host}` : ''}</>}
+                        </SelectItem>
+                      ))}
+                    </Select>
+
+                    <Select
+                      label={isAdministrator ? '选择隧道' : '选择已授权隧道'}
                       placeholder="请选择关联的隧道"
                       selectedKeys={form.tunnelId !== null ? [String(form.tunnelId)] : []}
                       onSelectionChange={(keys) => {
@@ -1858,6 +2014,11 @@ export default function ForwardPage() {
                       isInvalid={!!errors.tunnelId}
                       errorMessage={errors.tunnelId}
                       variant="bordered"
+                      description={
+                        isAdministrator
+                          ? '管理员可管理任意隧道；保存时仍会按照该转发归属用户的权限、配额和限速进行校验。'
+                          : '这里只显示管理员已分配给你的隧道；入口地址、端口范围、流量配额和限速均按该授权执行。'
+                      }
                     >
                       {tunnels.map((tunnel) => (
                         <SelectItem key={String(tunnel.id)} textValue={`${tunnel.name}${tunnel.ip ? ` · ${tunnel.ip}` : ''}`}>
@@ -1902,14 +2063,18 @@ export default function ForwardPage() {
                     />
                     
                     <Textarea
-                      label="远程地址"
+                      label={selectedVpsHost ? `目标地址 · ${selectedVpsHost.name}` : '目标地址'}
                       placeholder="请输入远程地址，多个地址用换行分隔&#10;例如:&#10;192.168.1.100:8080&#10;example.com:3000"
                       value={form.remoteAddr}
                       onChange={(e) => setForm(prev => ({ ...prev, remoteAddr: e.target.value }))}
                       isInvalid={!!errors.remoteAddr}
                       errorMessage={errors.remoteAddr}
                       variant="bordered"
-                      description="格式: IP:端口 或 域名:端口，支持多个地址（每行一个）"
+                      description={
+                        selectedVpsHost
+                          ? `已关联 ${selectedVpsHost.name}：填写该 VPS 上实际服务的 IP/域名和端口；支持多个地址（每行一个）。`
+                          : '格式: IP:端口 或 域名:端口，支持多个地址（每行一个）'
+                      }
                       minRows={3}
                       maxRows={6}
                     />

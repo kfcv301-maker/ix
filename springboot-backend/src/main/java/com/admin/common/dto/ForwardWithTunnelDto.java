@@ -34,6 +34,12 @@ public class ForwardWithTunnelDto {
      * 远程地址
      */
     private String remoteAddr;
+
+    /** Optional hosting record selected when the rule was created. */
+    private Long vpsHostId;
+    private String vpsHostName;
+    private String vpsHostOrigin;
+    private Integer vpsHostStatus;
     
     /**
      * 转发状态

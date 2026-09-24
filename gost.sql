@@ -36,6 +36,7 @@ CREATE TABLE `forward` (
   `in_port` int(10) NOT NULL,
   `out_port` int(10) DEFAULT NULL,
   `remote_addr` longtext NOT NULL,
+  `vps_host_id` bigint(20) DEFAULT NULL,
   `strategy` varchar(100) NOT NULL DEFAULT 'fifo',
   `interface_name` varchar(200) DEFAULT NULL,
   `in_flow` bigint(20) NOT NULL DEFAULT '0',
@@ -319,6 +320,7 @@ CREATE TABLE `vps_host` (
   `ssh_username` varchar(100) NOT NULL,
   `ssh_password` longtext NOT NULL,
   `origin` varchar(16) NOT NULL,
+  `created_by_user_id` bigint(20) DEFAULT NULL,
   `owner_user_id` bigint(20) DEFAULT NULL,
   `assigned_user_id` bigint(20) DEFAULT NULL,
   `remark` varchar(1000) DEFAULT NULL,
@@ -363,7 +365,8 @@ INSERT INTO `vite_config` (`id`, `name`, `value`, `time`) VALUES
 ALTER TABLE `forward`
   ADD PRIMARY KEY (`id`),
   ADD KEY `idx_forward_user_tunnel` (`user_id`,`tunnel_id`),
-  ADD KEY `idx_forward_tunnel` (`tunnel_id`);
+  ADD KEY `idx_forward_tunnel` (`tunnel_id`),
+  ADD KEY `idx_forward_vps_host` (`vps_host_id`);
 
 --
 -- 表的索引 `forward_pause_task`
@@ -451,6 +454,7 @@ ALTER TABLE `vite_config`
 
 ALTER TABLE `vps_host`
   ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_vps_host_creator` (`created_by_user_id`),
   ADD KEY `idx_vps_host_owner` (`owner_user_id`),
   ADD KEY `idx_vps_host_assigned` (`assigned_user_id`),
   ADD KEY `idx_vps_host_status` (`status`);
