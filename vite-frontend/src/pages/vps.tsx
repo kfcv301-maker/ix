@@ -5,6 +5,7 @@ import { Chip } from '@heroui/chip';
 import { Input } from '@heroui/input';
 import { Modal, ModalBody, ModalContent, ModalFooter, ModalHeader } from '@heroui/modal';
 import { Spinner } from '@heroui/spinner';
+import { Alert } from '@heroui/alert';
 import { Textarea } from '@heroui/input';
 import toast from 'react-hot-toast';
 import { useNavigate } from 'react-router-dom';
@@ -112,6 +113,7 @@ export default function VpsPage() {
   const [submitting, setSubmitting] = useState(false);
   const [editingHost, setEditingHost] = useState<VpsHost | null>(null);
   const [form, setForm] = useState<VpsForm>(emptyForm());
+  const [formError, setFormError] = useState('');
   const [terminalHost, setTerminalHost] = useState<VpsHost | null>(null);
   const [deploymentHost, setDeploymentHost] = useState<VpsHost | null>(null);
   const [deploymentTemplate, setDeploymentTemplate] = useState<DeploymentTemplate>('docker');
@@ -175,11 +177,13 @@ export default function VpsPage() {
   const openCreate = () => {
     setEditingHost(null);
     setForm(emptyForm());
+    setFormError('');
     setFormOpen(true);
   };
 
   const openEdit = (host: VpsHost) => {
     setEditingHost(host);
+    setFormError('');
     setForm({
       name: host.name,
       host: host.host,
@@ -194,16 +198,26 @@ export default function VpsPage() {
 
   const updateForm = <K extends keyof VpsForm>(key: K, value: VpsForm[K]) => {
     setForm((previous) => ({ ...previous, [key]: value }));
+    setFormError('');
+  };
+
+  const rejectForm = (message: string) => {
+    setFormError(message);
+    toast.error(message);
   };
 
   const submitForm = async () => {
     const port = Number(form.sshPort);
     if (!form.name.trim() || !form.host.trim() || !form.sshUsername.trim() || !Number.isInteger(port) || port < 1 || port > 65535) {
-      toast.error('请完整填写 VPS 名称、SSH 地址、端口和用户名');
+      rejectForm('请完整填写 VPS 名称、SSH 地址、1–65535 的端口和用户名');
       return;
     }
     if (!isEditing && !form.sshPassword) {
-      toast.error('首次托管必须填写 SSH 密码');
+      rejectForm('首次托管必须填写 SSH 密码');
+      return;
+    }
+    if (form.name.trim().length > 100 || form.host.trim().length > 255 || form.sshUsername.trim().length > 100 || form.sshPassword.length > 4096 || form.remark.trim().length > 1000) {
+      rejectForm('输入内容超过长度限制：名称和用户名最多100字，地址255字，备注1000字');
       return;
     }
     const payload = {
@@ -225,11 +239,11 @@ export default function VpsPage() {
         setFormOpen(false);
         await loadHosts(true);
       } else {
-        toast.error(response?.msg || '保存 VPS 托管信息失败');
+        rejectForm(response?.msg || '保存 VPS 托管信息失败');
       }
     } catch (error) {
       console.error('保存 VPS 托管信息失败:', error);
-      toast.error('保存 VPS 托管信息失败，请检查网络后重试');
+      rejectForm('保存 VPS 托管信息失败，请检查网络后重试');
     } finally {
       setSubmitting(false);
     }
@@ -364,9 +378,10 @@ export default function VpsPage() {
         <ModalContent>
           <ModalHeader>{isEditing ? '编辑 VPS 托管' : isAdmin ? '管理员托管 VPS' : '托管我的 VPS'}</ModalHeader>
           <ModalBody>
+            {formError && <Alert color="danger" title="无法保存托管信息" description={formError} />}
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <Input label="VPS 名称" value={form.name} onValueChange={(value) => updateForm('name', value)} placeholder="例如：洛杉矶入口机" isRequired />
-              <Input label="SSH 地址 / IP" value={form.host} onValueChange={(value) => updateForm('host', value)} placeholder="例如：203.0.113.10" isRequired />
+              <Input label="SSH 地址 / IP" value={form.host} onValueChange={(value) => updateForm('host', value)} placeholder="公网 IPv4、IPv6 或域名" isRequired />
               <Input label="SSH 端口" type="number" value={form.sshPort} onValueChange={(value) => updateForm('sshPort', value)} min={1} max={65535} isRequired />
               <Input label="SSH 用户名" value={form.sshUsername} onValueChange={(value) => updateForm('sshUsername', value)} placeholder="root" isRequired />
               <div className="sm:col-span-2">

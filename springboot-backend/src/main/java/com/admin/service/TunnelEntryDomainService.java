@@ -3,10 +3,13 @@ package com.admin.service;
 import com.admin.common.dto.TunnelEntryDomainDto;
 import com.admin.common.lang.R;
 import com.admin.entity.UserTunnel;
+import com.admin.entity.TunnelEntryDomain;
 
 import java.util.List;
 
 public interface TunnelEntryDomainService {
+
+    TunnelEntryDomain getDomainById(Long id);
 
     String ENTRY_ADDRESS_MODE_NONE = "NONE";
     String ENTRY_ADDRESS_MODE_DEFAULT = "DEFAULT";

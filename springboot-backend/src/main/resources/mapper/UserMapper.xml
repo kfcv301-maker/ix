@@ -55,13 +55,18 @@
             FROM user_tunnel ut
             INNER JOIN tunnel t ON t.id = ut.tunnel_id
             WHERE ut.user_id = #{userId}
+              AND ut.status = 1 AND t.status = 1
+              AND (ut.exp_time IS NULL OR ut.exp_time > UNIX_TIMESTAMP(CURRENT_TIMESTAMP(3)) * 1000)
 
             UNION ALL
 
             SELECT ten.node_id AS node_id
             FROM user_tunnel ut
             INNER JOIN tunnel_entry_node ten ON ten.tunnel_id = ut.tunnel_id
+            INNER JOIN tunnel t ON t.id = ut.tunnel_id
             WHERE ut.user_id = #{userId}
+              AND ut.status = 1 AND t.status = 1
+              AND (ut.exp_time IS NULL OR ut.exp_time > UNIX_TIMESTAMP(CURRENT_TIMESTAMP(3)) * 1000)
 
             UNION ALL
 
@@ -69,6 +74,14 @@
             FROM user_tunnel ut
             INNER JOIN tunnel t ON t.id = ut.tunnel_id
             WHERE ut.user_id = #{userId}
+              AND ut.status = 1 AND t.status = 1
+              AND (ut.exp_time IS NULL OR ut.exp_time > UNIX_TIMESTAMP(CURRENT_TIMESTAMP(3)) * 1000)
+
+            UNION ALL
+
+            SELECT n.id AS node_id
+            FROM node n
+            WHERE n.owner_user_id = #{userId}
         ) permitted
         WHERE permitted.node_id IS NOT NULL
     </select>

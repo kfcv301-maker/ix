@@ -25,6 +25,7 @@ import { getRealtimeSocketUrl } from "@/utils/realtime-socket";
 
 interface Node {
   id: number;
+  canManage?: boolean;
   name: string;
   ip: string;
   serverIp: string;
@@ -1138,7 +1139,7 @@ export default function NodePage() {
                   </div>
 
                   {/* 操作按钮 */}
-                  <div className="space-y-1.5">
+                  {node.canManage !== false && <div className="space-y-1.5">
                     <div className="flex gap-1.5">
                       <Button
                         size="sm"
@@ -1168,7 +1169,7 @@ export default function NodePage() {
                         删除
                       </Button>
                     </div>
-                  </div>
+                  </div>}
                 </CardBody>
               </Card>
             ))}

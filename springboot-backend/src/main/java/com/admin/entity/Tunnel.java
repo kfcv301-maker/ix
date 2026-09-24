@@ -26,6 +26,12 @@ public class Tunnel extends BaseEntity {
      */
     private String name;
 
+    /** Null for administrator-created tunnels. */
+    private Long ownerUserId;
+
+    @TableField(exist = false)
+    private Boolean canManage;
+
     /**
      * 入口节点ID
      */

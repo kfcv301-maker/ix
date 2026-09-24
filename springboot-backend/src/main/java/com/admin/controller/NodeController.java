@@ -26,7 +26,6 @@ import java.util.Map;
 public class NodeController extends BaseController {
 
     @LogAnnotation
-    @RequireRole
     @PostMapping("/create")
     public R create(@Validated @RequestBody NodeDto nodeDto) {
         return nodeService.createNode(nodeDto);
@@ -34,28 +33,24 @@ public class NodeController extends BaseController {
 
 
     @LogAnnotation
-    @RequireRole
     @PostMapping("/list")
     public R list() {
         return nodeService.getAllNodes();
     }
 
     @LogAnnotation
-    @RequireRole
     @PostMapping("/update")
     public R update(@Validated @RequestBody NodeUpdateDto nodeUpdateDto) {
         return nodeService.updateNode(nodeUpdateDto);
     }
 
     @LogAnnotation
-    @RequireRole
     @PostMapping("/delete")
     public R delete(@RequestBody Map<String, Object> params) {
         Long id = Long.valueOf(params.get("id").toString());
         return nodeService.deleteNode(id);
     }
 
-    @RequireRole
     @PostMapping("/install")
     public R getInstallCommand(@Validated @RequestBody NodeInstallCommandDto commandDto) {
         return nodeService.getInstallCommand(commandDto);

@@ -9,11 +9,13 @@ import com.admin.common.dto.NodeUpdateDto;
 import com.admin.common.lang.R;
 import com.admin.common.utils.AESCrypto;
 import com.admin.common.utils.WebSocketServer;
+import com.admin.common.utils.JwtUtil;
 import com.admin.entity.Node;
 import com.admin.entity.Tunnel;
 import com.admin.mapper.NodeMapper;
 import com.admin.mapper.TunnelMapper;
 import com.admin.mapper.TunnelEntryNodeMapper;
+import com.admin.mapper.UserMapper;
 import com.admin.service.NodeService;
 import com.admin.service.TunnelService;
 import com.alibaba.fastjson.JSONObject;
@@ -78,6 +80,9 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
     private TunnelMapper tunnelMapper;
 
     @Resource
+    private UserMapper userMapper;
+
+    @Resource
     private TunnelEntryNodeMapper tunnelEntryNodeMapper;
 
     @Resource
@@ -100,6 +105,7 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
     @Override
     public R createNode(NodeDto nodeDto) {
         Node node = buildNewNode(nodeDto);
+        if (!isAdministrator()) node.setOwnerUserId(currentUserId());
         R installSettings = applyInstallSettings(node, null, nodeDto.getTcpTuningProfile(),
                 nodeDto.getTcpTuningAutoEnabled(), nodeDto.getTcpTuningProfileMin(), nodeDto.getTcpTuningProfileMax(),
                 nodeDto.getDdnsEnabled(), nodeDto.getCfApiToken(), nodeDto.getCfRecordName());
@@ -120,7 +126,18 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
      */
     @Override
     public R getAllNodes() {
-        List<Node> nodeList = this.list();
+        boolean administrator = isAdministrator();
+        Long userId = currentUserId();
+        List<Node> nodeList;
+        if (administrator) {
+            nodeList = this.list();
+        } else {
+            List<Long> allowedIds = userMapper.getAccessibleNodeIds(userId);
+            nodeList = allowedIds == null || allowedIds.isEmpty()
+                    ? java.util.Collections.emptyList()
+                    : this.list(new QueryWrapper<Node>().in("id", allowedIds));
+        }
+        nodeList.forEach(node -> node.setCanManage(administrator || Objects.equals(node.getOwnerUserId(), userId)));
         hideNodeSecrets(nodeList);
         return R.ok(nodeList);
     }
@@ -138,6 +155,7 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
         if (node == null) {
             return R.err(ERROR_NODE_NOT_FOUND);
         }
+        if (!canManage(node)) return R.err(403, "只能修改自己创建的节点");
 
         //1.1 如果节点在线 且传入更新的 http/tls/socks 任意一项与数据库不一致，则通过 WS 通知节点更新设置
         boolean online = node.getStatus() != null && node.getStatus() == 1;
@@ -226,6 +244,7 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
         if (node == null) {
             return R.err(ERROR_NODE_NOT_FOUND);
         }
+        if (!canManage(node)) return R.err(403, "只能删除自己创建的节点");
 
         // 2. 检查节点使用情况
         R usageCheckResult = checkNodeUsage(id);
@@ -532,9 +551,22 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
         if (node == null) {
             return R.err(ERROR_NODE_NOT_FOUND);
         }
+        if (!canManage(node)) return R.err(403, "只能获取自己创建的节点安装命令");
 
         // 2. 构建安装命令
         return buildInstallCommand(node, commandDto);
+    }
+
+    private boolean isAdministrator() {
+        return Objects.equals(JwtUtil.getRoleIdFromToken(), 0);
+    }
+
+    private Long currentUserId() {
+        return Long.valueOf(JwtUtil.getUserIdFromToken());
+    }
+
+    private boolean canManage(Node node) {
+        return isAdministrator() || Objects.equals(node.getOwnerUserId(), currentUserId());
     }
 
     /**

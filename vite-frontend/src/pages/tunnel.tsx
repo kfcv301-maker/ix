@@ -28,6 +28,7 @@ import type { TunnelEntryDomain } from "@/types";
 
 interface Tunnel {
   id: number;
+  canManage?: boolean;
   name: string;
   type: number; // 1: 端口转发, 2: 隧道转发
   inNodeId: number;
@@ -47,6 +48,7 @@ interface Tunnel {
 
 interface Node {
   id: number;
+  canManage?: boolean;
   name: string;
   status: number; // 1: 在线, 0: 离线
 }
@@ -789,7 +791,7 @@ export default function TunnelPage() {
                     </div>
                     
                     <div className="grid grid-cols-2 gap-1.5 mt-3">
-                      <Button
+                      {tunnel.canManage !== false && <Button
                         size="sm"
                         variant="flat"
                         color="secondary"
@@ -803,8 +805,8 @@ export default function TunnelPage() {
                         }
                       >
                         解析域名
-                      </Button>
-                      <Button
+                      </Button>}
+                      {tunnel.canManage !== false && <Button
                         size="sm"
                         variant="flat"
                         color="primary"
@@ -817,7 +819,7 @@ export default function TunnelPage() {
                         }
                       >
                         编辑
-                      </Button>
+                      </Button>}
                       <Button
                         size="sm"
                         variant="flat"
@@ -833,7 +835,7 @@ export default function TunnelPage() {
                       >
                         一键 PING
                       </Button>
-                      <Button
+                      {tunnel.canManage !== false && <Button
                         size="sm"
                         variant="flat"
                         color="warning"
@@ -846,8 +848,8 @@ export default function TunnelPage() {
                         }
                       >
                         诊断
-                      </Button>
-                      <Button
+                      </Button>}
+                      {tunnel.canManage !== false && <Button
                         size="sm"
                         variant="flat"
                         color="danger"
@@ -861,7 +863,7 @@ export default function TunnelPage() {
                         }
                       >
                         删除
-                      </Button>
+                      </Button>}
                     </div>
                   </CardBody>
                 </Card>
@@ -998,7 +1000,7 @@ export default function TunnelPage() {
                       variant="bordered"
                       isDisabled={isEdit}
                     >
-                      {nodes.map((node) => (
+                      {nodes.filter(node => node.canManage !== false).map((node) => (
                         <SelectItem 
                           key={node.id}
                           textValue={`${node.name} (${node.status === 1 ? '在线' : '离线'})`}
@@ -1175,7 +1177,7 @@ export default function TunnelPage() {
                           variant="bordered"
                           isDisabled={isEdit}
                         >
-                          {nodes.map((node) => (
+                          {nodes.filter(node => node.canManage !== false).map((node) => (
                             <SelectItem 
                               key={node.id}
                               textValue={`${node.name} (${node.status === 1 ? '在线' : '离线'})`}

@@ -35,6 +35,11 @@ import java.util.stream.Collectors;
 public class TunnelEntryDomainServiceImpl extends ServiceImpl<TunnelEntryDomainMapper, TunnelEntryDomain>
         implements TunnelEntryDomainService {
 
+    @Override
+    public TunnelEntryDomain getDomainById(Long id) {
+        return id == null ? null : getById(id);
+    }
+
     private static final int ACTIVE_STATUS = 1;
     private static final int DEFAULT_DOMAIN = 1;
     private static final int OPTIONAL_DOMAIN = 0;

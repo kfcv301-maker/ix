@@ -19,6 +19,7 @@ import com.admin.mapper.TunnelMapper;
 import com.admin.mapper.TunnelEntryDomainMapper;
 import com.admin.mapper.TunnelEntryNodeMapper;
 import com.admin.mapper.UserTunnelMapper;
+import com.admin.mapper.UserMapper;
 import com.admin.service.ForwardService;
 import com.admin.service.NodeService;
 import com.admin.service.TunnelService;
@@ -98,6 +99,9 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
     UserTunnelMapper userTunnelMapper;
 
     @Resource
+    private UserMapper userMapper;
+
+    @Resource
     private TunnelEntryNodeMapper tunnelEntryNodeMapper;
 
     @Resource
@@ -133,6 +137,21 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
         List<Long> entryNodeIds = normalizeEntryNodeIds(tunnelDto);
         if (entryNodeIds.isEmpty()) {
             return R.err("请至少选择一个入口节点");
+        }
+        if (!isAdministrator()) {
+            for (Long nodeId : entryNodeIds) {
+                Node node = nodeService.getById(nodeId);
+                if (node == null || !Objects.equals(node.getOwnerUserId(), currentUserId())) {
+                    return R.err(403, "只能使用自己创建的入口节点");
+                }
+            }
+            if (Objects.equals(tunnelDto.getType(), TUNNEL_TYPE_TUNNEL_FORWARD)) {
+                if (tunnelDto.getOutNodeId() == null) return R.err(ERROR_OUT_NODE_REQUIRED);
+                Node outNode = nodeService.getById(tunnelDto.getOutNodeId());
+                if (outNode == null || !Objects.equals(outNode.getOwnerUserId(), currentUserId())) {
+                    return R.err(403, "只能使用自己创建的出口节点");
+                }
+            }
         }
         List<String> legacyEntryIps = normalizeEntryIps(tunnelDto);
         String entryDomain = normalizeEntryDomain(tunnelDto.getEntryDomain());
@@ -173,6 +192,7 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
 
         // 4. 构建隧道实体
         Tunnel tunnel = buildTunnelEntity(tunnelDto, inNodeValidation.getNode());
+        if (!isAdministrator()) tunnel.setOwnerUserId(currentUserId());
 
         // 5. 根据隧道类型设置出口参数
         R outNodeSetupResult = setupOutNodeParameters(tunnel, tunnelDto, inNodeValidation.getNode().getServerIp());
@@ -190,6 +210,27 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
         }
         tunnelEntryDomainService.createInitialDomains(
                 tunnel.getId(), tunnelDto.getAccessDomains(), tunnelDto.getDefaultAccessDomain());
+        if (!isAdministrator()) {
+            User user = userMapper.selectById(currentUserId());
+            if (user == null || !Objects.equals(user.getStatus(), 1)) {
+                throw new IllegalStateException("用户账号不可用");
+            }
+            UserTunnel grant = new UserTunnel();
+            grant.setUserId(user.getId().intValue());
+            grant.setTunnelId(tunnel.getId().intValue());
+            grant.setFlow(user.getFlow());
+            grant.setInFlow(0L);
+            grant.setOutFlow(0L);
+            grant.setNum(user.getNum());
+            grant.setExpTime(user.getExpTime());
+            grant.setFlowResetTime(user.getFlowResetTime());
+            grant.setEntryAddressMode("NONE");
+            grant.setStatus(1);
+            if (userTunnelMapper.insert(grant) != 1) {
+                throw new IllegalStateException("保存用户隧道授权失败");
+            }
+            WebSocketServer.closeUserSessions(user.getId());
+        }
         tunnel.setEntryNodeIds(entryNodeIds);
         return R.ok(SUCCESS_CREATE_MSG);
     }
@@ -201,7 +242,21 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
      */
     @Override
     public R getAllTunnels() {
-        List<Tunnel> tunnelList = this.list();
+        boolean administrator = isAdministrator();
+        Long userId = currentUserId();
+        List<Tunnel> tunnelList;
+        if (administrator) {
+            tunnelList = this.list();
+        } else {
+            List<Integer> grantIds = userTunnelMapper.selectList(
+                    new QueryWrapper<UserTunnel>().eq("user_id", userId)).stream()
+                    .map(UserTunnel::getTunnelId).collect(Collectors.toList());
+            QueryWrapper<Tunnel> query = new QueryWrapper<>();
+            if (grantIds.isEmpty()) query.eq("owner_user_id", userId);
+            else query.and(wrapper -> wrapper.eq("owner_user_id", userId).or().in("id", grantIds));
+            tunnelList = this.list(query);
+        }
+        tunnelList.forEach(tunnel -> tunnel.setCanManage(administrator || Objects.equals(tunnel.getOwnerUserId(), userId)));
         tunnelList.forEach(this::populateEntryNodeIds);
         return R.ok(tunnelList);
     }
@@ -219,6 +274,7 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
         if (existingTunnel == null) {
             return R.err(ERROR_TUNNEL_NOT_FOUND);
         }
+        if (!canManage(existingTunnel)) return R.err(403, "只能修改自己创建的隧道");
 
         // 2. 验证隧道名称唯一性（排除自身）
         R nameValidationResult = validateTunnelNameUniquenessForUpdate(tunnelUpdateDto.getName(), tunnelUpdateDto.getId());
@@ -283,14 +339,24 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
     @Transactional(rollbackFor = Exception.class)
     public R deleteTunnel(Long id) {
         // 1. 验证隧道是否存在
-        if (!isTunnelExists(id)) {
+        Tunnel existing = this.getById(id);
+        if (existing == null) {
             return R.err(ERROR_TUNNEL_NOT_FOUND);
         }
+        if (!canManage(existing)) return R.err(403, "只能删除自己创建的隧道");
 
         // 2. 检查隧道使用情况
-        R usageCheckResult = checkTunnelUsage(id);
+        R usageCheckResult = isAdministrator() ? checkTunnelUsage(id) : checkForwardUsage(id);
         if (usageCheckResult.getCode() != 0) {
             return usageCheckResult;
+        }
+        if (!isAdministrator()) {
+            long otherGrants = userTunnelMapper.selectCount(new QueryWrapper<UserTunnel>()
+                    .eq("tunnel_id", id).ne("user_id", currentUserId()));
+            if (otherGrants > 0) return R.err("此隧道已分配给其他用户，请联系管理员解除授权");
+            userTunnelMapper.delete(new QueryWrapper<UserTunnel>()
+                    .eq("tunnel_id", id).eq("user_id", currentUserId()));
+            WebSocketServer.closeUserSessions(currentUserId());
         }
 
         // 3. 执行删除操作
@@ -302,6 +368,18 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
             tunnelEntryDomainMapper.delete(new QueryWrapper<TunnelEntryDomain>().eq("tunnel_id", id));
         }
         return result ? R.ok(SUCCESS_DELETE_MSG) : R.err(ERROR_DELETE_MSG);
+    }
+
+    private boolean isAdministrator() {
+        return Objects.equals(JwtUtil.getRoleIdFromToken(), ADMIN_ROLE_ID);
+    }
+
+    private Long currentUserId() {
+        return Long.valueOf(JwtUtil.getUserIdFromToken());
+    }
+
+    private boolean canManage(Tunnel tunnel) {
+        return isAdministrator() || Objects.equals(tunnel.getOwnerUserId(), currentUserId());
     }
 
     /**

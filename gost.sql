@@ -115,6 +115,7 @@ CREATE TABLE `forward_port_reservation` (
 CREATE TABLE `node` (
   `id` int(10) NOT NULL,
   `name` varchar(100) NOT NULL,
+  `owner_user_id` bigint(20) DEFAULT NULL,
   `secret` varchar(100) NOT NULL,
   `ip` longtext,
   `server_ip` varchar(100) NOT NULL,
@@ -194,6 +195,7 @@ CREATE TABLE `flow_report_cursor` (
 CREATE TABLE `tunnel` (
   `id` int(10) NOT NULL,
   `name` varchar(100) NOT NULL,
+  `owner_user_id` bigint(20) DEFAULT NULL,
   `traffic_ratio` decimal(10,1) NOT NULL DEFAULT '1.0',
   `in_node_id` int(10) NOT NULL,
   `in_ip` varchar(100) NOT NULL,

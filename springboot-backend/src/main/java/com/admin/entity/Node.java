@@ -1,6 +1,7 @@
 package com.admin.entity;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.baomidou.mybatisplus.annotation.TableField;
 import java.io.Serializable;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
@@ -20,6 +21,12 @@ public class Node extends BaseEntity {
     private static final long serialVersionUID = 1L;
 
     private String name;
+
+    /** Null for administrator inventory; regular users own the nodes they add. */
+    private Long ownerUserId;
+
+    @TableField(exist = false)
+    private Boolean canManage;
 
     private String secret;
 

@@ -12,6 +12,9 @@ import com.admin.common.dto.UserTunnelDto;
 import com.admin.common.dto.UserTunnelQueryDto;
 import com.admin.common.dto.UserTunnelUpdateDto;
 import com.admin.common.lang.R;
+import com.admin.common.utils.JwtUtil;
+import com.admin.entity.Tunnel;
+import com.admin.entity.TunnelEntryDomain;
 import com.admin.service.TunnelService;
 import com.admin.service.TunnelEntryDomainService;
 import com.admin.service.UserTunnelService;
@@ -20,6 +23,7 @@ import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * <p>
@@ -44,28 +48,24 @@ public class TunnelController extends BaseController {
     private TunnelEntryDomainService tunnelEntryDomainService;
 
     @LogAnnotation
-    @RequireRole
     @PostMapping("/create")
     public R create(@Validated @RequestBody TunnelDto tunnelDto) {
         return tunnelService.createTunnel(tunnelDto);
     }
 
     @LogAnnotation
-    @RequireRole
     @PostMapping("/list")
     public R readAll() {
         return tunnelService.getAllTunnels();
     }
 
     @LogAnnotation
-    @RequireRole
     @PostMapping("/update")
     public R update(@Validated @RequestBody TunnelUpdateDto tunnelUpdateDto) {
         return tunnelService.updateTunnel(tunnelUpdateDto);
     }
 
     @LogAnnotation
-    @RequireRole
     @PostMapping("/delete")
     public R delete(@RequestBody Map<String, Object> params) {
         Long id = Long.valueOf(params.get("id").toString());
@@ -75,30 +75,32 @@ public class TunnelController extends BaseController {
     // ============ 隧道解析域名池（仅面板显示与分配，不修改 DDNS） ============
 
     @LogAnnotation
-    @RequireRole
     @PostMapping("/domain/list")
     public R getEntryDomains(@Validated @RequestBody TunnelEntryDomainQueryDto queryDto) {
+        if (!canManageTunnel(queryDto.getTunnelId())) return R.err(403, "没有管理此隧道解析域名的权限");
         return tunnelEntryDomainService.getTunnelEntryDomains(queryDto.getTunnelId());
     }
 
     @LogAnnotation
-    @RequireRole
     @PostMapping("/domain/create")
     public R createEntryDomain(@Validated @RequestBody TunnelEntryDomainDto dto) {
+        if (!canManageTunnel(dto.getTunnelId())) return R.err(403, "没有管理此隧道解析域名的权限");
         return tunnelEntryDomainService.createTunnelEntryDomain(dto);
     }
 
     @LogAnnotation
-    @RequireRole
     @PostMapping("/domain/set-default")
     public R setDefaultEntryDomain(@Validated @RequestBody TunnelEntryDomainIdDto dto) {
+        TunnelEntryDomain domain = tunnelEntryDomainService.getDomainById(dto.getId());
+        if (domain == null || !canManageTunnel(domain.getTunnelId())) return R.err(403, "没有管理此隧道解析域名的权限");
         return tunnelEntryDomainService.setDefaultTunnelEntryDomain(dto.getId());
     }
 
     @LogAnnotation
-    @RequireRole
     @PostMapping("/domain/delete")
     public R deleteEntryDomain(@Validated @RequestBody TunnelEntryDomainIdDto dto) {
+        TunnelEntryDomain domain = tunnelEntryDomainService.getDomainById(dto.getId());
+        if (domain == null || !canManageTunnel(domain.getTunnelId())) return R.err(403, "没有管理此隧道解析域名的权限");
         return tunnelEntryDomainService.deleteTunnelEntryDomain(dto.getId());
     }
 
@@ -167,11 +169,18 @@ public class TunnelController extends BaseController {
      * @return 诊断结果
      */
     @LogAnnotation
-    @RequireRole
     @PostMapping("/diagnose")
     public R diagnoseTunnel(@RequestBody Map<String, Object> params) {
         Long tunnelId = Long.valueOf(params.get("tunnelId").toString());
+        if (!canManageTunnel(tunnelId)) return R.err(403, "没有诊断此隧道的权限");
         return tunnelService.diagnoseTunnel(tunnelId);
+    }
+
+    private boolean canManageTunnel(Long tunnelId) {
+        if (tunnelId == null) return false;
+        Tunnel tunnel = tunnelService.getById(tunnelId);
+        return tunnel != null && (Objects.equals(JwtUtil.getRoleIdFromToken(), 0)
+                || Objects.equals(tunnel.getOwnerUserId(), Long.valueOf(JwtUtil.getUserIdFromToken())));
     }
 
     /**
