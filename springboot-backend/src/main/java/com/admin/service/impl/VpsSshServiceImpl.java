@@ -163,17 +163,32 @@ public class VpsSshServiceImpl implements VpsSshService {
         if ("flux_panel".equals(template)) {
             return dockerInstallScript() + "\n"
                     + "echo '[Flux Panel] 开始部署完整面板…'\n"
-                    + "curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/panel_install.sh | sh\n";
+                    + "command -v bash >/dev/null 2>&1 || { echo '[Flux Panel] 缺少 bash，无法运行面板安装脚本。' >&2; exit 1; }\n"
+                    + "panel_installer=$(mktemp)\n"
+                    + "trap 'rm -f \"$panel_installer\"' EXIT\n"
+                    + "curl -fsSL --retry 3 https://raw.githubusercontent.com/kfcv301-maker/ix/main/panel_install.sh -o \"$panel_installer\"\n"
+                    + "bash \"$panel_installer\" install\n";
         }
         throw new IllegalArgumentException("不支持的部署模板");
     }
 
     private String dockerInstallScript() {
         return "set -eu\n"
+                + "if [ \"$(id -u)\" -ne 0 ]; then\n"
+                + "  echo '[部署] 当前 SSH 用户不是 root，请使用 root 账号执行一键部署。' >&2\n"
+                + "  exit 1\n"
+                + "fi\n"
                 + "if command -v docker >/dev/null 2>&1; then\n"
                 + "  echo '[Docker] 已安装：'\n"
                 + "  docker --version\n"
                 + "else\n"
+                + "  if [ -r /etc/os-release ]; then\n"
+                + "    . /etc/os-release\n"
+                + "    if [ \"${ID:-}\" = debian ] && [ \"${VERSION_ID:-}\" = 11 ]; then\n"
+                + "      echo '[Docker] Debian 11 已结束支持，当前 Docker 官方安装器不支持；请先升级到受支持的系统。' >&2\n"
+                + "      exit 1\n"
+                + "    fi\n"
+                + "  fi\n"
                 + "  echo '[Docker] 正在安装…'\n"
                 + "  curl -fsSL https://get.docker.com | sh\n"
                 + "  docker --version\n"
