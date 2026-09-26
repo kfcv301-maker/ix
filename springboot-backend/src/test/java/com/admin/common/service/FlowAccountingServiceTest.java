@@ -83,13 +83,13 @@ class FlowAccountingServiceTest {
     }
 
     @Test
-    void preservesHistoricalRatioRoundingBeforeFlowMultiplier() {
+    void truncatesFractionalRatioPerDirection() {
         Fixtures fixtures = fixtures();
 
         Long billed = ReflectionTestUtils.invokeMethod(fixtures.service, "scale", 1L,
-                new BigDecimal("1.5"), 2);
+                new BigDecimal("1.5"));
 
-        assertEquals(2L, billed);
+        assertEquals(1L, billed);
     }
 
     @Test
@@ -99,16 +99,16 @@ class FlowAccountingServiceTest {
         FlowReportCursor cursor = cursor(report, 7L);
         when(fixtures.accountingMapper.selectContext(12L, 9L, 5L)).thenReturn(validContext());
         when(fixtures.cursorMapper.selectForUpdate(5L, "12_3_9")).thenReturn(cursor);
-        when(fixtures.accountingMapper.incrementForwardAndUser(12L, 3L, 2048L, 1024L)).thenReturn(2);
-        when(fixtures.accountingMapper.incrementUserTunnel(9, 3L, 42, 2048L, 1024L)).thenReturn(1);
+        when(fixtures.accountingMapper.incrementForwardAndUser(12L, 3L, 1024L, 512L)).thenReturn(2);
+        when(fixtures.accountingMapper.incrementUserTunnel(9, 3L, 42, 1024L, 512L)).thenReturn(1);
         when(fixtures.cursorMapper.updateCursor(eq(5L), eq("12_3_9"), eq(report.getReportSessionId()),
                 eq(report.getReportSessionStartedAt()), eq(8L), anyLong())).thenReturn(1);
 
         FlowAccountingResult result = fixtures.service.account(node(), report);
 
         assertTrue(result.isAccepted());
-        verify(fixtures.accountingMapper).incrementForwardAndUser(12L, 3L, 2048L, 1024L);
-        verify(fixtures.accountingMapper).incrementUserTunnel(9, 3L, 42, 2048L, 1024L);
+        verify(fixtures.accountingMapper).incrementForwardAndUser(12L, 3L, 1024L, 512L);
+        verify(fixtures.accountingMapper).incrementUserTunnel(9, 3L, 42, 1024L, 512L);
         verify(fixtures.cursorMapper).updateCursor(eq(5L), eq("12_3_9"), eq(report.getReportSessionId()),
                 eq(report.getReportSessionStartedAt()), eq(8L), anyLong());
     }
@@ -121,13 +121,13 @@ class FlowAccountingServiceTest {
             FlowReportCursor cursor = cursor(report, 7L);
             when(fixtures.accountingMapper.selectContext(12L, 9L, 5L)).thenReturn(validContext());
             when(fixtures.cursorMapper.selectForUpdate(5L, report.getN())).thenReturn(cursor);
-            when(fixtures.accountingMapper.incrementForwardAndUser(12L, 3L, 2048L, 1024L)).thenReturn(2);
-            when(fixtures.accountingMapper.incrementUserTunnel(9, 3L, 42, 2048L, 1024L)).thenReturn(1);
+            when(fixtures.accountingMapper.incrementForwardAndUser(12L, 3L, 1024L, 512L)).thenReturn(2);
+            when(fixtures.accountingMapper.incrementUserTunnel(9, 3L, 42, 1024L, 512L)).thenReturn(1);
             when(fixtures.cursorMapper.updateCursor(eq(5L), eq(report.getN()), eq(report.getReportSessionId()),
                     eq(report.getReportSessionStartedAt()), eq(8L), anyLong())).thenReturn(1);
 
             assertTrue(fixtures.service.account(node(), report).isAccepted());
-            verify(fixtures.accountingMapper).incrementForwardAndUser(12L, 3L, 2048L, 1024L);
+            verify(fixtures.accountingMapper).incrementForwardAndUser(12L, 3L, 1024L, 512L);
         }
     }
 
@@ -141,14 +141,50 @@ class FlowAccountingServiceTest {
         context.setFlowGraceUntil(System.currentTimeMillis() + 5_000L);
         when(fixtures.accountingMapper.selectContext(12L, 9L, 5L)).thenReturn(context);
         when(fixtures.cursorMapper.selectForUpdate(5L, "12_3_9")).thenReturn(cursor);
-        when(fixtures.accountingMapper.incrementForwardAndUser(12L, 3L, 2048L, 1024L)).thenReturn(2);
-        when(fixtures.accountingMapper.incrementUserTunnel(9, 3L, 42, 2048L, 1024L)).thenReturn(1);
+        when(fixtures.accountingMapper.incrementForwardAndUser(12L, 3L, 1024L, 512L)).thenReturn(2);
+        when(fixtures.accountingMapper.incrementUserTunnel(9, 3L, 42, 1024L, 512L)).thenReturn(1);
         when(fixtures.cursorMapper.updateCursor(eq(5L), eq("12_3_9"), eq(report.getReportSessionId()),
                 eq(report.getReportSessionStartedAt()), eq(8L), anyLong())).thenReturn(1);
 
         FlowAccountingResult result = fixtures.service.account(node(), report);
 
         assertTrue(result.isAccepted());
+    }
+
+    @Test
+    void singleWayBillsOnlyUploadWhileTwoWayBillsEachDirectionOnce() {
+        for (int mode : new int[]{1, 2}) {
+            Fixtures f = fixtures();
+            FlowDto report = report("12_3_9_tcp", 8);
+            FlowAccountingContext context = validContext();
+            context.setTunnelFlow(mode);
+            long download = mode == 1 ? 0L : 1024L;
+            when(f.accountingMapper.selectContext(12L, 9L, 5L)).thenReturn(context);
+            when(f.cursorMapper.selectForUpdate(5L, report.getN())).thenReturn(cursor(report, 7L));
+            when(f.accountingMapper.incrementForwardAndUser(12L, 3L, download, 512L)).thenReturn(2);
+            when(f.accountingMapper.incrementUserTunnel(9, 3L, 42, download, 512L)).thenReturn(1);
+            when(f.cursorMapper.updateCursor(eq(5L), eq(report.getN()), anyString(), anyLong(), eq(8L), anyLong())).thenReturn(1);
+            assertTrue(f.service.account(node(), report).isAccepted());
+            verify(f.accountingMapper).incrementForwardAndUser(12L, 3L, download, 512L);
+        }
+    }
+
+    @Test
+    void anArchivedAgentGrantBillsTheCanonicalGrantAndCannotChangeItsOwner() {
+        Fixtures f = fixtures();
+        FlowDto report = report("12_3_9_tcp", 8);
+        FlowAccountingContext context = validContext();
+        context.setUserTunnelId(13);
+        context.setReportedUserTunnelId(9);
+        when(f.accountingMapper.selectContext(12L, 9L, 5L)).thenReturn(context);
+        when(f.cursorMapper.selectForUpdate(5L, report.getN())).thenReturn(cursor(report, 7L));
+        when(f.accountingMapper.incrementForwardAndUser(12L, 3L, 1024L, 512L)).thenReturn(2);
+        when(f.accountingMapper.incrementUserTunnel(13, 3L, 42, 1024L, 512L)).thenReturn(1);
+        when(f.cursorMapper.updateCursor(eq(5L), eq(report.getN()), anyString(), anyLong(), eq(8L), anyLong())).thenReturn(1);
+        assertTrue(f.service.account(node(), report).isAccepted());
+        verify(f.accountingMapper).incrementUserTunnel(13, 3L, 42, 1024L, 512L);
+        context.setUserTunnelUserId(777);
+        assertFalse(f.service.account(node(), report).isAccepted());
     }
 
     private Fixtures fixtures() {

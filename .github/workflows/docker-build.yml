@@ -1,11 +1,11 @@
 name: Build, Verify, and Release
 
-# A release is immutable. Bump this value together with the compose image tags
-# whenever a frontend or backend change should be published.
+# Source-based Compose installs do not require Docker Hub. Releases are immutable.
 env:
   VERSION: "1.4.5"
 
 on:
+  workflow_dispatch:
   push:
     branches: [main, beta]
   pull_request:
@@ -29,6 +29,7 @@ jobs:
     outputs:
       version: ${{ env.VERSION }}
       publish_release: ${{ steps.release.outputs.publish_release }}
+      publish_images: ${{ steps.release.outputs.publish_images }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -37,30 +38,40 @@ jobs:
       - id: release
         name: Decide whether this push creates a release
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if [[ "${GITHUB_EVENT_NAME}" != "push" || "${GITHUB_REF}" != "refs/heads/main" ]]; then
+          echo "publish_images=false" >> "$GITHUB_OUTPUT"
+          if [[ "${GITHUB_REF}" != "refs/heads/main" || ( "${GITHUB_EVENT_NAME}" != "push" && "${GITHUB_EVENT_NAME}" != "workflow_dispatch" ) ]]; then
             echo "publish_release=false" >> "$GITHUB_OUTPUT"
             echo "Verification-only run: ${GITHUB_EVENT_NAME} on ${GITHUB_REF}"
             exit 0
           fi
 
-          # A source push must still be fully verified when this repository has
-          # not been configured with registry credentials.  Publishing a release
-          # in that state would be misleading: its panel images could not be
-          # built or pushed, so an online update could not actually use it.
-          if [[ -z "${DOCKER_HUB_USERNAME}" || -z "${DOCKER_HUB_TOKEN}" ]]; then
+          # A failed draft can be completed on retry. Published assets cannot
+          # be replaced, and an existing tag must refer to exactly this source.
+          published="$(gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft' 2>/dev/null || true)"
+          if [[ "$published" == "false" ]]; then
             echo "publish_release=false" >> "$GITHUB_OUTPUT"
-            echo "Docker Hub credentials are unavailable; running verification only."
+            echo "Version ${VERSION} is already published. Bump VERSION for the next release."
             exit 0
           fi
-
-          if git rev-parse -q --verify "refs/tags/${VERSION}" >/dev/null; then
-            echo "publish_release=false" >> "$GITHUB_OUTPUT"
-            echo "Version ${VERSION} is already released. All components will still be built and verified."
-          else
-            echo "publish_release=true" >> "$GITHUB_OUTPUT"
-            echo "Version ${VERSION} will be released after every build succeeds."
+          if [[ "$published" == "true" ]]; then
+            draft_source="$(gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" --json targetCommitish --jq '.targetCommitish')"
+            [[ "$draft_source" == "$GITHUB_SHA" ]] || {
+              echo 'Existing draft belongs to different source; bump VERSION or resolve the draft.' >&2; exit 1;
+            }
           fi
+          if git rev-parse -q --verify "refs/tags/${VERSION}" >/dev/null; then
+            [[ "$(git rev-parse "refs/tags/${VERSION}^{commit}")" == "$GITHUB_SHA" ]] || {
+              echo 'Existing tag points at different source; bump VERSION.' >&2; exit 1;
+            }
+          fi
+          echo "publish_release=true" >> "$GITHUB_OUTPUT"
+          if [[ -n "${DOCKER_HUB_USERNAME}" && -n "${DOCKER_HUB_TOKEN}" ]]; then
+            echo "publish_images=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "The source tag, scripts and Agent assets will be published after all checks pass."
 
   build-gost:
     name: Build GOST binary
@@ -160,19 +171,24 @@ jobs:
         working-directory: ./vite-frontend
         run: npm run build
 
+      - name: Verify frontend container and Nginx configuration
+        run: |
+          docker build -t lunaris-frontend-check ./vite-frontend
+          docker run --rm --add-host backend:127.0.0.1 lunaris-frontend-check nginx -t
+
       - name: Set up Docker Buildx
-        if: needs.prepare.outputs.publish_release == 'true'
+        if: needs.prepare.outputs.publish_images == 'true'
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to Docker Hub
-        if: needs.prepare.outputs.publish_release == 'true'
+        if: needs.prepare.outputs.publish_images == 'true'
         uses: docker/login-action@v3
         with:
           username: ${{ env.DOCKER_HUB_USERNAME }}
           password: ${{ env.DOCKER_HUB_TOKEN }}
 
       - name: Build and push frontend images
-        if: needs.prepare.outputs.publish_release == 'true'
+        if: needs.prepare.outputs.publish_images == 'true'
         run: |
           docker buildx build \
             --platform linux/amd64,linux/arm64 \
@@ -202,19 +218,33 @@ jobs:
         working-directory: ./springboot-backend
         run: mvn -B clean package
 
+      - name: Verify updater and installer regressions
+        run: |
+          python3 -m unittest discover -s updater -p 'test_*.py'
+          python3 tests/release_decision_test.py
+          bash tests/install_tuning_test.sh
+
+      - name: Verify backend container build
+        run: docker build -t lunaris-backend-check ./springboot-backend
+
+      - name: Verify legacy MySQL upgrade and current MySQL bootstrap
+        run: |
+          MYSQL_TEST_IMAGE=mysql:5.7 bash tests/backend_mysql_test.sh
+          MYSQL_TEST_IMAGE=mysql:8.4 bash tests/backend_mysql_test.sh
+
       - name: Set up Docker Buildx
-        if: needs.prepare.outputs.publish_release == 'true'
+        if: needs.prepare.outputs.publish_images == 'true'
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to Docker Hub
-        if: needs.prepare.outputs.publish_release == 'true'
+        if: needs.prepare.outputs.publish_images == 'true'
         uses: docker/login-action@v3
         with:
           username: ${{ env.DOCKER_HUB_USERNAME }}
           password: ${{ env.DOCKER_HUB_TOKEN }}
 
       - name: Build and push backend images
-        if: needs.prepare.outputs.publish_release == 'true'
+        if: needs.prepare.outputs.publish_images == 'true'
         run: |
           docker buildx build \
             --platform linux/amd64,linux/arm64 \
@@ -246,23 +276,29 @@ jobs:
             cp "./${script}" "./artifacts/${script}"
             sha256sum "./artifacts/${script}" > "./artifacts/${script}.sha256"
           done
+          cp updater/env_migration.py artifacts/env_migration.py
+          sha256sum artifacts/env_migration.py > artifacts/env_migration.py.sha256
 
-      - name: Create tag and release
+      - name: Create or resume release draft
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          git tag "${VERSION}" "${GITHUB_SHA}"
-          git push origin "${VERSION}"
-          gh release create "${VERSION}" \
+          if ! gh release view "${VERSION}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release create "${VERSION}" --draft --target "${GITHUB_SHA}" \
             --title "Release ${VERSION}" \
             --generate-notes \
             --repo "${GITHUB_REPOSITORY}"
+          fi
 
       - name: Upload release assets
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          [[ "$(gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')" == "true" ]] || {
+            echo 'Refusing to overwrite assets of a published release.' >&2; exit 1;
+          }
           gh release upload "${VERSION}" \
+            --clobber \
             ./artifacts/flux-panel-agent-linux-amd64 \
             ./artifacts/flux-panel-agent-linux-amd64.sha256 \
             ./artifacts/flux-panel-agent-linux-arm64 \
@@ -275,7 +311,14 @@ jobs:
             ./artifacts/panel_install.sh.sha256 \
             ./artifacts/upgrade_from_original.sh \
             ./artifacts/upgrade_from_original.sh.sha256 \
+            ./artifacts/env_migration.py \
+            ./artifacts/env_migration.py.sha256 \
             ./docker-compose-v4.yml \
             ./docker-compose-v6.yml \
             ./gost.sql \
             --repo "${GITHUB_REPOSITORY}"
+
+      - name: Publish complete release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "${VERSION}" --draft=false --repo "${GITHUB_REPOSITORY}"

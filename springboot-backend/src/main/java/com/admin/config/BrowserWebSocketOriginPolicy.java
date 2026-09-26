@@ -26,13 +26,18 @@ public class BrowserWebSocketOriginPolicy {
         }
         if (!"http".equalsIgnoreCase(uri.getScheme()) && !"https".equalsIgnoreCase(uri.getScheme())
                 || uri.getHost() == null || uri.getUserInfo() != null
+                || uri.getQuery() != null || uri.getFragment() != null
                 || (uri.getPath() != null && !uri.getPath().isEmpty() && !"/".equals(uri.getPath()))) return false;
         String normalized = origin.trim().replaceAll("/+$", "").toLowerCase(Locale.ROOT);
         String[] configured = Arrays.stream((allowedOrigins == null ? "" : allowedOrigins).split(","))
                 .map(String::trim).filter(value -> !value.isEmpty())
                 .map(value -> value.replaceAll("/+$", "").toLowerCase(Locale.ROOT)).toArray(String[]::new);
         if (configured.length > 0) return Arrays.asList(configured).contains(normalized);
-        String host = request.getHeader("Host");
-        return host != null && uri.getRawAuthority() != null && uri.getRawAuthority().equalsIgnoreCase(host.trim());
+        int originPort = uri.getPort() < 0 ? defaultPort(uri.getScheme()) : uri.getPort();
+        return uri.getScheme().equalsIgnoreCase(request.getScheme())
+                && uri.getHost().equalsIgnoreCase(request.getServerName())
+                && originPort == request.getServerPort();
     }
+
+    private int defaultPort(String scheme) { return "https".equalsIgnoreCase(scheme) ? 443 : 80; }
 }

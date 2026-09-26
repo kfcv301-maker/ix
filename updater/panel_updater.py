@@ -4,7 +4,8 @@
 It is intentionally not exposed on a host port.  The Spring backend is the
 only caller and sends a random token from the panel's local .env.  Before any
 Git reset or container rebuild, the MySQL database is dumped into an ignored
-local backup directory.  Named volumes and .env are never removed or written.
+local backup directory. Named volumes are retained; missing deployment settings
+are migrated atomically without replacing database or account credentials.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from env_migration import migrate_env
 
 
 WORKSPACE = Path(os.environ.get("INSTALL_DIR", "/workspace")).resolve()
@@ -149,7 +151,7 @@ def update_worker() -> None:
         set_state(currentRevision=before, targetRevision=target)
 
         if before == target:
-            set_state(state="completed", message="已是最新版本；数据库备份已完成")
+            set_state(state="completed", message="已是当前配置的发布版本；数据库备份已完成")
             return
 
         # A hard reset would discard fixes made directly in the installed checkout.
@@ -161,13 +163,15 @@ def update_worker() -> None:
         if reset.returncode != 0:
             raise RuntimeError("切换新版本失败，现有容器仍在运行")
 
+        migrate_env(WORKSPACE / ".env", RELEASE_REF)
+
         # Only rebuild and start the panel services. `updater` intentionally
         # stays running so this worker survives the deployment it initiated.
         # It will be refreshed by the next host-side deployment if its own
         # image or startup contract changes.
         deploy = run(
             compose_command(
-                "up", "-d", "--build", "--remove-orphans", *PANEL_SERVICES,
+                "up", "-d", "--build", "--remove-orphans", "--wait", "--wait-timeout", "240", *PANEL_SERVICES,
             )
         )
         if deploy.returncode != 0:
@@ -216,7 +220,7 @@ class UpdateHandler(BaseHTTPRequestHandler):
             self.write_json(HTTPStatus.NOT_FOUND, {"message": "not found"})
             return
         with STATE_LOCK:
-            if STATE["state"] in {"backing_up", "checking", "updating"}:
+            if STATE["state"] in {"queued", "backing_up", "checking", "updating"}:
                 self.write_json(HTTPStatus.CONFLICT, current_state())
                 return
             STATE.update({"state": "queued", "message": "更新请求已接收", "updatedAt": now()})

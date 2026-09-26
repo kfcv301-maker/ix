@@ -48,6 +48,8 @@ import java.util.UUID;
 @Slf4j
 @Service
 public class ForwardSyncTaskService {
+    @Resource
+    private com.admin.common.service.UserTunnelAliasService userTunnelAliasService;
 
     private static final String ENDPOINT_INGRESS = "ingress";
     private static final String ENDPOINT_EGRESS = "egress";
@@ -329,6 +331,38 @@ public class ForwardSyncTaskService {
     }
 
     private String executeIngress(ForwardSyncTask task, Forward forward, Tunnel tunnel) {
+        return executeWithLegacyNames(task, forward, tunnel, true);
+    }
+
+    private String executeEgress(ForwardSyncTask task, Forward forward, Tunnel tunnel) {
+        return executeWithLegacyNames(task, forward, tunnel, false);
+    }
+
+    private String executeWithLegacyNames(ForwardSyncTask task, Forward forward, Tunnel tunnel, boolean ingress) {
+        UserTunnel grant = findUserTunnel(forward);
+        if (OPERATION_RESUME.equals(task.getOperation())) {
+            String error = userTunnelAliasService.removeLegacyOnNode(task.getNodeId(), forward, tunnel, grant, ingress);
+            if (error != null) return error;
+        }
+        String recordedName = task.getServiceName();
+        String canonical = forward.getId() + "_" + forward.getUserId() + "_" + (grant == null ? 0 : grant.getId());
+        Set<String> names = new LinkedHashSet<>();
+        if (!OPERATION_RESUME.equals(task.getOperation())) names.addAll(userTunnelAliasService.legacyNames(forward, grant));
+        names.add(canonical);
+        if (!OPERATION_RESUME.equals(task.getOperation())) names.add(recordedName);
+        try {
+            for (String name : names) {
+                task.setServiceName(name);
+                String error = ingress ? executeIngressName(task, forward, tunnel) : executeEgressName(task, forward, tunnel);
+                if (error != null) return error;
+            }
+            return null;
+        } finally {
+            task.setServiceName(recordedName);
+        }
+    }
+
+    private String executeIngressName(ForwardSyncTask task, Forward forward, Tunnel tunnel) {
         GostDto result;
         if (OPERATION_PAUSE.equals(task.getOperation())) {
             result = GostUtil.PauseService(task.getNodeId(), task.getServiceName());
@@ -350,7 +384,7 @@ public class ForwardSyncTaskService {
         return recreateIngress(task, forward, tunnel);
     }
 
-    private String executeEgress(ForwardSyncTask task, Forward forward, Tunnel tunnel) {
+    private String executeEgressName(ForwardSyncTask task, Forward forward, Tunnel tunnel) {
         GostDto result;
         if (OPERATION_PAUSE.equals(task.getOperation())) {
             result = GostUtil.PauseRemoteService(task.getNodeId(), task.getServiceName());

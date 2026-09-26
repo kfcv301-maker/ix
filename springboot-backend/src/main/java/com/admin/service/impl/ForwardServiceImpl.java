@@ -42,6 +42,8 @@ import java.util.stream.Collectors;
 @Slf4j
 @Service
 public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> implements ForwardService {
+    @Resource
+    private com.admin.common.service.UserTunnelAliasService userTunnelAliasService;
 
     // 常量定义
     private static final String GOST_SUCCESS_MSG = "OK";
@@ -1029,6 +1031,8 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
      * 创建Gost服务
      */
     private R createGostServices(Forward forward, Tunnel tunnel, Integer limiter, NodeInfo nodeInfo, UserTunnel userTunnel) {
+        R legacyCleanup = cleanLegacyServices(forward, tunnel, nodeInfo, userTunnel);
+        if (legacyCleanup.getCode() != 0) return legacyCleanup;
         String serviceName = buildServiceName(forward.getId(), forward.getUserId(), userTunnel);
         List<Node> configuredInNodes = new ArrayList<>();
 
@@ -1079,6 +1083,8 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
      * 更新Gost服务
      */
     private R updateGostServices(Forward forward, Tunnel tunnel, Integer limiter, NodeInfo nodeInfo, UserTunnel userTunnel) {
+        R legacyCleanup = cleanLegacyServices(forward, tunnel, nodeInfo, userTunnel);
+        if (legacyCleanup.getCode() != 0) return legacyCleanup;
         String serviceName = buildServiceName(forward.getId(), forward.getUserId(), userTunnel);
 
         // 隧道转发需要更新链和远程服务
@@ -1127,8 +1133,7 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
         // 2. 删除原有的Gost服务配置
         R deleteResult = deleteOldGostServices(existForward, oldTunnel);
         if (deleteResult.getCode() != 0) {
-            // 删除失败时记录日志，但不影响后续创建（可能原配置已不存在）
-            log.info("删除原隧道{}的Gost配置失败: {}", oldTunnel.getId(), deleteResult.getMsg());
+            return R.err("旧节点配置尚未确认清理，已停止切换隧道：" + deleteResult.getMsg());
         }
 
         // 3. 创建新的Gost服务配置
@@ -1151,13 +1156,18 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
 
         // 获取原隧道的节点信息
         NodeInfo oldNodeInfo = getRequiredNodes(oldTunnel);
+        if (oldNodeInfo.isHasError()) return R.err(oldNodeInfo.getErrorMessage());
+        if (!oldNodeInfo.isHasError()) {
+            R cleanup = cleanLegacyServices(forward, oldTunnel, oldNodeInfo, oldUserTunnel);
+            if (cleanup.getCode() != 0) return cleanup;
+        }
 
         // Every ingress has the same main service name on its own node.
         if (!oldNodeInfo.isHasError()) {
             for (Node inNode : oldNodeInfo.getInNodes()) {
                 GostDto serviceResult = GostUtil.DeleteService(inNode.getId(), serviceName);
-                if (!isGostOperationSuccess(serviceResult)) {
-                    log.info("删除节点 {} 的主服务失败: {}", inNode.getId(), serviceResult.getMsg());
+                if (!isGostDeletionSuccess(serviceResult)) {
+                    return R.err("旧节点主服务清理尚未确认");
                 }
             }
         }
@@ -1168,8 +1178,8 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
             if (!oldNodeInfo.isHasError()) {
                 for (Node inNode : oldNodeInfo.getInNodes()) {
                     GostDto chainResult = GostUtil.DeleteChains(inNode.getId(), serviceName);
-                    if (!isGostOperationSuccess(chainResult)) {
-                        log.info("删除节点 {} 的链服务失败: {}", inNode.getId(), chainResult.getMsg());
+                    if (!isGostDeletionSuccess(chainResult)) {
+                        return R.err("旧节点链清理尚未确认");
                     }
                 }
             }
@@ -1185,8 +1195,8 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
 
             if (outNode != null) {
                 GostDto remoteResult = GostUtil.DeleteRemoteService(outNode.getId(), serviceName);
-                if (!isGostOperationSuccess(remoteResult)) {
-                    log.info("删除远程服务失败: {}", remoteResult.getMsg());
+                if (!isGostDeletionSuccess(remoteResult)) {
+                    return R.err("旧节点出口服务清理尚未确认");
                 }
             }
         }
@@ -1198,6 +1208,8 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
      * 删除Gost服务
      */
     private R deleteGostServices(Forward forward, Tunnel tunnel, NodeInfo nodeInfo, UserTunnel userTunnel) {
+        R legacyCleanup = cleanLegacyServices(forward, tunnel, nodeInfo, userTunnel);
+        if (legacyCleanup.getCode() != 0) return legacyCleanup;
         String serviceName = buildServiceName(forward.getId(), forward.getUserId(), userTunnel);
 
         // All ingress nodes own a copy of the service. Do not remove the DB row
@@ -1330,7 +1342,12 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
      * 检查Gost操作是否成功
      */
     private boolean isGostOperationSuccess(GostDto gostResult) {
-        return Objects.equals(gostResult.getMsg(), GOST_SUCCESS_MSG);
+        return gostResult != null && Objects.equals(gostResult.getMsg(), GOST_SUCCESS_MSG);
+    }
+
+    private boolean isGostDeletionSuccess(GostDto result) {
+        return isGostOperationSuccess(result) || (result != null && result.getMsg() != null
+                && result.getMsg().toLowerCase(java.util.Locale.ROOT).contains(GOST_NOT_FOUND_MSG));
     }
 
 
@@ -1453,6 +1470,18 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
     /**
      * 构建服务名称，优化后减少重复查询
      */
+    private R cleanLegacyServices(Forward forward, Tunnel tunnel, NodeInfo nodes, UserTunnel grant) {
+        for (Node node : nodes.getInNodes()) {
+            String error = userTunnelAliasService.removeLegacyOnNode(node.getId(), forward, tunnel, grant, true);
+            if (error != null) return R.err(error);
+        }
+        if (Integer.valueOf(TUNNEL_TYPE_TUNNEL_FORWARD).equals(tunnel.getType()) && nodes.getOutNode() != null) {
+            String error = userTunnelAliasService.removeLegacyOnNode(nodes.getOutNode().getId(), forward, tunnel, grant, false);
+            if (error != null) return R.err(error);
+        }
+        return R.ok();
+    }
+
     private String buildServiceName(Long forwardId, Integer userId, UserTunnel userTunnel) {
         int userTunnelId = (userTunnel != null) ? userTunnel.getId() : 0;
         return forwardId + "_" + userId + "_" + userTunnelId;

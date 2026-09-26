@@ -41,7 +41,7 @@ Lunaris Relay 是一个面向自建基础设施的高性能流量转发控制面
 ```bash
 git clone git@github.com:kfcv301-maker/ix.git
 cd ix
-docker compose -f docker-compose.local.yml build
+docker compose -f docker-compose.yml -f docker-compose.local.yml build
 ```
 
 正式环境部署前，请自行准备数据库、反向代理、域名和安全配置。
@@ -49,6 +49,14 @@ docker compose -f docker-compose.local.yml build
 若只有公网 IP，也可以为面板配置受信任的 IP HTTPS 证书；证书仅约六天有效，必须自动续期。部署步骤见 [IP HTTPS 配置](doc/ip-https.md)。节点安装命令需要从 HTTPS 面板生成。
 
 ## 一键安装
+
+IPv4/IPv6 Compose 示例也从本仓库源码构建，请在完整的发布源码目录使用；它们不再启动原版仓库的旧镜像。
+
+升级会保留已有数据库版本；没有 `MYSQL_IMAGE` 的旧环境继续使用 MySQL 5.7，新安装明确使用 8.4。数据库主版本迁移须分阶段执行，不会在面板更新时自动切换。发布脚本和 Agent 资产先完整上传，再公开 Release；面板由源码构建，不需要 Docker Hub 凭据。
+
+新安装的初始管理员凭据保存在 `.env`。旧更新器升级后若没有初始管理员变量，后端会生成随机密码并保存在持久卷中的 `/app/config/initial-admin-credentials`，可由主机管理员执行 `docker compose --project-name flux-panel-enhanced exec backend cat /app/config/initial-admin-credentials` 读取。原 `admin_user/admin_user` 会改为该凭据中记录的用户名和密码；已经修改过默认密码的管理员不会被重置。
+
+流量计费按选项执行：单向只计算上传，双向计算上传加下载，再按各方向应用倍率并取整。此修复只影响后续报告，已有累计计数保留。历史重复授权会合并上传/下载计数、采用 ID 最大记录的配置，并将原记录归档到 `user_tunnel_duplicate_archive`；旧节点授权 ID 在完成节点配置清理前仍能计入合并后的授权。
 
 以下命令会下载本仓库的脚本；面板端从源码构建 Docker 镜像，首次构建需要一些时间。请在你拥有授权的 Linux 服务器上以 root 或 sudo 执行。
 
