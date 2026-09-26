@@ -20,6 +20,7 @@ public class VpsHostView {
     private String assignedUserName;
     private String remark;
     private String sshFingerprint;
+    private Boolean sshFingerprintVerified;
     private String healthStatus;
     private Long lastCheckTime;
     private String lastCheckMessage;

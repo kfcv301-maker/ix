@@ -12,12 +12,12 @@ import com.admin.mapper.UserTunnelMapper;
 import com.admin.service.TunnelEntryDomainService;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
-import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.baomidou.mybatisplus.spring.service.impl.ServiceImpl;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import javax.annotation.Resource;
+import jakarta.annotation.Resource;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -122,15 +122,15 @@ public class TunnelEntryDomainServiceImpl extends ServiceImpl<TunnelEntryDomainM
             return R.err("解析域名不存在或已删除");
         }
 
-        int customAssignments = userTunnelMapper.selectCount(new QueryWrapper<UserTunnel>()
+        long customAssignments = userTunnelMapper.selectCount(new QueryWrapper<UserTunnel>()
                 .eq("entry_address_mode", ENTRY_ADDRESS_MODE_CUSTOM)
                 .eq("entry_domain_id", id));
-        int defaultAssignments = isDefault(entryDomain)
+        long defaultAssignments = isDefault(entryDomain)
                 ? userTunnelMapper.selectCount(new QueryWrapper<UserTunnel>()
                     .eq("tunnel_id", entryDomain.getTunnelId())
                     .eq("entry_address_mode", ENTRY_ADDRESS_MODE_DEFAULT))
                 : 0;
-        int assignmentCount = customAssignments + defaultAssignments;
+        long assignmentCount = customAssignments + defaultAssignments;
         if (assignmentCount > 0) {
             return R.err("该解析域名正被 " + assignmentCount
                     + " 个用户使用，请先将这些用户改为其他解析域名、默认解析域名或原始入口");

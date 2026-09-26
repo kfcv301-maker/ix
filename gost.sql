@@ -269,8 +269,9 @@ CREATE TABLE `user` (
 -- 转存表中的数据 `user`
 --
 
-INSERT INTO `user` (`id`, `user`, `pwd`, `token_version`, `role_id`, `exp_time`, `flow`, `in_flow`, `out_flow`, `flow_reset_time`, `num`, `created_time`, `updated_time`, `status`) VALUES
-(1, 'admin_user', '3c85cdebade1c51cf64ca9f3c09d182d', 0, 0, 2727251700000, 99999, 0, 0, 1, 99999, 1748914865000, 1754011744252, 1);
+-- The first administrator is created by InitialAdminBootstrap from the
+-- PANEL_INITIAL_ADMIN_* environment variables.  Do not seed a predictable
+-- account in an image or SQL dump.
 
 -- --------------------------------------------------------
 
@@ -327,6 +328,7 @@ CREATE TABLE `vps_host` (
   `assigned_user_id` bigint(20) DEFAULT NULL,
   `remark` varchar(1000) DEFAULT NULL,
   `ssh_fingerprint` varchar(255) DEFAULT NULL,
+  `ssh_fingerprint_verified` tinyint(1) NOT NULL DEFAULT '0',
   `health_status` varchar(32) NOT NULL DEFAULT 'unknown',
   `last_check_time` bigint(20) DEFAULT NULL,
   `last_check_message` varchar(500) DEFAULT NULL,
@@ -342,6 +344,7 @@ CREATE TABLE `vps_deployment_task` (
   `requested_by_user_id` bigint(20) NOT NULL,
   `task_type` varchar(64) NOT NULL,
   `task_status` varchar(32) NOT NULL,
+  `active_lock` varchar(64) DEFAULT NULL,
   `output_log` mediumtext DEFAULT NULL,
   `started_time` bigint(20) DEFAULT NULL,
   `finished_time` bigint(20) DEFAULT NULL,
@@ -355,7 +358,8 @@ CREATE TABLE `vps_deployment_task` (
 --
 
 INSERT INTO `vite_config` (`id`, `name`, `value`, `time`) VALUES
-(1, 'app_name', 'Lunaris Relay', 1755147963000);
+(1, 'app_name', 'Lunaris Relay', 1755147963000),
+(2, 'captcha_enabled', 'true', 1755147963000);
 
 --
 -- 转储表的索引
@@ -445,7 +449,7 @@ ALTER TABLE `user`
 --
 ALTER TABLE `user_tunnel`
   ADD PRIMARY KEY (`id`),
-  ADD KEY `idx_user_tunnel_user_tunnel` (`user_id`,`tunnel_id`);
+  ADD UNIQUE KEY `uk_user_tunnel_user_tunnel` (`user_id`,`tunnel_id`);
 
 --
 -- 表的索引 `vite_config`
@@ -464,7 +468,8 @@ ALTER TABLE `vps_host`
 ALTER TABLE `vps_deployment_task`
   ADD PRIMARY KEY (`id`),
   ADD KEY `idx_vps_task_vps` (`vps_id`),
-  ADD KEY `idx_vps_task_status` (`task_status`);
+  ADD KEY `idx_vps_task_status` (`task_status`),
+  ADD UNIQUE KEY `uk_vps_task_active_lock` (`active_lock`);
 
 --
 -- 在导出的表使用AUTO_INCREMENT

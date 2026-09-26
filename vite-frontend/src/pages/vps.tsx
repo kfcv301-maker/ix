@@ -12,9 +12,10 @@ import { useNavigate } from 'react-router-dom';
 
 import {
   checkVpsHost,
+  confirmVpsHostFingerprint,
   createVpsHost,
   deleteVpsHost,
-  deployVpsTemplate,
+  installVpsBackend,
   getVpsAssignableUsers,
   getVpsDeploymentTasks,
   getVpsHosts,
@@ -23,8 +24,6 @@ import {
 } from '@/api';
 
 const VpsTerminal = lazy(() => import('@/components/vps-terminal').then((module) => ({ default: module.VpsTerminal })));
-
-type DeploymentTemplate = 'docker' | 'flux_panel';
 
 interface VpsHost {
   id: number;
@@ -41,6 +40,7 @@ interface VpsHost {
   assignedUserName?: string;
   remark?: string;
   sshFingerprint?: string;
+  sshFingerprintVerified?: boolean;
   healthStatus: 'unknown' | 'online' | 'offline' | 'fingerprint_changed';
   lastCheckTime?: number;
   lastCheckMessage?: string;
@@ -59,8 +59,8 @@ interface DeploymentTask {
   id: number;
   vpsId: number;
   requestedByUserName?: string;
-  taskType: DeploymentTemplate;
-  taskStatus: 'pending' | 'running' | 'succeeded' | 'failed';
+  taskType: 'backend' | 'docker' | 'flux_panel';
+  taskStatus: 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled';
   outputLog?: string;
   startedTime?: number;
   finishedTime?: number;
@@ -99,6 +99,7 @@ const statusMeta = (status: VpsHost['healthStatus']) => {
 const taskMeta = (status: DeploymentTask['taskStatus']) => {
   if (status === 'succeeded') return { color: 'success' as const, text: '已完成' };
   if (status === 'failed') return { color: 'danger' as const, text: '失败' };
+  if (status === 'cancelled') return { color: 'warning' as const, text: '已取消' };
   if (status === 'running') return { color: 'primary' as const, text: '执行中' };
   return { color: 'warning' as const, text: '排队中' };
 };
@@ -115,9 +116,7 @@ export default function VpsPage() {
   const [form, setForm] = useState<VpsForm>(emptyForm());
   const [formError, setFormError] = useState('');
   const [terminalHost, setTerminalHost] = useState<VpsHost | null>(null);
-  const [deploymentHost, setDeploymentHost] = useState<VpsHost | null>(null);
-  const [deploymentTemplate, setDeploymentTemplate] = useState<DeploymentTemplate>('docker');
-  const [deploymentSubmitting, setDeploymentSubmitting] = useState(false);
+  const [backendInstallHostId, setBackendInstallHostId] = useState<number | null>(null);
   const [tasksHost, setTasksHost] = useState<VpsHost | null>(null);
   const [tasks, setTasks] = useState<DeploymentTask[]>([]);
   const [tasksLoading, setTasksLoading] = useState(false);
@@ -281,21 +280,38 @@ export default function VpsPage() {
     }
   };
 
-  const startDeployment = async () => {
-    if (!deploymentHost) return;
-    setDeploymentSubmitting(true);
+  const confirmFingerprint = async (host: VpsHost) => {
+    if (!host.sshFingerprint) {
+      toast.error('请先执行一键 Ping 获取 SSH 主机指纹');
+      return;
+    }
+    const fingerprint = window.prompt(
+      `请从服务器控制台或可信 SSH 客户端核对后粘贴「${host.name}」的 SSH 指纹。\n\n面板本次检测到：\n${host.sshFingerprint}`,
+      host.sshFingerprint,
+    );
+    if (fingerprint === null) return;
+    const response = await confirmVpsHostFingerprint(host.id, fingerprint.trim());
+    if (response.code === 0) {
+      setHosts((previous) => previous.map((item) => item.id === host.id ? response.data : item));
+      toast.success('SSH 主机指纹已确认，可以打开终端或安装后端');
+    } else {
+      toast.error(response.msg || 'SSH 主机指纹确认失败');
+    }
+  };
+
+  const startBackendInstall = async (host: VpsHost) => {
+    if (!window.confirm(`确认在「${host.name}」上安装后端吗？仅会启动后端及其必需的 MySQL，不会部署前端、更新器或完整面板。`)) return;
+    setBackendInstallHostId(host.id);
     try {
-      const response = await deployVpsTemplate(deploymentHost.id, deploymentTemplate);
+      const response = await installVpsBackend(host.id);
       if (response.code === 0) {
-        toast.success('部署任务已创建，正在通过 SSH 执行');
-        const host = deploymentHost;
-        setDeploymentHost(null);
+        toast.success('后端安装任务已创建，正在通过 SSH 执行');
         setTasksHost(host);
       } else {
-        toast.error(response.msg || '创建部署任务失败');
+        toast.error(response.msg || '创建后端安装任务失败');
       }
     } finally {
-      setDeploymentSubmitting(false);
+      setBackendInstallHostId(null);
     }
   };
 
@@ -359,12 +375,13 @@ export default function VpsPage() {
                   {host.remark && <p className="rounded-lg border border-divider px-2 py-1.5 text-xs text-default-500">{host.remark}</p>}
                   <div className="flex flex-wrap gap-2 border-t border-divider pt-3">
                     <Button size="sm" variant="flat" color="primary" onPress={() => void checkHost(host)} isDisabled={!host.canOperate}>一键 Ping</Button>
-                    <Button size="sm" variant="flat" color="secondary" onPress={() => setTerminalHost(host)} isDisabled={!host.canOperate}>在线 SSH</Button>
+                    <Button size="sm" variant="flat" color="secondary" onPress={() => setTerminalHost(host)} isDisabled={!host.canOperate || !host.sshFingerprintVerified}>在线 SSH</Button>
                     <Button size="sm" variant="flat" color="success" onPress={() => navigate(`/forward?vpsHostId=${host.id}`)} isDisabled={!host.canOperate}>添加转发</Button>
-                    <Button size="sm" variant="flat" onPress={() => setDeploymentHost(host)} isDisabled={!host.canOperate}>一键部署</Button>
+                    <Button size="sm" variant="flat" onPress={() => void startBackendInstall(host)} isLoading={backendInstallHostId === host.id} isDisabled={!host.canOperate || !host.sshFingerprintVerified}>一键安装后端</Button>
                     <Button size="sm" variant="light" onPress={() => setTasksHost(host)} isDisabled={!host.canOperate}>任务日志</Button>
                     {host.canManage && <Button size="sm" variant="light" onPress={() => openEdit(host)}>编辑</Button>}
                     {host.healthStatus === 'fingerprint_changed' && host.canManage && <Button size="sm" variant="light" color="warning" onPress={() => void resetFingerprint(host)}>重新验证指纹</Button>}
+                    {host.canManage && host.sshFingerprint && !host.sshFingerprintVerified && <Button size="sm" variant="light" color="warning" onPress={() => void confirmFingerprint(host)}>确认 SSH 指纹</Button>}
                     {host.canManage && <Button size="sm" variant="light" color="danger" onPress={() => void removeHost(host)}>移除</Button>}
                   </div>
                 </CardBody>
@@ -395,7 +412,7 @@ export default function VpsPage() {
                     <option value="">暂不分配（仅管理员可见）</option>
                     {assignableUsers.map((user) => <option key={user.id} value={user.id}>{user.user}（#{user.id}）</option>)}
                   </select>
-                  <p className="mt-1 text-xs text-default-500">分配后，该用户可检测、SSH 和执行部署；管理员始终保留完整控制权。取消分配会立即断开该 VPS 的网页终端，但不会暂停已有转发；如需停用转发，请在转发页暂停或撤销隧道授权。</p>
+                  <p className="mt-1 text-xs text-default-500">分配后，该用户可检测、SSH 和执行部署；管理员始终保留完整控制权。主机指纹须由管理员或 VPS 所有者核对确认后，才可开启终端和部署。取消分配会立即断开该 VPS 的网页终端，但不会暂停已有转发；如需停用转发，请在转发页暂停或撤销隧道授权。</p>
                 </label>
               )}
             </div>
@@ -408,12 +425,8 @@ export default function VpsPage() {
         <ModalContent>{terminalHost && <><ModalHeader className="flex-col items-start gap-1"><span>{terminalHost.name} · 在线 SSH</span><span className="text-xs font-normal text-default-500">{terminalHost.sshUsername}@{terminalHost.host}:{terminalHost.sshPort} · SSH 密码不会发送至浏览器</span></ModalHeader><ModalBody className="pb-5"><Suspense fallback={<div className="flex h-[58vh] min-h-[340px] items-center justify-center"><Spinner label="正在加载安全终端…" /></div>}><VpsTerminal vpsId={terminalHost.id} visible /></Suspense></ModalBody></>}</ModalContent>
       </Modal>
 
-      <Modal isOpen={deploymentHost !== null} onOpenChange={(open) => { if (!open) setDeploymentHost(null); }} size="lg" backdrop="blur">
-        <ModalContent>{deploymentHost && <><ModalHeader>一键部署 · {deploymentHost.name}</ModalHeader><ModalBody><p className="text-sm text-default-600">只可执行经过审核的模板，不支持从浏览器提交任意 Shell 命令。执行日志会保存在此 VPS 的任务记录中。</p><label className="rounded-lg border border-divider p-3"><input type="radio" name="deployment-template" checked={deploymentTemplate === 'docker'} onChange={() => setDeploymentTemplate('docker')} className="mr-2" /><span className="font-medium">安装 / 检查 Docker</span><p className="mt-1 pl-5 text-xs text-default-500">若 Docker 已存在则仅检查版本；否则使用 Docker 官方安装脚本。</p></label><label className="rounded-lg border border-divider p-3"><input type="radio" name="deployment-template" checked={deploymentTemplate === 'flux_panel'} onChange={() => setDeploymentTemplate('flux_panel')} className="mr-2" /><span className="font-medium">部署 Flux Panel 后端与前端</span><p className="mt-1 pl-5 text-xs text-default-500">先确保 Docker 可用，再运行本项目 main 分支的面板安装脚本。</p></label><div className="rounded-lg bg-primary-50 p-3 text-xs text-primary-800 dark:bg-primary-100/10 dark:text-primary-200">部署环境不会自动创建转发。完成后请点击“添加转发”，选择你已获授权的隧道，并填写此 VPS 上服务的端口。</div><div className="rounded-lg bg-warning-50 p-3 text-xs text-warning-800 dark:bg-warning-100/10 dark:text-warning-200">该操作会在远程 VPS 上安装软件或创建服务。请确认目标服务器和 SSH 账号正确。</div></ModalBody><ModalFooter><Button variant="light" onPress={() => setDeploymentHost(null)}>取消</Button><Button color="primary" isLoading={deploymentSubmitting} onPress={() => void startDeployment()}>确认执行</Button></ModalFooter></>}</ModalContent>
-      </Modal>
-
       <Modal isOpen={tasksHost !== null} onOpenChange={(open) => { if (!open) setTasksHost(null); }} size="4xl" scrollBehavior="inside" backdrop="blur">
-        <ModalContent>{tasksHost && <><ModalHeader className="flex items-center justify-between gap-3"><span>{tasksHost.name} · 部署任务</span><Button size="sm" variant="flat" onPress={() => void loadTasks(tasksHost)} isLoading={tasksLoading}>刷新</Button></ModalHeader><ModalBody className="pb-5">{tasksLoading && tasks.length === 0 ? <div className="py-12 text-center"><Spinner label="正在加载任务…" /></div> : tasks.length === 0 ? <div className="py-12 text-center text-sm text-default-500">暂无部署任务</div> : <div className="space-y-3">{tasks.map((task) => { const meta = taskMeta(task.taskStatus); return <div key={task.id} className="rounded-xl border border-divider"><div className="flex flex-wrap items-center justify-between gap-2 border-b border-divider px-3 py-2"><div><span className="font-medium text-sm">{task.taskType === 'docker' ? 'Docker 环境' : 'Flux Panel 部署'}</span><p className="mt-0.5 text-xs text-default-500">发起人：{task.requestedByUserName || '用户'} · {formatTime(task.createdTime)}</p></div><Chip size="sm" color={meta.color} variant="flat">{meta.text}</Chip></div><pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words bg-slate-950 p-3 text-xs leading-5 text-slate-100">{task.outputLog || '等待输出…'}</pre></div>; })}</div>}</ModalBody></>}</ModalContent>
+        <ModalContent>{tasksHost && <><ModalHeader className="flex items-center justify-between gap-3"><span>{tasksHost.name} · 部署任务</span><Button size="sm" variant="flat" onPress={() => void loadTasks(tasksHost)} isLoading={tasksLoading}>刷新</Button></ModalHeader><ModalBody className="pb-5">{tasksLoading && tasks.length === 0 ? <div className="py-12 text-center"><Spinner label="正在加载任务…" /></div> : tasks.length === 0 ? <div className="py-12 text-center text-sm text-default-500">暂无部署任务</div> : <div className="space-y-3">{tasks.map((task) => { const meta = taskMeta(task.taskStatus); const label = task.taskType === 'backend' ? '后端安装' : task.taskType === 'docker' ? 'Docker 环境（旧任务）' : 'Flux Panel 部署（旧任务）'; return <div key={task.id} className="rounded-xl border border-divider"><div className="flex flex-wrap items-center justify-between gap-2 border-b border-divider px-3 py-2"><div><span className="font-medium text-sm">{label}</span><p className="mt-0.5 text-xs text-default-500">发起人：{task.requestedByUserName || '用户'} · {formatTime(task.createdTime)}</p></div><Chip size="sm" color={meta.color} variant="flat">{meta.text}</Chip></div><pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words bg-slate-950 p-3 text-xs leading-5 text-slate-100">{task.outputLog || '等待输出…'}</pre></div>; })}</div>}</ModalBody></>}</ModalContent>
       </Modal>
     </div>
   );

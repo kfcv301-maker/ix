@@ -2,8 +2,9 @@
 # Lunaris Relay 节点 Agent 安装脚本。
 set -Eeuo pipefail
 
-AGENT_RELEASE_BASE="${AGENT_RELEASE_BASE:-https://github.com/kfcv301-maker/ix/releases/latest/download}"
-LEGACY_AGENT_RAW_BASE="${LEGACY_AGENT_RAW_BASE:-https://raw.githubusercontent.com/kfcv301-maker/ix/main}"
+AGENT_RELEASE="${AGENT_RELEASE:-1.4.5}"
+[[ "$AGENT_RELEASE" =~ ^[0-9]+(\.[0-9]+){1,3}$ ]] || { printf '无效的 Agent 发布版本：%s\n' "$AGENT_RELEASE" >&2; exit 1; }
+AGENT_RELEASE_BASE="${AGENT_RELEASE_BASE:-https://github.com/kfcv301-maker/ix/releases/download/${AGENT_RELEASE}}"
 INSTALL_DIR="${INSTALL_DIR:-/etc/flux-panel-agent}"
 SERVICE_NAME="flux-panel-agent"
 DDNS_SERVICE_NAME="flux-panel-ddns"
@@ -58,8 +59,8 @@ Lunaris Relay 节点 Agent 安装脚本
   install.sh --uninstall
 
 可选环境变量：
-  AGENT_RELEASE_BASE=https://github.com/kfcv301-maker/ix/releases/latest/download
-  LEGACY_AGENT_RAW_BASE=https://raw.githubusercontent.com/kfcv301-maker/ix/main
+  AGENT_RELEASE=1.4.5
+  AGENT_RELEASE_BASE=https://github.com/kfcv301-maker/ix/releases/download/1.4.5
   INSTALL_DIR=/etc/flux-panel-agent
 EOF
 }
@@ -560,15 +561,12 @@ EOF
 }
 
 download_agent() {
-  local arch url checksum_url fallback_url fallback_checksum_url temp_bin temp_checksum expected actual
+  local arch url checksum_url temp_bin temp_checksum expected actual
   arch="$(architecture)"
-  # The stable install.sh URL follows main, so use the matching main-branch
-  # Agent artifact first. A published Release is only a fallback when the
-  # repository artifact cannot be downloaded.
-  url="$LEGACY_AGENT_RAW_BASE/artifacts/flux-panel-agent-linux-$arch"
+  # Release assets carry a checksum generated from the same reviewed release.
+  # Never fall back to an executable downloaded from a mutable branch.
+  url="$AGENT_RELEASE_BASE/flux-panel-agent-linux-$arch"
   checksum_url="$url.sha256"
-  fallback_url="$AGENT_RELEASE_BASE/flux-panel-agent-linux-$arch"
-  fallback_checksum_url="$fallback_url.sha256"
   temp_bin="$(mktemp)"
   temp_checksum="$(mktemp)"
   # RETURN trap 会在局部变量销毁后执行；在注册时展开临时路径，避免 set -u 触发未绑定变量。
@@ -576,12 +574,7 @@ download_agent() {
 
   command -v curl >/dev/null 2>&1 || fail "请先安装 curl。"
   info "下载 Linux/$arch 节点 Agent"
-  if ! curl --fail --location --retry 3 --connect-timeout 15 "$url" -o "$temp_bin"; then
-    info "仓库 Agent 暂不可用，尝试最新 Release。"
-    url="$fallback_url"
-    checksum_url="$fallback_checksum_url"
-    curl --fail --location --retry 3 --connect-timeout 15 "$url" -o "$temp_bin"
-  fi
+  curl --fail --location --retry 3 --connect-timeout 15 "$url" -o "$temp_bin"
   curl --fail --location --retry 3 --connect-timeout 15 "$checksum_url" -o "$temp_checksum"
 
   expected="$(awk '{print $1}' "$temp_checksum")"

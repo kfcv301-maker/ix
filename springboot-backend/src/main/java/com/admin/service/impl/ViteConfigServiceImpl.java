@@ -5,7 +5,7 @@ import com.admin.mapper.ViteConfigMapper;
 import com.admin.service.ViteConfigService;
 import com.admin.common.lang.R;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
-import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.baomidou.mybatisplus.spring.service.impl.ServiceImpl;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 

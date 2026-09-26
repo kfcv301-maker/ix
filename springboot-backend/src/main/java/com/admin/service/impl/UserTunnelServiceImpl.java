@@ -21,14 +21,15 @@ import com.admin.entity.Tunnel;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
-import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.baomidou.mybatisplus.spring.service.impl.ServiceImpl;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.apache.commons.lang3.StringUtils;
+import org.springframework.dao.DuplicateKeyException;
 
-import javax.annotation.Resource;
+import jakarta.annotation.Resource;
 import java.util.List;
 import java.util.Map;
 import java.util.Locale;
@@ -121,7 +122,12 @@ public class UserTunnelServiceImpl extends ServiceImpl<UserTunnelMapper, UserTun
         }
         // 设置默认状态为启用
         userTunnel.setStatus(1);
-        boolean success = this.save(userTunnel);
+        boolean success;
+        try {
+            success = this.save(userTunnel);
+        } catch (DuplicateKeyException exception) {
+            return R.err(ERROR_PERMISSION_EXISTS);
+        }
 
         if (success) {
             WebSocketServer.closeUserSessions(userTunnel.getUserId().longValue());

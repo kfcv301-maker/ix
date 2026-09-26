@@ -3,7 +3,7 @@ name: Build, Verify, and Release
 # A release is immutable. Bump this value together with the compose image tags
 # whenever a frontend or backend change should be published.
 env:
-  VERSION: "1.4.4"
+  VERSION: "1.4.5"
 
 on:
   push:
@@ -239,6 +239,14 @@ jobs:
           name: gost-binaries
           path: ./artifacts
 
+      - name: Package checked installer scripts
+        shell: bash
+        run: |
+          for script in backend_install.sh install.sh panel_install.sh upgrade_from_original.sh; do
+            cp "./${script}" "./artifacts/${script}"
+            sha256sum "./artifacts/${script}" > "./artifacts/${script}.sha256"
+          done
+
       - name: Create tag and release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -259,8 +267,14 @@ jobs:
             ./artifacts/flux-panel-agent-linux-amd64.sha256 \
             ./artifacts/flux-panel-agent-linux-arm64 \
             ./artifacts/flux-panel-agent-linux-arm64.sha256 \
-            ./install.sh \
-            ./panel_install.sh \
+            ./artifacts/backend_install.sh \
+            ./artifacts/backend_install.sh.sha256 \
+            ./artifacts/install.sh \
+            ./artifacts/install.sh.sha256 \
+            ./artifacts/panel_install.sh \
+            ./artifacts/panel_install.sh.sha256 \
+            ./artifacts/upgrade_from_original.sh \
+            ./artifacts/upgrade_from_original.sh.sha256 \
             ./docker-compose-v4.yml \
             ./docker-compose-v6.yml \
             ./gost.sql \

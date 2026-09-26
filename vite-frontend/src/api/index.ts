@@ -36,9 +36,16 @@ export interface VpsTerminalTicket {
 }
 export const createVpsTerminalTicket = (id: number) => Network.post<VpsTerminalTicket>("/vps/terminal-ticket", { id });
 export const resetVpsHostFingerprint = (id: number) => Network.post("/vps/reset-fingerprint", { id });
+export const confirmVpsHostFingerprint = (id: number, fingerprint: string) => Network.post("/vps/confirm-fingerprint", { id, fingerprint });
 export const getVpsAssignableUsers = () => Network.post("/vps/assignable-users");
-export const deployVpsTemplate = (id: number, taskType: 'docker' | 'flux_panel') => Network.post("/vps/deploy", { id, taskType });
+export const installVpsBackend = (id: number) => Network.post("/vps/deploy", { id });
 export const getVpsDeploymentTasks = (id: number) => Network.post("/vps/tasks", { id });
+
+export interface RealtimeTicket {
+  ticket: string;
+  expiresAt: number;
+}
+export const createRealtimeTicket = () => Network.post<RealtimeTicket>("/realtime/ticket");
 
 // 节点CRUD操作 - 全部使用POST请求
 export const createNode = (data: any) => Network.post("/node/create", data);

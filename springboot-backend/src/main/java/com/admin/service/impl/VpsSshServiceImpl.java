@@ -7,6 +7,7 @@ import net.schmizz.sshj.SSHClient;
 import net.schmizz.sshj.connection.channel.direct.Session;
 import net.schmizz.sshj.transport.verification.HostKeyVerifier;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Value;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -42,8 +43,11 @@ public class VpsSshServiceImpl implements VpsSshService {
         return thread;
     }, new ThreadPoolExecutor.CallerRunsPolicy());
 
-    @javax.annotation.Resource
+    @jakarta.annotation.Resource
     private VpsSshTargetPolicy vpsSshTargetPolicy;
+
+    @Value("${vps.backend-install.release:1.4.5}")
+    private String backendInstallRelease;
 
     @Override
     public HealthCheckResult check(VpsHost host, String password) {
@@ -157,43 +161,23 @@ public class VpsSshServiceImpl implements VpsSshService {
     }
 
     private String resolveTemplate(String template) {
-        if ("docker".equals(template)) {
-            return dockerInstallScript();
-        }
-        if ("flux_panel".equals(template)) {
-            return dockerInstallScript() + "\n"
-                    + "echo '[Flux Panel] 开始部署完整面板…'\n"
-                    + "command -v bash >/dev/null 2>&1 || { echo '[Flux Panel] 缺少 bash，无法运行面板安装脚本。' >&2; exit 1; }\n"
-                    + "panel_installer=$(mktemp)\n"
-                    + "trap 'rm -f \"$panel_installer\"' EXIT\n"
-                    + "curl -fsSL --retry 3 https://raw.githubusercontent.com/kfcv301-maker/ix/main/panel_install.sh -o \"$panel_installer\"\n"
-                    + "bash \"$panel_installer\" install\n";
+        if ("backend".equals(template)) {
+            String release = backendInstallRelease == null ? "" : backendInstallRelease.trim();
+            if (!release.matches("[0-9]+(?:\\.[0-9]+){1,3}")) {
+                throw new IllegalStateException("VPS 后端安装版本配置无效");
+            }
+            // This endpoint is intentionally kept stable for existing VPS
+            // deployment integrations. The installer itself receives the
+            // reviewed source tag below, so it upgrades only that backend.
+            String installerUrl = "https://raw.githubusercontent.com/kfcv301-maker/ix/main/backend_install.sh";
+            return "set -eu\n"
+                    + "command -v bash >/dev/null 2>&1 || { echo '[后端安装] 缺少 bash。' >&2; exit 1; }\n"
+                    + "backend_installer=$(mktemp)\n"
+                    + "trap 'rm -f \"$backend_installer\"' EXIT\n"
+                    + "curl -fsSL --retry 3 " + installerUrl + " -o \"$backend_installer\"\n"
+                    + "REPO_REF=" + release + " bash \"$backend_installer\" install\n";
         }
         throw new IllegalArgumentException("不支持的部署模板");
-    }
-
-    private String dockerInstallScript() {
-        return "set -eu\n"
-                + "if [ \"$(id -u)\" -ne 0 ]; then\n"
-                + "  echo '[部署] 当前 SSH 用户不是 root，请使用 root 账号执行一键部署。' >&2\n"
-                + "  exit 1\n"
-                + "fi\n"
-                + "if command -v docker >/dev/null 2>&1; then\n"
-                + "  echo '[Docker] 已安装：'\n"
-                + "  docker --version\n"
-                + "else\n"
-                + "  if [ -r /etc/os-release ]; then\n"
-                + "    . /etc/os-release\n"
-                + "    if [ \"${ID:-}\" = debian ] && [ \"${VERSION_ID:-}\" = 11 ]; then\n"
-                + "      echo '[Docker] Debian 11 已结束支持，当前 Docker 官方安装器不支持；请先升级到受支持的系统。' >&2\n"
-                + "      exit 1\n"
-                + "    fi\n"
-                + "  fi\n"
-                + "  echo '[Docker] 正在安装…'\n"
-                + "  curl -fsSL https://get.docker.com | sh\n"
-                + "  docker --version\n"
-                + "fi\n"
-                + "docker compose version || true\n";
     }
 
     private static String fingerprint(PublicKey key) {

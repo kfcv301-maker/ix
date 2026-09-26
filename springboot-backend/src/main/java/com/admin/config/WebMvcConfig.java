@@ -2,6 +2,7 @@ package com.admin.config;
 
 import com.admin.common.interceptor.JwtInterceptor;
 import org.springframework.context.annotation.Bean;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
@@ -16,9 +17,14 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 @EnableWebMvc
 public class WebMvcConfig implements WebMvcConfigurer {
 
+    @Value("${cors.allowed-origins:}")
+    private String allowedOrigins;
+
     private CorsConfiguration buildConfig() {
         CorsConfiguration corsConfiguration = new CorsConfiguration();
-        corsConfiguration.addAllowedOrigin("*");
+        for (String origin : allowedOrigins.split(",")) {
+            if (!origin.trim().isEmpty()) corsConfiguration.addAllowedOrigin(origin.trim());
+        }
         corsConfiguration.addAllowedHeader("*");
         corsConfiguration.addAllowedMethod("*");
         corsConfiguration.addExposedHeader("Authorization");
@@ -28,14 +34,15 @@ public class WebMvcConfig implements WebMvcConfigurer {
     @Bean
     public CorsFilter corsFilter() {
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
-        source.registerCorsConfiguration("/**", buildConfig());
+        if (!allowedOrigins.trim().isEmpty()) source.registerCorsConfiguration("/**", buildConfig());
         return new CorsFilter(source);
     }
 
     @Override
     public void addCorsMappings(CorsRegistry registry) {
+        if (allowedOrigins.trim().isEmpty()) return;
         registry.addMapping("/**")
-                .allowedOrigins("*")
+                .allowedOrigins(allowedOrigins.split(","))
                 .allowedMethods("GET", "POST", "DELETE", "PUT")
                 .maxAge(3600);
     }

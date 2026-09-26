@@ -15,6 +15,7 @@ import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YA
 
 
 import { 
+  createRealtimeTicket,
   createNode, 
   getNodeList, 
   updateNode, 
@@ -253,7 +254,7 @@ export default function NodePage() {
   };
 
   // 初始化WebSocket连接
-  const initWebSocket = () => {
+  const initWebSocket = async () => {
     if (!shouldMaintainSocketRef.current) return;
     if (websocketRef.current && 
         (websocketRef.current.readyState === WebSocket.OPEN || 
@@ -266,7 +267,12 @@ export default function NodePage() {
     }
     
     try {
-      websocketRef.current = new WebSocket(getRealtimeSocketUrl('detail'));
+      const ticketResponse = await createRealtimeTicket();
+      if (!shouldMaintainSocketRef.current || ticketResponse?.code !== 0 || !ticketResponse.data?.ticket) {
+        attemptReconnect();
+        return;
+      }
+      websocketRef.current = new WebSocket(getRealtimeSocketUrl(ticketResponse.data.ticket, 'detail'));
       
       websocketRef.current.onopen = () => {
         reconnectAttemptsRef.current = 0;

@@ -6,7 +6,7 @@ import toast from 'react-hot-toast';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 
-import { getNodeList, getSubscriptionToken, getUserPackageInfo } from "@/api";
+import { createRealtimeTicket, getNodeList, getSubscriptionToken, getUserPackageInfo } from "@/api";
 import { getRealtimeSocketUrl } from "@/utils/realtime-socket";
 
 interface UserInfo {
@@ -275,11 +275,13 @@ export default function DashboardPage() {
         connect();
       }, 3_000);
     };
-    const connect = () => {
+    const connect = async () => {
       if (disposed || realtimeSocketRef.current) return;
       let socket: WebSocket;
       try {
-        socket = new WebSocket(getRealtimeSocketUrl());
+        const ticketResponse = await createRealtimeTicket();
+        if (disposed || ticketResponse?.code !== 0 || !ticketResponse.data?.ticket) throw new Error('实时监控票据无效');
+        socket = new WebSocket(getRealtimeSocketUrl(ticketResponse.data.ticket));
       } catch {
         scheduleReconnect();
         return;

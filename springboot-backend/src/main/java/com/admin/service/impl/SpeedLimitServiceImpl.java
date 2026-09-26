@@ -14,7 +14,7 @@ import com.admin.service.SpeedLimitService;
 import com.admin.service.TunnelService;
 import com.admin.service.UserTunnelService;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
-import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.baomidou.mybatisplus.spring.service.impl.ServiceImpl;
 import lombok.Data;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -289,7 +289,7 @@ public class SpeedLimitServiceImpl extends ServiceImpl<SpeedLimitMapper, SpeedLi
      * @return 检查结果响应
      */
     private R checkSpeedLimitUsage(Long speedLimitId) {
-        int userCount = userTunnelService.count(new QueryWrapper<UserTunnel>().eq("speed_id", speedLimitId));
+        long userCount = userTunnelService.count(new QueryWrapper<UserTunnel>().eq("speed_id", speedLimitId));
         if (userCount != 0) {
             return R.err(ERROR_SPEED_LIMIT_IN_USE);
         }

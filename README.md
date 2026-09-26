@@ -24,7 +24,7 @@ Lunaris Relay 是一个面向自建基础设施的高性能流量转发控制面
 - 节点、用户、隧道及转发规则管理
 - 转发限速、配额与流量统计
 - 节点在线状态、系统资源监控与隧道一键连通性检测
-- VPS 托管、按需 SSH 检测、在线 SSH 终端与 Docker / 面板一键部署
+- VPS 托管、按需 SSH 检测、在线 SSH 终端与后端一键安装
 - 基于 GOST 的 Agent 生命周期与转发服务管理
 
 ## 项目结构
@@ -55,7 +55,7 @@ docker compose -f docker-compose.local.yml build
 ### 安装面板
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/panel_install.sh | sudo bash
+curl -fsSL https://github.com/kfcv301-maker/ix/releases/download/1.4.5/panel_install.sh | sudo bash
 ```
 
 默认使用前端端口 `6366`、后端端口 `6365`，数据库密码与 JWT 密钥在服务器本机的 `/opt/flux-panel-enhanced/.env` 自动生成，脚本不会把它们上传到 GitHub。需要自定义端口时：
@@ -65,16 +65,16 @@ curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/panel_install
 网页终端默认只接受与面板同源的浏览器请求。若在前端容器前另设 HTTPS 反向代理，需将原始 `Host` 和 `X-Forwarded-Proto` 传给前端，并对 `/vps-terminal` 关闭访问日志（URL 中包含短时一次性票据）；内置 Nginx 会继续将公网协议传给后端。若前端和 API 刻意部署在不同域名，需在服务器 `.env` 设置 `VPS_TERMINAL_ALLOWED_ORIGINS=https://你的前端域名`；普通用户托管的 SSH 地址始终只允许公网地址。管理员确有内网库存 VPS 需求时，才可显式设置 `VPS_ALLOW_PRIVATE_ADMIN_TARGETS=true`。
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/panel_install.sh | sudo env FRONTEND_PORT=8080 BACKEND_PORT=6365 bash
+curl -fsSL https://github.com/kfcv301-maker/ix/releases/download/1.4.5/panel_install.sh | sudo env FRONTEND_PORT=8080 BACKEND_PORT=6365 bash
 ```
 
 更新面板（保留数据库卷与 `.env`）：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/panel_install.sh | sudo bash -s -- update
+curl -fsSL https://github.com/kfcv301-maker/ix/releases/download/1.4.5/panel_install.sh | sudo bash -s -- update
 ```
 
-完成一次上述更新后，管理员也可以在面板的“网站配置”页面使用“检查并更新”。它会先在服务器本机导出 MySQL 备份，再拉取 `main` 分支并重建面板；不会删除数据库卷、节点、转发、账号、设置或 `.env`。更新器不开放公网端口，仅接受面板内部的带随机密钥请求。
+完成一次上述更新后，管理员也可以在面板的“网站配置”页面使用“检查并更新”。它会先在服务器本机导出 MySQL 备份，再拉取已固定的 Release 标签并重建面板；不会删除数据库卷、节点、转发、账号、设置或 `.env`。更新器不开放公网端口，仅接受面板内部的带随机密钥请求。
 
 ### 从原版哆啦A梦面板升级
 
@@ -83,13 +83,13 @@ curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/panel_install
 在原版面板的安装目录运行：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/upgrade_from_original.sh | sudo bash
+curl -fsSL https://github.com/kfcv301-maker/ix/releases/download/1.4.5/upgrade_from_original.sh | sudo bash
 ```
 
 原版不在当前目录时，填写其目录：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/upgrade_from_original.sh | sudo bash -s -- --source-dir /path/to/original-panel
+curl -fsSL https://github.com/kfcv301-maker/ix/releases/download/1.4.5/upgrade_from_original.sh | sudo bash -s -- --source-dir /path/to/original-panel
 ```
 
 先只检查兼容性、不做任何修改可加 `--dry-run`。迁移完成后，后续更新仍使用上面的 `panel_install.sh ... update` 命令；它会保留原数据库卷和 `.env`。
@@ -99,10 +99,10 @@ curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/upgrade_from_
 在面板的节点管理页面复制安装命令即可。安装命令会自动带入当前面板域名和该节点独立密钥，无须设置或暴露后端固定端口：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/install.sh | sudo bash -s -- --panel 'https://panel.example.com' --token '节点独立密钥'
+curl -fsSL https://github.com/kfcv301-maker/ix/releases/download/1.4.5/install.sh | sudo bash -s -- --panel 'https://panel.example.com' --token '节点独立密钥'
 ```
 
-脚本会根据服务器架构从当前稳定 Release 下载 `amd64` 或 `arm64` Agent，并在写入 `/etc/flux-panel-agent/gost` 前校验 SHA-256；发布刚完成前若 Release 资源短暂不可用，才回退到仓库中保留的兼容 Agent。它会创建 `flux-panel-agent.service` 并立即启动；重新安装 Agent 会短暂重启该节点进程，但不会修改面板数据库中的节点与转发记录。
+脚本会根据服务器架构从固定 Release 下载 `amd64` 或 `arm64` Agent，并在写入 `/etc/flux-panel-agent/gost` 前校验 SHA-256；校验资源不可用或不匹配时会安全失败，不会执行仓库分支上的回退代码。它会创建 `flux-panel-agent.service` 并立即启动；重新安装 Agent 会短暂重启该节点进程，但不会修改面板数据库中的节点与转发记录。
 
 安装命令自动读取管理员当前浏览器的面板域名。例如从 `https://panel.example.com` 打开面板时，Agent 使用 `wss://panel.example.com/system-info` 保持通信，并通过 `https://panel.example.com/flow/*` 上报数据；不再要求管理员在网站配置填写 IP 或后端端口。新 Agent 将独立节点密钥放在 `Authorization: Bearer` 请求头中；后端仍接受旧 Agent 的 URL 密钥参数，已有节点无需重装。域名的反向代理须把 `/system-info`（WebSocket）、`/flow/upload` 与 `/flow/config` 转到后端，并使用有效 HTTPS 证书。
 
@@ -118,19 +118,19 @@ curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/install.sh | 
 所有档位都会开启接收缓存自动调节、MTU 探测、TCP Fast Open，并关闭空闲慢启动。`standard` 正好使用你给出的最大参数，其余档位只会往下收缩，不会超出 16 MB、16384、8192 的上限。支持 BBR/FQ 的节点启用 BBR/FQ；旧内核缺少其中某项时脚本会自动保留可用算法、跳过不支持的参数，Agent 仍会继续安装。需要跳过调优可加 `--skip-tcp-tuning`：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/install.sh | sudo bash -s -- --panel 'https://panel.example.com' --token '节点独立密钥' --skip-tcp-tuning
+curl -fsSL https://github.com/kfcv301-maker/ix/releases/download/1.4.5/install.sh | sudo bash -s -- --panel 'https://panel.example.com' --token '节点独立密钥' --skip-tcp-tuning
 ```
 
 启用动态 TCP 内存保护后，节点本机每分钟读取一次 Linux 的 `MemAvailable`（不会把文件缓存误判为不可用内存）。可用内存处于紧急区间时立即降一档；处于压力区间连续三次采样才降档；资源稳定十分钟后才逐级恢复，且永远不会超过管理员设定的最高档位或低于最低档位。它只限制后续 TCP socket 的缓存增长与队列上限，不会重启 Agent、删除规则或主动断开现有转发。低内存机器还会自动把可用最高档位压到安全范围。运行状态会随节点监控上报；旧 Agent 和固定档位节点显示为 `--`。
 
 ### VPS 托管与网页 SSH
 
-在“VPS 托管”中添加服务器的 SSH 地址、端口、用户名和密码后，面板会每分钟自动验证 SSH 可达性。密码只以从面板 JWT 密钥派生的 AES-GCM 密文保存，列表和浏览器接口均不返回明文。
+在“VPS 托管”中添加服务器的 SSH 地址、端口、用户名和密码后，面板只在手动检测、打开终端或发起受限部署时验证 SSH；不会按分钟扫描全部主机。密码以独立的 `VPS_CREDENTIAL_KEY` 派生的 AES-GCM 密文保存，列表和浏览器接口均不返回明文。
 
 - 普通用户托管的 VPS：该用户与全部管理员均可检测、SSH、部署和维护。
 - 管理员托管的 VPS：管理员可将其分配给一个用户；该用户可使用 SSH 与部署功能，但不能修改连接凭据、重新分配或移除服务器。
 - 在线 SSH：浏览器仅收到终端输入输出，真正的 SSH 连接由后端建立；首次成功连接后会固定 SSH 主机指纹，指纹变化时必须由可管理者确认后重新验证。
-- 一键部署：当前内置 Docker 环境与完整 Flux Panel 部署模板；不接受浏览器提交任意 Shell 命令，并保留有限长度的任务日志。
+- 一键安装后端：固定安装 Spring Boot 后端及其必需的 MySQL，不会部署前端、更新器或完整面板；不接受浏览器提交任意 Shell 命令，并保留有限长度的任务日志。
 
 ### Cloudflare DDNS（可选）
 
@@ -141,7 +141,7 @@ curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/install.sh | 
 手动命令格式：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/install.sh | sudo bash -s -- --panel 'https://panel.example.com' --token '节点独立密钥' --cf-api-token 'Cloudflare_API_Token' --cf-record 'node.example.com'
+curl -fsSL https://github.com/kfcv301-maker/ix/releases/download/1.4.5/install.sh | sudo bash -s -- --panel 'https://panel.example.com' --token '节点独立密钥' --cf-api-token 'Cloudflare_API_Token' --cf-record 'node.example.com'
 ```
 
 ## 节点硬件信息说明

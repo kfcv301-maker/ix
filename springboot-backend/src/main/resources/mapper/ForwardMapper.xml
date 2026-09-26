@@ -28,12 +28,31 @@
             t.name AS tunnelName,
             t.in_ip AS inIp,
             t.out_ip AS outIp,
+            CASE
+                WHEN ut.entry_address_mode = 'CUSTOM' THEN selected_domain.domain
+                WHEN ut.entry_address_mode = 'DEFAULT' THEN default_domain.domain
+                ELSE NULL
+            END AS entryDomain,
             t.type,
             t.protocol
-        FROM 
+        FROM
             forward f
         LEFT JOIN
             tunnel t ON f.tunnel_id = t.id
+        LEFT JOIN
+            user_tunnel ut ON ut.user_id = f.user_id AND ut.tunnel_id = f.tunnel_id
+        LEFT JOIN
+            tunnel_entry_domain selected_domain ON selected_domain.id = ut.entry_domain_id
+            AND selected_domain.tunnel_id = f.tunnel_id
+            AND selected_domain.status = 1
+        LEFT JOIN
+            tunnel_entry_domain default_domain ON default_domain.id = (
+                SELECT MIN(default_candidate.id)
+                FROM tunnel_entry_domain default_candidate
+                WHERE default_candidate.tunnel_id = f.tunnel_id
+                  AND default_candidate.is_default = 1
+                  AND default_candidate.status = 1
+            )
         LEFT JOIN
             vps_host vh ON f.vps_host_id = vh.id
         ORDER BY 
@@ -66,12 +85,31 @@
             t.name AS tunnelName,
             t.in_ip AS inIp,
             t.out_ip AS outIp,
+            CASE
+                WHEN ut.entry_address_mode = 'CUSTOM' THEN selected_domain.domain
+                WHEN ut.entry_address_mode = 'DEFAULT' THEN default_domain.domain
+                ELSE NULL
+            END AS entryDomain,
             t.type,
             t.protocol
-        FROM 
+        FROM
             forward f
         LEFT JOIN
             tunnel t ON f.tunnel_id = t.id
+        LEFT JOIN
+            user_tunnel ut ON ut.user_id = f.user_id AND ut.tunnel_id = f.tunnel_id
+        LEFT JOIN
+            tunnel_entry_domain selected_domain ON selected_domain.id = ut.entry_domain_id
+            AND selected_domain.tunnel_id = f.tunnel_id
+            AND selected_domain.status = 1
+        LEFT JOIN
+            tunnel_entry_domain default_domain ON default_domain.id = (
+                SELECT MIN(default_candidate.id)
+                FROM tunnel_entry_domain default_candidate
+                WHERE default_candidate.tunnel_id = f.tunnel_id
+                  AND default_candidate.is_default = 1
+                  AND default_candidate.status = 1
+            )
         LEFT JOIN
             vps_host vh ON f.vps_host_id = vh.id
         WHERE 

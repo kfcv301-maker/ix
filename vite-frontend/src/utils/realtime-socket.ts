@@ -9,7 +9,7 @@ import axios from 'axios';
  * against `window.location` also keeps WebView and custom panel addresses
  * working.
  */
-export const getRealtimeSocketUrl = (metrics: 'summary' | 'detail' = 'summary'): string => {
+export const getRealtimeSocketUrl = (ticket: string, metrics: 'summary' | 'detail' = 'summary'): string => {
   const configuredBase = axios.defaults.baseURL
     || (import.meta.env.VITE_API_BASE ? `${import.meta.env.VITE_API_BASE}/api/v1/` : '/api/v1/');
   const apiUrl = new URL(configuredBase, window.location.href);
@@ -20,10 +20,9 @@ export const getRealtimeSocketUrl = (metrics: 'summary' | 'detail' = 'summary'):
   apiUrl.searchParams.set('type', '0');
   apiUrl.searchParams.set('metrics', metrics);
 
-  const token = localStorage.getItem('token');
-  if (token) {
-    apiUrl.searchParams.set('secret', token);
-  }
+  // This opaque ticket is single-use and expires in one minute. Never put the
+  // long-lived browser login JWT in a WebSocket URL.
+  apiUrl.searchParams.set('ticket', ticket);
 
   return apiUrl.toString();
 };

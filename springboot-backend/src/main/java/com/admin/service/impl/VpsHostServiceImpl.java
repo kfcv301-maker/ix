@@ -1,6 +1,7 @@
 package com.admin.service.impl;
 
 import com.admin.common.dto.VpsActionDto;
+import com.admin.common.dto.VpsFingerprintConfirmDto;
 import com.admin.common.dto.VpsHostDto;
 import com.admin.common.dto.VpsHostUpdateDto;
 import com.admin.common.dto.VpsHostView;
@@ -18,13 +19,13 @@ import com.admin.service.VpsHostService;
 import com.admin.service.VpsSshService;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
-import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.baomidou.mybatisplus.spring.service.impl.ServiceImpl;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 
-import javax.annotation.Resource;
+import jakarta.annotation.Resource;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -58,7 +59,11 @@ public class VpsHostServiceImpl extends ServiceImpl<VpsHostMapper, VpsHost> impl
     @Value("${jwt-secret}")
     private String jwtSecret;
 
+    @Value("${vps.credential-key:}")
+    private String credentialKey;
+
     private volatile AESCrypto credentialCrypto;
+    private volatile AESCrypto legacyCredentialCrypto;
 
     @Override
     public R listHosts() {
@@ -138,6 +143,7 @@ public class VpsHostServiceImpl extends ServiceImpl<VpsHostMapper, VpsHost> impl
         if (actor.administrator && ORIGIN_ADMIN.equals(host.getOrigin())) host.setAssignedUserId(hostDto.getAssignedUserId());
         if (endpointChanged) {
             host.setSshFingerprint(null);
+            host.setSshFingerprintVerified(false);
             host.setHealthStatus("unknown");
             host.setLastCheckMessage("SSH 地址或端口已变更，等待重新验证主机指纹");
             host.setLastCheckTime(null);
@@ -155,6 +161,7 @@ public class VpsHostServiceImpl extends ServiceImpl<VpsHostMapper, VpsHost> impl
         if (endpointChanged) {
             update(new VpsHost(), new UpdateWrapper<VpsHost>().eq("id", host.getId())
                     .set("ssh_fingerprint", null)
+                    .set("ssh_fingerprint_verified", false)
                     .set("last_check_time", null)
                     .set("last_latency_ms", null));
         }
@@ -198,16 +205,39 @@ public class VpsHostServiceImpl extends ServiceImpl<VpsHostMapper, VpsHost> impl
         long now = System.currentTimeMillis();
         if (!update(new VpsHost(), new UpdateWrapper<VpsHost>().eq("id", host.getId())
                 .set("ssh_fingerprint", null)
+                .set("ssh_fingerprint_verified", false)
                 .set("health_status", "unknown")
                 .set("last_check_message", "SSH 主机指纹已清除，请重新执行检测确认新服务器身份")
                 .set("last_check_time", null)
                 .set("last_latency_ms", null)
                 .set("updated_time", now))) return R.err("重置 SSH 主机指纹失败");
         host.setSshFingerprint(null);
+        host.setSshFingerprintVerified(false);
         host.setHealthStatus("unknown");
         host.setLastCheckMessage("SSH 主机指纹已清除，请重新执行检测确认新服务器身份");
         host.setLastCheckTime(null);
         host.setLastLatencyMs(null);
+        return R.ok(toView(host, actor, loadUserNames(Collections.singletonList(host))));
+    }
+
+    @Override
+    public R confirmFingerprint(VpsFingerprintConfirmDto confirmDto) {
+        Actor actor = currentActor();
+        VpsHost host = getById(confirmDto.getId());
+        if (host == null || !Objects.equals(host.getStatus(), ACTIVE_STATUS)) return R.err("VPS 不存在");
+        if (!canManage(host, actor)) return R.err(403, "没有确认此 VPS SSH 指纹的权限");
+        String expected = host.getSshFingerprint();
+        if (isBlank(expected)) return R.err("请先执行 SSH 检测以获取主机指纹");
+        if (!expected.equals(confirmDto.getFingerprint().trim())) return R.err("提供的 SSH 指纹与最近检测结果不一致");
+        long now = System.currentTimeMillis();
+        if (!update(new VpsHost(), new UpdateWrapper<VpsHost>().eq("id", host.getId())
+                .eq("ssh_fingerprint", expected)
+                .set("ssh_fingerprint_verified", true)
+                .set("updated_time", now))) {
+            return R.err("确认 SSH 指纹失败，请刷新后重试");
+        }
+        host.setSshFingerprintVerified(true);
+        host.setUpdatedTime(now);
         return R.ok(toView(host, actor, loadUserNames(Collections.singletonList(host))));
     }
 
@@ -244,6 +274,12 @@ public class VpsHostServiceImpl extends ServiceImpl<VpsHostMapper, VpsHost> impl
     }
 
     @Override
+    public boolean isFingerprintVerified(VpsHost host) {
+        return host != null && Boolean.TRUE.equals(host.getSshFingerprintVerified())
+                && !isBlank(host.getSshFingerprint());
+    }
+
+    @Override
     public List<VpsHost> listAccessibleHosts(Long userId, boolean administrator) {
         QueryWrapper<VpsHost> query = new QueryWrapper<VpsHost>()
                 .eq("status", ACTIVE_STATUS)
@@ -268,7 +304,9 @@ public class VpsHostServiceImpl extends ServiceImpl<VpsHostMapper, VpsHost> impl
                 .set("updated_time", now);
         if (isBlank(host.getSshFingerprint()) && !isBlank(fingerprint) && !"unknown".equals(fingerprint)) {
             update.set("ssh_fingerprint", fingerprint);
+            update.set("ssh_fingerprint_verified", false);
             host.setSshFingerprint(fingerprint);
+            host.setSshFingerprintVerified(false);
         }
         update(new VpsHost(), update);
         host.setHealthStatus("online");
@@ -303,6 +341,18 @@ public class VpsHostServiceImpl extends ServiceImpl<VpsHostMapper, VpsHost> impl
         try {
             return getCredentialCrypto().decryptString(host.getSshPassword());
         } catch (RuntimeException exception) {
+            if (hasDedicatedCredentialKey()) {
+                try {
+                    String password = getLegacyCredentialCrypto().decryptString(host.getSshPassword());
+                    String migrated = getCredentialCrypto().encrypt(password);
+                    update(new VpsHost(), new UpdateWrapper<VpsHost>().eq("id", host.getId())
+                            .set("ssh_password", migrated));
+                    host.setSshPassword(migrated);
+                    return password;
+                } catch (RuntimeException ignored) {
+                    // Not a legacy ciphertext either; do not expose a crypto error.
+                }
+            }
             return null;
         }
     }
@@ -319,7 +369,9 @@ public class VpsHostServiceImpl extends ServiceImpl<VpsHostMapper, VpsHost> impl
                 .set("updated_time", now);
         if (isBlank(host.getSshFingerprint()) && result.isOnline() && !isBlank(result.getFingerprint())) {
             updateWrapper.set("ssh_fingerprint", result.getFingerprint());
+            updateWrapper.set("ssh_fingerprint_verified", false);
             host.setSshFingerprint(result.getFingerprint());
+            host.setSshFingerprintVerified(false);
         }
         update(new VpsHost(), updateWrapper);
     }
@@ -386,12 +438,31 @@ public class VpsHostServiceImpl extends ServiceImpl<VpsHostMapper, VpsHost> impl
             synchronized (this) {
                 crypto = credentialCrypto;
                 if (crypto == null) {
-                    crypto = new AESCrypto(jwtSecret + ":vps-host-credential:v1");
+                    crypto = new AESCrypto((hasDedicatedCredentialKey() ? credentialKey.trim() : jwtSecret)
+                            + ":vps-host-credential:v1");
                     credentialCrypto = crypto;
                 }
             }
         }
         return crypto;
+    }
+
+    private AESCrypto getLegacyCredentialCrypto() {
+        AESCrypto crypto = legacyCredentialCrypto;
+        if (crypto == null) {
+            synchronized (this) {
+                crypto = legacyCredentialCrypto;
+                if (crypto == null) {
+                    crypto = new AESCrypto(jwtSecret + ":vps-host-credential:v1");
+                    legacyCredentialCrypto = crypto;
+                }
+            }
+        }
+        return crypto;
+    }
+
+    private boolean hasDedicatedCredentialKey() {
+        return !isBlank(credentialKey);
     }
 
     private static boolean isBlank(String value) {

@@ -3,8 +3,8 @@ package com.admin.common.migration;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
-import javax.annotation.PostConstruct;
-import javax.annotation.Resource;
+import jakarta.annotation.PostConstruct;
+import jakarta.annotation.Resource;
 
 /**
  * Keeps existing panel installations upgrade-safe: VPS hosting tables are
@@ -31,6 +31,7 @@ public class VpsHostingMigration {
                 + "assigned_user_id BIGINT NULL,"
                 + "remark VARCHAR(1000) NULL,"
                 + "ssh_fingerprint VARCHAR(255) NULL,"
+                + "ssh_fingerprint_verified TINYINT NOT NULL DEFAULT 0,"
                 + "health_status VARCHAR(32) NOT NULL DEFAULT 'unknown',"
                 + "last_check_time BIGINT NULL,"
                 + "last_check_message VARCHAR(500) NULL,"
@@ -51,6 +52,7 @@ public class VpsHostingMigration {
                 + "requested_by_user_id BIGINT NOT NULL,"
                 + "task_type VARCHAR(64) NOT NULL,"
                 + "task_status VARCHAR(32) NOT NULL,"
+                + "active_lock VARCHAR(64) NULL,"
                 + "output_log MEDIUMTEXT NULL,"
                 + "started_time BIGINT NULL,"
                 + "finished_time BIGINT NULL,"
@@ -58,6 +60,7 @@ public class VpsHostingMigration {
                 + "updated_time BIGINT NULL,"
                 + "status INT NOT NULL DEFAULT 1,"
                 + "PRIMARY KEY (id),"
+                + "UNIQUE KEY uk_vps_task_active_lock (active_lock),"
                 + "KEY idx_vps_task_vps (vps_id),"
                 + "KEY idx_vps_task_status (task_status)"
                 + ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");

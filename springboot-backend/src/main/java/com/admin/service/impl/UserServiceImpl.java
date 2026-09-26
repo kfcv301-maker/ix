@@ -19,7 +19,7 @@ import com.admin.service.*;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
-import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.baomidou.mybatisplus.spring.service.impl.ServiceImpl;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
@@ -27,7 +27,7 @@ import org.springframework.beans.BeanUtils;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 
-import javax.annotation.Resource;
+import jakarta.annotation.Resource;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -82,15 +82,10 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     private static final String ERROR_CURRENT_PASSWORD_WRONG = "当前密码错误";
     private static final String ERROR_PASSWORD_NOT_MATCH = "新密码和确认密码不匹配";
 
-    /** 默认账号密码 */
-    private static final String DEFAULT_USERNAME = "admin_user";
-    private static final String DEFAULT_PASSWORD = "admin_user";
-    
     /** 登录响应字段名 */
     private static final String LOGIN_TOKEN_FIELD = "token";
     private static final String LOGIN_NAME_FIELD = "name";
     private static final String LOGIN_ROLE_ID_FIELD = "role_id";
-    private static final String LOGIN_REQUIRE_PASSWORD_CHANGE_FIELD = "requirePasswordChange";
 
     // ========== 依赖注入 ==========
     
@@ -121,6 +116,9 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
 
     @Resource
     private VpsTerminalTicketService vpsTerminalTicketService;
+
+    @Resource
+    private RealtimeTicketService realtimeTicketService;
 
     /**
      * The pause worker reads UserService, so inject the reverse edge lazily.
@@ -163,14 +161,10 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         User user = validationResult.getUser();
         String token = JwtUtil.generateToken(user);
         
-        // 4. 检查是否使用默认账号密码
-        boolean requirePasswordChange = isDefaultCredentials(loginDto.getUsername(), loginDto.getPassword());
-        
         return R.ok(MapUtil.builder()
                 .put(LOGIN_TOKEN_FIELD, token)
                 .put(LOGIN_NAME_FIELD, user.getUser())
                 .put(LOGIN_ROLE_ID_FIELD, user.getRoleId())
-                .put(LOGIN_REQUIRE_PASSWORD_CHANGE_FIELD, requirePasswordChange)
                 .build());
     }
 
@@ -183,6 +177,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
      */
     @Override
     public R createUser(UserDto userDto) {
+        R passwordValidation = validateNewPassword(userDto.getPwd(), userDto.getUser());
+        if (passwordValidation.getCode() != 0) return passwordValidation;
         // 1. 验证用户名唯一性
         R usernameValidationResult = validateUsernameUniqueness(userDto.getUser(), null);
         if (usernameValidationResult.getCode() != 0) {
@@ -254,6 +250,10 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
      */
     @Override
     public R updateUser(UserUpdateDto userUpdateDto) {
+        if (StrUtil.isNotBlank(userUpdateDto.getPwd())) {
+            R passwordValidation = validateNewPassword(userUpdateDto.getPwd(), userUpdateDto.getUser());
+            if (passwordValidation.getCode() != 0) return passwordValidation;
+        }
         // 1. 验证用户是否存在
         User existingUser = this.getById(userUpdateDto.getId());
         if (existingUser == null) {
@@ -368,6 +368,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             if (!changePasswordDto.getNewPassword().equals(changePasswordDto.getConfirmPassword())) {
                 return R.err(ERROR_PASSWORD_NOT_MATCH);
             }
+            R passwordValidation = validateNewPassword(changePasswordDto.getNewPassword(), changePasswordDto.getNewUsername());
+            if (passwordValidation.getCode() != 0) return passwordValidation;
 
             // 3. 验证当前密码是否正确
             User user = currentUser.getUser();
@@ -399,8 +401,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             return R.err(ERROR_UPDATE_FAILED);
             
         } catch (Exception e) {
-            e.printStackTrace();
-            return R.err("修改账号密码时发生错误：" + e.getMessage());
+            log.warn("修改账号密码失败", e);
+            return R.err("修改账号密码失败，请稍后重试");
         }
     }
 
@@ -461,17 +463,6 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     }
 
     /**
-     * 检查是否使用默认账号密码
-     * 
-     * @param username 用户名
-     * @param password 密码
-     * @return 是否是默认凭据
-     */
-    private boolean isDefaultCredentials(String username, String password) {
-        return DEFAULT_USERNAME.equals(username) || DEFAULT_PASSWORD.equals(password);
-    }
-
-    /**
      * 验证用户名唯一性
      * 
      * @param username 用户名
@@ -490,6 +481,16 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             return R.err(errorMsg);
         }
         
+        return R.ok();
+    }
+
+    private R validateNewPassword(String password, String username) {
+        if (password == null || password.length() < 12 || password.length() > 512) {
+            return R.err("密码长度必须为 12 到 512 位");
+        }
+        if (username != null && password.equalsIgnoreCase(username.trim())) {
+            return R.err("密码不能与用户名相同");
+        }
         return R.ok();
     }
 
@@ -570,6 +571,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         WebSocketServer.closeUserSessions(userId);
         vpsTerminalWebSocketHandler.closeUserSessions(userId);
         vpsTerminalTicketService.revokeUserTickets(userId);
+        realtimeTicketService.revokeUserTickets(userId);
     }
 
     /**

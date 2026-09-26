@@ -9,7 +9,7 @@ import org.springframework.web.socket.config.annotation.EnableWebSocket;
 import org.springframework.web.socket.config.annotation.WebSocketConfigurer;
 import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry;
 import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistration;
-import javax.annotation.Resource;
+import jakarta.annotation.Resource;
 import org.springframework.beans.factory.annotation.Value;
 import java.util.Arrays;
 
@@ -30,23 +30,31 @@ public class WebSocketConfig implements WebSocketConfigurer {
     @Value("${vps.terminal.allowed-origins:}")
     private String terminalAllowedOrigins;
 
+    @Value("${realtime.allowed-origins:}")
+    private String realtimeAllowedOrigins;
+
     @Override
     public void registerWebSocketHandlers(WebSocketHandlerRegistry webSocketHandlerRegistry) {
-        webSocketHandlerRegistry
-                .addHandler(myHandler(), "/system-info")
-                .setAllowedOrigins("*")
-                .addInterceptors(webSocketInterceptor);
+        WebSocketHandlerRegistration realtimeRegistration = webSocketHandlerRegistry
+                .addHandler(myHandler(), "/system-info");
+        String[] realtimeOrigins = configuredOrigins(realtimeAllowedOrigins);
+        if (realtimeOrigins.length > 0) realtimeRegistration.setAllowedOrigins(realtimeOrigins);
+        realtimeRegistration.addInterceptors(webSocketInterceptor);
         WebSocketHandlerRegistration terminalRegistration = webSocketHandlerRegistry
                 .addHandler(vpsTerminalWebSocketHandler, "/vps-terminal");
-        String[] origins = Arrays.stream((terminalAllowedOrigins == null ? "" : terminalAllowedOrigins).split(","))
-                .map(String::trim)
-                .filter(value -> !value.isEmpty())
-                .toArray(String[]::new);
+        String[] origins = configuredOrigins(terminalAllowedOrigins);
         if (origins.length > 0) {
             terminalRegistration.setAllowedOrigins(origins);
         }
         // Without an explicit allow-list Spring keeps its same-origin default.
         terminalRegistration.addInterceptors(vpsTerminalHandshakeInterceptor);
+    }
+
+    private String[] configuredOrigins(String configured) {
+        return Arrays.stream((configured == null ? "" : configured).split(","))
+                .map(String::trim)
+                .filter(value -> !value.isEmpty())
+                .toArray(String[]::new);
     }
 
 

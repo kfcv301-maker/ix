@@ -43,7 +43,7 @@ public class UserTunnel implements Serializable {
 
     private Long expTime;
 
-    @TableField(updateStrategy = FieldStrategy.IGNORED)
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private Integer speedId;
 
     private Integer num;
@@ -55,7 +55,7 @@ public class UserTunnel implements Serializable {
     private String entryAddressMode;
 
     /** A tunnel_entry_domain ID when entryAddressMode is CUSTOM. */
-    @TableField(updateStrategy = FieldStrategy.IGNORED)
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private Long entryDomainId;
 
     private Integer status;

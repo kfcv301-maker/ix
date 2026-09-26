@@ -49,6 +49,9 @@ public class VpsHost extends BaseEntity {
     /** Pinned after the first successful SSH handshake to detect host-key changes. */
     private String sshFingerprint;
 
+    /** A manager must compare and explicitly accept the discovered key before use. */
+    private Boolean sshFingerprintVerified;
+
     /** unknown, online, offline, or fingerprint_changed. */
     private String healthStatus;
 

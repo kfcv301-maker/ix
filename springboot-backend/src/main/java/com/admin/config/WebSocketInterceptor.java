@@ -2,10 +2,11 @@ package com.admin.config;
 
 
 import com.admin.common.utils.IpUtils;
-import com.admin.common.utils.JwtUtil;
+import com.admin.entity.User;
 import com.admin.entity.Node;
 import com.admin.mapper.UserMapper;
 import com.admin.service.NodeService;
+import com.admin.service.RealtimeTicketService;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Configuration;
@@ -15,8 +16,8 @@ import org.springframework.http.server.ServletServerHttpRequest;
 import org.springframework.web.socket.WebSocketHandler;
 import org.springframework.web.socket.server.support.HttpSessionHandshakeInterceptor;
 
-import javax.annotation.Resource;
-import javax.servlet.http.HttpServletRequest;
+import jakarta.annotation.Resource;
+import jakarta.servlet.http.HttpServletRequest;
 import java.net.InetSocketAddress;
 import java.util.Collections;
 import java.util.HashSet;
@@ -35,6 +36,12 @@ public class WebSocketInterceptor extends HttpSessionHandshakeInterceptor {
 
     @Resource
     UserMapper userMapper;
+
+    @Resource
+    RealtimeTicketService realtimeTicketService;
+
+    @Resource
+    BrowserWebSocketOriginPolicy browserWebSocketOriginPolicy;
 
     @Override
     public void afterHandshake(ServerHttpRequest request, ServerHttpResponse response, WebSocketHandler wsHandler, Exception ex) {
@@ -68,10 +75,13 @@ public class WebSocketInterceptor extends HttpSessionHandshakeInterceptor {
             log.info("节点 {} 通过验证，版本: {}", node.getId(), version);
             // 不在这里更新状态，等到连接建立后再统一更新
         }else {
-            boolean b = JwtUtil.validateToken(secret);
-            if (!b) return false;
-            Long userId = JwtUtil.getUserIdFromToken(secret);
-            Integer roleId = JwtUtil.getRoleIdFromToken(secret);
+            if (!browserWebSocketOriginPolicy.isAllowed(servletRequest)) return false;
+            RealtimeTicketService.Access access = realtimeTicketService.consume(servletRequest.getParameter("ticket"));
+            if (access == null) return false;
+            User user = userMapper.selectById(access.getUserId());
+            if (user == null || !Objects.equals(user.getStatus(), 1)) return false;
+            Long userId = user.getId();
+            Integer roleId = user.getRoleId();
             attributes.put("id", userId);
             attributes.put("roleId", roleId);
             // Summary is sufficient for dashboards. The node monitor explicitly

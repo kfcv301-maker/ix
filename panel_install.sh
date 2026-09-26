@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 
 REPO_URL="${REPO_URL:-https://github.com/kfcv301-maker/ix.git}"
-BRANCH="${BRANCH:-main}"
+REPO_REF="${REPO_REF:-1.4.5}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/flux-panel-enhanced}"
 FRONTEND_PORT="${FRONTEND_PORT:-6366}"
 BACKEND_PORT="${BACKEND_PORT:-6365}"
@@ -30,7 +30,7 @@ Lunaris Relay 管理脚本
   FRONTEND_PORT=6366 BACKEND_PORT=6365
   FRONTEND_BIND_ADDRESS=127.0.0.1  # 使用现有 Nginx 时保持仅本机监听；直连时设为 0.0.0.0
   BACKEND_BIND_ADDRESS=127.0.0.1   # 后端通过前端代理访问，默认只在本机监听
-  REPO_URL=https://github.com/kfcv301-maker/ix.git BRANCH=main
+  REPO_URL=https://github.com/kfcv301-maker/ix.git REPO_REF=1.4.5
 EOF
 }
 
@@ -70,19 +70,19 @@ ensure_prerequisites() {
 }
 
 sync_source() {
+  [[ "$REPO_REF" =~ ^[0-9]+(\.[0-9]+){1,3}$ ]] || fail "仅允许经过审核的发布标签（例如 1.4.5）。"
   mkdir -p "$(dirname "$INSTALL_DIR")"
   if [[ -d "$INSTALL_DIR/.git" ]]; then
     info "更新已有源码：$INSTALL_DIR"
     [[ -z "$(git -C "$INSTALL_DIR" status --porcelain)" ]] ||
       fail "安装目录有未合并的本地修改；请先备份并合并修复，避免更新覆盖修改"
-    git -C "$INSTALL_DIR" fetch --depth=1 origin "$BRANCH"
-    git -C "$INSTALL_DIR" checkout --force "$BRANCH"
-    git -C "$INSTALL_DIR" reset --hard "origin/$BRANCH"
+    git -C "$INSTALL_DIR" fetch --depth=1 origin "refs/tags/$REPO_REF:refs/tags/$REPO_REF"
+    git -C "$INSTALL_DIR" checkout --detach "refs/tags/$REPO_REF"
   elif [[ -e "$INSTALL_DIR" ]]; then
     fail "安装目录已存在但不是 Git 仓库：$INSTALL_DIR"
   else
     info "下载项目源码"
-    git clone --depth=1 --branch "$BRANCH" "$REPO_URL" "$INSTALL_DIR"
+    git clone --depth=1 --branch "$REPO_REF" "$REPO_URL" "$INSTALL_DIR"
   fi
 }
 
@@ -101,6 +101,25 @@ validate_port() {
 create_env_if_missing() {
   local env_file="$INSTALL_DIR/.env"
   if [[ -f "$env_file" ]]; then
+    umask 077
+    if ! grep -q '^PANEL_INITIAL_ADMIN_USERNAME=' "$env_file"; then
+      printf '\nPANEL_INITIAL_ADMIN_USERNAME=admin\nPANEL_INITIAL_ADMIN_PASSWORD=%s\n' "$(random_secret)" >> "$env_file"
+    fi
+    if ! grep -q '^VPS_CREDENTIAL_KEY=' "$env_file"; then
+      printf 'VPS_CREDENTIAL_KEY=%s\n' "$(random_secret)" >> "$env_file"
+    fi
+    ensure_env_value() {
+      local key="$1" value="$2"
+      grep -q "^${key}=" "$env_file" || printf '%s=%s\n' "$key" "$value" >> "$env_file"
+    }
+    ensure_env_value PANEL_RELEASE_REF "$REPO_REF"
+    ensure_env_value VPS_BACKEND_INSTALL_RELEASE "$REPO_REF"
+    ensure_env_value AGENT_INSTALL_RELEASE "$REPO_REF"
+    # Do not point an existing MySQL 5.7 volume at 8.4 in-place. The image
+    # upgrade is explicit and staged; brand new installs use the current LTS.
+    if ! grep -q '^MYSQL_IMAGE=' "$env_file"; then
+      printf 'MYSQL_IMAGE=mysql:5.7\n' >> "$env_file"
+    fi
     if ! grep -q '^PANEL_UPDATER_TOKEN=' "$env_file"; then
       umask 077
       printf '\nPANEL_UPDATER_TOKEN=%s\n' "$(random_secret)" >> "$env_file"
@@ -122,6 +141,13 @@ DB_USER=flux_panel
 DB_PASSWORD=$(random_secret)
 JWT_SECRET=$(random_secret)
 PANEL_UPDATER_TOKEN=$(random_secret)
+PANEL_INITIAL_ADMIN_USERNAME=admin
+PANEL_INITIAL_ADMIN_PASSWORD=$(random_secret)
+VPS_CREDENTIAL_KEY=$(random_secret)
+PANEL_RELEASE_REF=$REPO_REF
+VPS_BACKEND_INSTALL_RELEASE=$REPO_REF
+AGENT_INSTALL_RELEASE=$REPO_REF
+MYSQL_IMAGE=mysql:8.4
 FRONTEND_PORT=$FRONTEND_PORT
 BACKEND_PORT=$BACKEND_PORT
 FRONTEND_BIND_ADDRESS=$FRONTEND_BIND_ADDRESS
@@ -149,7 +175,7 @@ install_or_update() {
   ok "部署完成"
   printf '面板地址: http://%s:%s\n' "${ip:-服务器IP}" "$(grep '^FRONTEND_PORT=' "$INSTALL_DIR/.env" | cut -d= -f2)"
   printf '查看状态: docker compose --project-name flux-panel-enhanced -f %s/docker-compose.yml ps\n' "$INSTALL_DIR"
-  printf '首次登录后请立即修改默认管理员密码。\n'
+  printf '初始管理员凭据保存在 %s/.env；请在首次登录后更换密码。\n' "$INSTALL_DIR"
 }
 
 uninstall() {

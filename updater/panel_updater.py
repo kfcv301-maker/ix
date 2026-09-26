@@ -12,6 +12,7 @@ from __future__ import annotations
 import hmac
 import json
 import os
+import re
 import subprocess
 import threading
 from datetime import datetime, timezone
@@ -24,7 +25,7 @@ from typing import Any
 WORKSPACE = Path(os.environ.get("INSTALL_DIR", "/workspace")).resolve()
 PROJECT_NAME = os.environ.get("PROJECT_NAME", "flux-panel-enhanced")
 REPO_URL = os.environ.get("REPO_URL", "https://github.com/kfcv301-maker/ix.git")
-BRANCH = os.environ.get("BRANCH", "main")
+RELEASE_REF = os.environ.get("BRANCH", "1.4.5")
 TOKEN = os.environ.get("PANEL_UPDATER_TOKEN", "")
 # The updater runs inside this Compose project. Never include it in an
 # update-triggered `compose up`: Docker may recreate the updater container
@@ -85,6 +86,18 @@ def git_revision(reference: str) -> str | None:
     return result.stdout.strip() if result.returncode == 0 else None
 
 
+def fetch_release() -> str:
+    if not re.fullmatch(r"\d+(?:\.\d+){1,3}", RELEASE_REF):
+        raise RuntimeError("更新版本必须是经过审核的发布标签")
+    result = run(["git", "fetch", "--depth=1", "origin", f"refs/tags/{RELEASE_REF}:refs/tags/{RELEASE_REF}"])
+    if result.returncode != 0:
+        raise RuntimeError("无法获取指定发布版本，现有服务与数据未改动")
+    target = git_revision(f"refs/tags/{RELEASE_REF}")
+    if target is None:
+        raise RuntimeError("指定发布版本不存在，现有服务与数据未改动")
+    return target
+
+
 def ensure_clean_workspace() -> None:
     dirty = run(["git", "status", "--porcelain", "--untracked-files=no"])
     if dirty.returncode != 0 or dirty.stdout.strip():
@@ -131,14 +144,8 @@ def update_worker() -> None:
         backup_path = create_backup()
         set_state(state="checking", message="正在检查远程版本", backup=str(backup_path.relative_to(WORKSPACE)))
 
-        fetch = run(["git", "fetch", "--depth=1", "origin", BRANCH])
-        if fetch.returncode != 0:
-            raise RuntimeError("无法获取远程版本，现有服务与数据未改动")
-
         before = git_revision("HEAD")
-        target = git_revision(f"origin/{BRANCH}")
-        if target is None:
-            raise RuntimeError("远程版本不存在，现有服务与数据未改动")
+        target = fetch_release()
         set_state(currentRevision=before, targetRevision=target)
 
         if before == target:
@@ -150,7 +157,7 @@ def update_worker() -> None:
         ensure_clean_workspace()
 
         set_state(state="updating", message="正在下载新版本并重建服务")
-        reset = run(["git", "reset", "--hard", f"origin/{BRANCH}"])
+        reset = run(["git", "reset", "--hard", target])
         if reset.returncode != 0:
             raise RuntimeError("切换新版本失败，现有容器仍在运行")
 

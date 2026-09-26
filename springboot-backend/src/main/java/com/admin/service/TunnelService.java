@@ -5,7 +5,7 @@ import com.admin.common.dto.TunnelUpdateDto;
 
 import com.admin.common.lang.R;
 import com.admin.entity.Tunnel;
-import com.baomidou.mybatisplus.extension.service.IService;
+import com.baomidou.mybatisplus.spring.service.IService;
 
 /**
  * <p>

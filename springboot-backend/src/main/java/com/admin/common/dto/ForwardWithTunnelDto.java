@@ -68,6 +68,13 @@ public class ForwardWithTunnelDto {
      */
     private String inIp;
 
+    /**
+     * The ingress domain assigned to this forward's owner for the tunnel.
+     * It is null when the owner is intentionally assigned the raw ingress
+     * address, or when no active assigned domain is available.
+     */
+    private String entryDomain;
+
     private String userName;
 
 

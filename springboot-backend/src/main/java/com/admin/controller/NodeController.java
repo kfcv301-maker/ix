@@ -21,7 +21,6 @@ import java.util.Map;
  * @since 2025-06-03
  */
 @RestController
-@CrossOrigin
 @RequestMapping("/api/v1/node")
 public class NodeController extends BaseController {
 

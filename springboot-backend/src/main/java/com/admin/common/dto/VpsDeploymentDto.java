@@ -2,16 +2,19 @@ package com.admin.common.dto;
 
 import lombok.Data;
 
-import javax.validation.constraints.NotBlank;
-import javax.validation.constraints.NotNull;
+import jakarta.validation.constraints.NotNull;
 
-/** A deployment request is intentionally restricted to a reviewed template. */
+/** Starts the sole reviewed VPS operation: installing the panel backend. */
 @Data
 public class VpsDeploymentDto {
 
     @NotNull(message = "VPS ID不能为空")
     private Long id;
 
-    @NotBlank(message = "部署类型不能为空")
+    /**
+     * Accepted only so older browser bundles can call the endpoint. The server
+     * deliberately ignores it and always installs the backend.
+     */
+    @Deprecated
     private String taskType;
 }

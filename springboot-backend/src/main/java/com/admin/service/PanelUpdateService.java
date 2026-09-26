@@ -2,7 +2,7 @@ package com.admin.service;
 
 import cn.hutool.core.util.StrUtil;
 import com.admin.common.lang.R;
-import com.alibaba.fastjson.JSONObject;
+import com.alibaba.fastjson2.JSONObject;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 

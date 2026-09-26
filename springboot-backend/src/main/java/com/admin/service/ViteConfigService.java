@@ -2,7 +2,7 @@ package com.admin.service;
 
 import com.admin.entity.ViteConfig;
 import com.admin.common.lang.R;
-import com.baomidou.mybatisplus.extension.service.IService;
+import com.baomidou.mybatisplus.spring.service.IService;
 
 import java.util.Map;
 

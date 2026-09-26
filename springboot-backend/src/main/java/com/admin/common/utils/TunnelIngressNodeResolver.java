@@ -6,7 +6,7 @@ import com.admin.mapper.TunnelEntryNodeMapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import org.springframework.stereotype.Component;
 
-import javax.annotation.Resource;
+import jakarta.annotation.Resource;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;

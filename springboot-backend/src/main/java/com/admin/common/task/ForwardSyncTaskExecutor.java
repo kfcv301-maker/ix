@@ -3,7 +3,7 @@ package com.admin.common.task;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
-import javax.annotation.Resource;
+import jakarta.annotation.Resource;
 
 /** Runs a claimed endpoint command away from request and accounting threads. */
 @Service

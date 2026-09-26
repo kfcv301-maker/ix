@@ -3,7 +3,7 @@ package com.admin.service;
 import com.admin.common.dto.*;
 import com.admin.common.lang.R;
 import com.admin.entity.User;
-import com.baomidou.mybatisplus.extension.service.IService;
+import com.baomidou.mybatisplus.spring.service.IService;
 
 /**
  * <p>

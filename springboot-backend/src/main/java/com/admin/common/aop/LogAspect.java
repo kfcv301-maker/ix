@@ -3,7 +3,7 @@ package com.admin.common.aop;
 
 import cn.hutool.core.util.ArrayUtil;
 import com.admin.common.utils.JwtUtil;
-import com.alibaba.fastjson.JSON;
+import com.alibaba.fastjson2.JSON;
 import com.admin.common.utils.HttpContextUtils;
 import com.admin.common.utils.IpUtils;
 import lombok.extern.slf4j.Slf4j;
@@ -13,7 +13,7 @@ import org.aspectj.lang.reflect.CodeSignature;
 import org.aspectj.lang.reflect.MethodSignature;
 import org.springframework.stereotype.Component;
 
-import javax.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletRequest;
 import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.HashMap;

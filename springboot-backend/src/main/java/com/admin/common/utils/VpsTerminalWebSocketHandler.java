@@ -3,14 +3,14 @@ package com.admin.common.utils;
 import com.admin.entity.VpsHost;
 import com.admin.service.VpsHostService;
 import com.admin.service.VpsSshService;
-import com.alibaba.fastjson.JSONObject;
+import com.alibaba.fastjson2.JSONObject;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
-import javax.annotation.Resource;
+import jakarta.annotation.Resource;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -52,6 +52,10 @@ public class VpsTerminalWebSocketHandler extends TextWebSocketHandler {
         VpsHost host = vpsHostService.findOperableHost(userId, administrator, hostId);
         if (host == null) {
             closeWithError(session, "没有连接此 VPS 的权限");
+            return;
+        }
+        if (!vpsHostService.isFingerprintVerified(host)) {
+            closeWithError(session, "请先检测并确认 SSH 主机指纹");
             return;
         }
         String password = vpsHostService.decryptSshPassword(host);

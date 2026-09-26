@@ -72,6 +72,8 @@ interface Forward {
   vpsHostName?: string;
   vpsHostOrigin?: 'USER' | 'ADMIN';
   vpsHostStatus?: number;
+  /** User-specific ingress domain supplied by the forward query. */
+  entryDomain?: string;
   inx?: number;
   syncOperation?: 'pause' | 'resume' | 'delete';
   syncState?: 'syncing' | 'partial';
@@ -308,11 +310,11 @@ export default function ForwardPage() {
   };
 
   /**
-   * For ordinary users, overlay the persisted forwarding record with the one
-   * address assigned to their tunnel permission. Admins keep the raw record
-   * address because they can review forwards belonging to several users.
+   * The forward query resolves the owner-specific ingress assignment, so the
+   * administrator sees the same domain assigned to that particular owner.
    */
   const getForwardEntryAddress = (forward: Forward): string => {
+    if (forward.entryDomain) return forward.entryDomain;
     if (isAdministrator) return forward.inIp;
     return tunnels.find(tunnel => tunnel.id === forward.tunnelId)?.ip || forward.inIp;
   };

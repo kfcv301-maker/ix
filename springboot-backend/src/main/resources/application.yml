@@ -10,8 +10,10 @@ spring:
       max-lifetime: 1800000
       connection-timeout: 30000
       idle-timeout: 300000
-      maximum-pool-size: 20
-      minimum-idle: 5
+      # A control panel has short database requests. Keeping a large idle
+      # pool wastes MySQL and JVM memory without improving normal traffic.
+      maximum-pool-size: 12
+      minimum-idle: 2
       pool-name: HikariCP
       auto-commit: true
       connection-test-query: SELECT 1
@@ -30,14 +32,14 @@ server:
   tomcat:
     uri-encoding: UTF-8
     threads:
-      max: 200
-    max-connections: 2000
+      max: 100
+    max-connections: 1000
   shutdown: graceful
   error:
     whitelabel:
       enabled: false
-    include-message: always
-    include-binding-errors: always
+    include-message: never
+    include-binding-errors: never
 
 mybatis-plus:
   mapper-locations: classpath*:/mapper/**Mapper.xml
@@ -51,7 +53,29 @@ panel-updater:
   url: ${PANEL_UPDATER_URL:http://updater:18080}
   token: ${PANEL_UPDATER_TOKEN:}
 
+panel:
+  initial-admin:
+    username: ${PANEL_INITIAL_ADMIN_USERNAME:}
+    password: ${PANEL_INITIAL_ADMIN_PASSWORD:}
+
+realtime:
+  # Empty is same-origin; set a comma-separated list only for a separate UI origin.
+  allowed-origins: ${REALTIME_ALLOWED_ORIGINS:}
+
+cors:
+  # Empty means no cross-origin API reads. Configure explicit UI origins only when needed.
+  allowed-origins: ${CORS_ALLOWED_ORIGINS:}
+
+agent:
+  install:
+    release: ${AGENT_INSTALL_RELEASE:1.4.5}
+
 vps:
+  credential-key: ${VPS_CREDENTIAL_KEY:}
+  backend-install:
+    # The stable installer URL remains unchanged; this pins the backend source
+    # version it installs on the VPS.
+    release: ${VPS_BACKEND_INSTALL_RELEASE:1.4.5}
   security:
     # User-submitted VPSes are always public-only. This opt-in only permits
     # administrator inventory to use RFC1918 / ULA addresses.

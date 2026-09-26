@@ -18,16 +18,16 @@ import com.admin.mapper.TunnelEntryNodeMapper;
 import com.admin.mapper.UserMapper;
 import com.admin.service.NodeService;
 import com.admin.service.TunnelService;
-import com.alibaba.fastjson.JSONObject;
+import com.alibaba.fastjson2.JSONObject;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
-import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.baomidou.mybatisplus.spring.service.impl.ServiceImpl;
 import org.springframework.beans.BeanUtils;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.annotation.Value;
 
-import javax.annotation.Resource;
+import jakarta.annotation.Resource;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.List;
@@ -91,6 +91,9 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
 
     @Value("${jwt-secret}")
     private String jwtSecret;
+
+    @Value("${agent.install.release:1.4.5}")
+    private String agentInstallRelease;
 
     private volatile AESCrypto ddnsCrypto;
 
@@ -582,10 +585,24 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
         }
 
         StringBuilder command = new StringBuilder();
+        String release = agentInstallRelease == null ? "" : agentInstallRelease.trim();
+        if (!release.matches("[0-9]+(?:\\.[0-9]+){1,3}")) {
+            return R.err("节点安装版本配置无效");
+        }
         
-        // 安装脚本始终从本增强版仓库获取，避免自动补号后重新装回上游旧 Agent。
-        command.append("curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/install.sh")
-               .append(" | bash -s -- ");
+        // The release asset is pinned by the reviewed panel version. Do not
+        // execute a mutable branch script as root on a remote node.
+        String releaseUrl = "https://github.com/kfcv301-maker/ix/releases/download/" + release;
+        command.append("set -eu; agent_installer=$(mktemp); agent_checksum=$(mktemp); ")
+               .append("trap 'rm -f \"$agent_installer\" \"$agent_checksum\"' EXIT; ")
+               .append("curl -fsSL --retry 3 ").append(releaseUrl).append("/install.sh -o \"$agent_installer\"; ")
+               .append("curl -fsSL --retry 3 ").append(releaseUrl).append("/install.sh.sha256 -o \"$agent_checksum\"; ")
+               .append("expected=$(awk '{print $1}' \"$agent_checksum\"); ")
+               .append("actual=$(sha256sum \"$agent_installer\" | awk '{print $1}'); ")
+               .append("[ \"$expected\" = \"$actual\" ] || { echo 'Agent 安装脚本校验失败' >&2; exit 1; }; ")
+               .append("AGENT_RELEASE_BASE=")
+               .append(shellQuote(releaseUrl))
+               .append(" bash \"$agent_installer\" ");
         
         // 前端自动传入当前 HTTPS 域名；节点通过 WSS/HTTPS 访问它，不再依赖公网后端端口。
         // 参数使用单引号转义，避免地址或密钥中的特殊字符破坏安装命令。

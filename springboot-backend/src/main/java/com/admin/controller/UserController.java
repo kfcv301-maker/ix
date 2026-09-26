@@ -12,7 +12,7 @@ import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
-import javax.annotation.Resource;
+import jakarta.annotation.Resource;
 
 /**
  * <p>
@@ -23,7 +23,6 @@ import javax.annotation.Resource;
  * @since 2025-06-03
  */
 @RestController
-@CrossOrigin
 @RequestMapping("/api/v1/user")
 public class UserController extends BaseController {
 

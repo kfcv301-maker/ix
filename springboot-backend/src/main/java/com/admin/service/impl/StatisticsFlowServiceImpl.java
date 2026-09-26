@@ -3,7 +3,7 @@ package com.admin.service.impl;
 import com.admin.entity.StatisticsFlow;
 import com.admin.mapper.StatisticsFlowMapper;
 import com.admin.service.StatisticsFlowService;
-import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.baomidou.mybatisplus.spring.service.impl.ServiceImpl;
 import org.springframework.stereotype.Service;
 
 /**

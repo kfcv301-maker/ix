@@ -16,11 +16,14 @@ public class VpsDeploymentTask extends BaseEntity {
 
     private Long requestedByUserId;
 
-    /** docker or flux_panel. Arbitrary shell commands are intentionally not stored here. */
+    /** backend for new tasks; older template labels remain readable in history. */
     private String taskType;
 
     /** pending, running, succeeded, failed */
     private String taskStatus;
+
+    /** Non-null only while pending/running; unique per VPS to serialize deployment. */
+    private String activeLock;
 
     /** Bounded, redacted execution output. */
     private String outputLog;

@@ -4,7 +4,7 @@
 set -Eeuo pipefail
 
 REPO_URL="${REPO_URL:-https://github.com/kfcv301-maker/ix.git}"
-BRANCH="${BRANCH:-main}"
+REPO_REF="${REPO_REF:-1.4.5}"
 SOURCE_DIR="$PWD"
 TARGET_DIR="${TARGET_DIR:-/opt/flux-panel-enhanced}"
 DRY_RUN=false
@@ -14,6 +14,14 @@ UPGRADE_FINISHED=false
 info() { printf '\033[1;34m[INFO]\033[0m %s\n' "$*"; }
 ok() { printf '\033[1;32m[ OK ]\033[0m %s\n' "$*"; }
 fail() { printf '\033[1;31m[FAIL]\033[0m %s\n' "$*" >&2; exit 1; }
+
+random_secret() {
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex 24
+  else
+    tr -dc 'A-Za-z0-9' </dev/urandom | head -c 48
+  fi
+}
 
 usage() {
   cat <<'EOF'
@@ -92,10 +100,11 @@ validate_source() {
 }
 
 clone_target() {
+  [[ "$REPO_REF" =~ ^[0-9]+(\.[0-9]+){1,3}$ ]] || fail "仅允许经过审核的发布标签（例如 1.4.5）。"
   [[ ! -e "$TARGET_DIR" ]] || fail "新版目录已存在：$TARGET_DIR；为避免覆盖未知文件，已停止迁移。"
   mkdir -p "$(dirname "$TARGET_DIR")"
-  info "下载新版源码"
-  git clone --depth=1 --branch "$BRANCH" "$REPO_URL" "$TARGET_DIR"
+  info "下载已审核的新版发布版本：$REPO_REF"
+  git clone --depth=1 --branch "$REPO_REF" "$REPO_URL" "$TARGET_DIR"
 }
 
 copy_runtime_env() {
@@ -112,6 +121,18 @@ copy_runtime_env() {
     printf 'DB_USER=%s\n' "$db_user"
     printf 'DB_PASSWORD=%s\n' "$db_password"
     printf 'JWT_SECRET=%s\n' "$jwt_secret"
+    printf 'PANEL_UPDATER_TOKEN=%s\n' "$(random_secret)"
+    # The bootstrap component uses these only if no administrator exists, or
+    # to rotate the former public admin_user/admin_user credential.
+    printf 'PANEL_INITIAL_ADMIN_USERNAME=admin\n'
+    printf 'PANEL_INITIAL_ADMIN_PASSWORD=%s\n' "$(random_secret)"
+    printf 'VPS_CREDENTIAL_KEY=%s\n' "$(random_secret)"
+    printf 'PANEL_RELEASE_REF=%s\n' "$REPO_REF"
+    printf 'VPS_BACKEND_INSTALL_RELEASE=%s\n' "$REPO_REF"
+    printf 'AGENT_INSTALL_RELEASE=%s\n' "$REPO_REF"
+    # Original installations normally use a MySQL 5.7 volume. Do not attempt
+    # an in-place major database upgrade during panel cutover.
+    printf 'MYSQL_IMAGE=mysql:5.7\n'
     printf 'FRONTEND_PORT=%s\n' "$frontend_port"
     printf 'BACKEND_PORT=%s\n' "$backend_port"
     # The upstream panel exposes its frontend only through localhost for the
@@ -180,7 +201,8 @@ main() {
   ok "升级完成：节点、用户、隧道、转发、流量和密钥均继续使用原数据库。"
   printf '新版目录：%s\n' "$TARGET_DIR"
   printf '原目录仍保留：%s\n' "$SOURCE_DIR"
-  printf '日后更新：curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/panel_install.sh | sudo bash -s -- update\n'
+  printf '若原版仍使用 admin_user/admin_user，安全升级后请从 %s/.env 读取新的初始密码。\n' "$TARGET_DIR"
+  printf '日后更新：curl -fsSL https://github.com/kfcv301-maker/ix/releases/download/1.4.5/panel_install.sh | sudo bash -s -- update\n'
 }
 
 main

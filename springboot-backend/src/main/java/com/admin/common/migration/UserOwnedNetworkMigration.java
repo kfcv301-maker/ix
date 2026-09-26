@@ -3,8 +3,8 @@ package com.admin.common.migration;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
-import javax.annotation.PostConstruct;
-import javax.annotation.Resource;
+import jakarta.annotation.PostConstruct;
+import jakarta.annotation.Resource;
 
 /** Preserve legacy administrator inventory while enabling isolated user resources. */
 @Component
