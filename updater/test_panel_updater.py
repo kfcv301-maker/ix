@@ -1,4 +1,7 @@
 import unittest
+import tempfile
+import subprocess
+from pathlib import Path
 from unittest.mock import patch
 
 import panel_updater
@@ -30,6 +33,46 @@ class CurrentStateTest(unittest.TestCase):
         revision.assert_not_called()
         self.assertEqual(status["currentRevision"], "before")
         self.assertEqual(status["targetRevision"], "target")
+
+    def test_update_migrates_environment_before_start_and_waits_for_health(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            (workspace / '.git').mkdir()
+            (workspace / '.env').write_text('DB_PASSWORD=original\n', encoding='utf-8')
+            calls = []
+            def run(command, **kwargs):
+                calls.append(command)
+                if command[:2] == ['docker', 'compose']:
+                    self.assertIn('MYSQL_IMAGE=mysql:5.7', (workspace / '.env').read_text())
+                    self.assertIn('--wait', command)
+                return subprocess.CompletedProcess(command, 0, '', '')
+            with patch.object(panel_updater, 'WORKSPACE', workspace), \
+                 patch.object(panel_updater, 'RELEASE_REF', '1.4.5'), \
+                 patch.object(panel_updater, 'ensure_clean_workspace'), \
+                 patch.object(panel_updater, 'create_backup', return_value=workspace / 'backup.sql'), \
+                 patch.object(panel_updater, 'git_revision', return_value='before'), \
+                 patch.object(panel_updater, 'fetch_release', return_value='after'), \
+                 patch.object(panel_updater, 'run', side_effect=run):
+                panel_updater.update_worker()
+            self.assertEqual(panel_updater.STATE['state'], 'completed')
+            self.assertEqual(calls[0][:3], ['git', 'reset', '--hard'])
+            self.assertEqual(calls[-1][-3:], ['mysql', 'backend', 'frontend'])
+
+    def test_failed_health_check_is_not_reported_as_success(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory); (workspace / '.git').mkdir()
+            (workspace / '.env').write_text('DB_PASSWORD=original\n', encoding='utf-8')
+            def run(command, **kwargs):
+                return subprocess.CompletedProcess(command, 1 if command[0] == 'docker' else 0, '', '')
+            with patch.object(panel_updater, 'WORKSPACE', workspace), \
+                 patch.object(panel_updater, 'RELEASE_REF', '1.4.5'), \
+                 patch.object(panel_updater, 'ensure_clean_workspace'), \
+                 patch.object(panel_updater, 'create_backup', return_value=workspace / 'backup.sql'), \
+                 patch.object(panel_updater, 'git_revision', return_value='before'), \
+                 patch.object(panel_updater, 'fetch_release', return_value='after'), \
+                 patch.object(panel_updater, 'run', side_effect=run):
+                panel_updater.update_worker()
+            self.assertEqual(panel_updater.STATE['state'], 'failed')
 
 
 if __name__ == "__main__":

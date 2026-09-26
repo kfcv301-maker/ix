@@ -55,6 +55,7 @@ install_packages() {
 }
 
 ensure_prerequisites() {
+  command -v python3 >/dev/null 2>&1 || install_packages python3
   command -v curl >/dev/null 2>&1 || install_packages curl ca-certificates
   command -v git >/dev/null 2>&1 || install_packages git
 
@@ -102,9 +103,6 @@ create_env_if_missing() {
   local env_file="$INSTALL_DIR/.env"
   if [[ -f "$env_file" ]]; then
     umask 077
-    if ! grep -q '^PANEL_INITIAL_ADMIN_USERNAME=' "$env_file"; then
-      printf '\nPANEL_INITIAL_ADMIN_USERNAME=admin\nPANEL_INITIAL_ADMIN_PASSWORD=%s\n' "$(random_secret)" >> "$env_file"
-    fi
     if ! grep -q '^VPS_CREDENTIAL_KEY=' "$env_file"; then
       printf 'VPS_CREDENTIAL_KEY=%s\n' "$(random_secret)" >> "$env_file"
     fi
@@ -112,9 +110,6 @@ create_env_if_missing() {
       local key="$1" value="$2"
       grep -q "^${key}=" "$env_file" || printf '%s=%s\n' "$key" "$value" >> "$env_file"
     }
-    ensure_env_value PANEL_RELEASE_REF "$REPO_REF"
-    ensure_env_value VPS_BACKEND_INSTALL_RELEASE "$REPO_REF"
-    ensure_env_value AGENT_INSTALL_RELEASE "$REPO_REF"
     # Do not point an existing MySQL 5.7 volume at 8.4 in-place. The image
     # upgrade is explicit and staged; brand new installs use the current LTS.
     if ! grep -q '^MYSQL_IMAGE=' "$env_file"; then
@@ -126,7 +121,8 @@ create_env_if_missing() {
       chmod 600 "$env_file"
       ok "已为在线更新服务补充本机访问密钥"
     fi
-    ok "保留现有 .env 与数据库凭据"
+    python3 "$INSTALL_DIR/updater/env_migration.py" "$env_file" "$REPO_REF"
+    ok "已迁移部署配置并保留现有数据库凭据"
     return
   fi
 
@@ -169,13 +165,13 @@ install_or_update() {
   create_env_if_missing
 
   info "构建并启动服务（数据库卷不会被删除）"
-  compose up -d --build --remove-orphans
+  compose up -d --build --remove-orphans --wait --wait-timeout 240
   local ip
   ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
   ok "部署完成"
   printf '面板地址: http://%s:%s\n' "${ip:-服务器IP}" "$(grep '^FRONTEND_PORT=' "$INSTALL_DIR/.env" | cut -d= -f2)"
   printf '查看状态: docker compose --project-name flux-panel-enhanced -f %s/docker-compose.yml ps\n' "$INSTALL_DIR"
-  printf '初始管理员凭据保存在 %s/.env；请在首次登录后更换密码。\n' "$INSTALL_DIR"
+  printf '新安装的初始凭据在 %s/.env；旧安装若无此配置，请读取 backend 容器的 /app/config/initial-admin-credentials（仅管理员可读）。\n' "$INSTALL_DIR"
 }
 
 uninstall() {

@@ -166,16 +166,19 @@ public class VpsSshServiceImpl implements VpsSshService {
             if (!release.matches("[0-9]+(?:\\.[0-9]+){1,3}")) {
                 throw new IllegalStateException("VPS 后端安装版本配置无效");
             }
-            // This endpoint is intentionally kept stable for existing VPS
-            // deployment integrations. The installer itself receives the
-            // reviewed source tag below, so it upgrades only that backend.
-            String installerUrl = "https://raw.githubusercontent.com/kfcv301-maker/ix/main/backend_install.sh";
+            String releaseUrl = "https://github.com/kfcv301-maker/ix/releases/download/" + release;
+            String installerUrl = releaseUrl + "/backend_install.sh";
             return "set -eu\n"
                     + "command -v bash >/dev/null 2>&1 || { echo '[后端安装] 缺少 bash。' >&2; exit 1; }\n"
                     + "backend_installer=$(mktemp)\n"
-                    + "trap 'rm -f \"$backend_installer\"' EXIT\n"
+                    + "backend_checksum=$(mktemp)\n"
+                    + "trap 'rm -f \"$backend_installer\" \"$backend_checksum\"' EXIT\n"
                     + "curl -fsSL --retry 3 " + installerUrl + " -o \"$backend_installer\"\n"
-                    + "REPO_REF=" + release + " bash \"$backend_installer\" install\n";
+                    + "curl -fsSL --retry 3 " + installerUrl + ".sha256 -o \"$backend_checksum\"\n"
+                    + "expected=$(awk '{print $1}' \"$backend_checksum\"); actual=$(sha256sum \"$backend_installer\" | awk '{print $1}')\n"
+                    + "[ \"$expected\" = \"$actual\" ] || { echo '后端安装脚本校验失败' >&2; exit 1; }\n"
+                    + "command -v flock >/dev/null 2>&1 || { echo '缺少 flock，请安装 util-linux' >&2; exit 1; }\n"
+                    + "REPO_REF=" + release + " flock -n /var/lock/lunaris-backend-install.lock bash \"$backend_installer\" install\n";
         }
         throw new IllegalArgumentException("不支持的部署模板");
     }

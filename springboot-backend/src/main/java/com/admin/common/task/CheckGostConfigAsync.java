@@ -25,6 +25,8 @@ import java.util.concurrent.ConcurrentHashMap;
 @Slf4j
 @Service
 public class CheckGostConfigAsync {
+    @Resource
+    private com.admin.common.service.UserTunnelAliasService userTunnelAliasService;
 
     private static final long DUPLICATE_INVENTORY_WINDOW_MILLIS = 20_000L;
 
@@ -448,6 +450,15 @@ public class CheckGostConfigAsync {
     private void restoreMissingForward(Node node, Forward forward, Tunnel tunnel, UserTunnel userTunnel,
                                        String serviceName, boolean mainServiceMissing, boolean chainMissing,
                                        boolean remoteServiceMissing) {
+        boolean ingress = mainServiceMissing || chainMissing;
+        String cleanupError = userTunnelAliasService.removeLegacyOnNode(node.getId(), forward, tunnel, userTunnel, ingress);
+        if (cleanupError == null && ingress && remoteServiceMissing) {
+            cleanupError = userTunnelAliasService.removeLegacyOnNode(node.getId(), forward, tunnel, userTunnel, false);
+        }
+        if (cleanupError != null) {
+            log.warn("节点 {} 的转发 {} 暂缓恢复：{}", node.getId(), forward.getId(), cleanupError);
+            return;
+        }
         Integer limiter = userTunnel == null ? null : userTunnel.getSpeedId();
 
         if (chainMissing) {

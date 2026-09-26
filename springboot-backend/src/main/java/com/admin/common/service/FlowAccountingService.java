@@ -234,7 +234,9 @@ public class FlowAccountingService {
     private boolean isValidUserTunnel(FlowAccountingContext context, Long expectedUserTunnelId) {
         return expectedUserTunnelId != null && expectedUserTunnelId > 0
                 && expectedUserTunnelId <= Integer.MAX_VALUE
-                && Objects.equals(context.getUserTunnelId(), expectedUserTunnelId.intValue())
+                && context.getUserTunnelId() != null
+                && Objects.equals(context.getReportedUserTunnelId() == null ? context.getUserTunnelId()
+                        : context.getReportedUserTunnelId(), expectedUserTunnelId.intValue())
                 && Objects.equals(context.getUserTunnelUserId(), context.getForwardUserId())
                 && Objects.equals(context.getUserTunnelTunnelId(), context.getForwardTunnelId());
     }
@@ -266,23 +268,17 @@ public class FlowAccountingService {
             throw new IllegalArgumentException("隧道流量计费类型非法");
         }
         BigDecimal ratio = context.getTrafficRatio() == null ? BigDecimal.ONE : context.getTrafficRatio();
-        return new TrafficDelta(scale(report.getD(), ratio, flowType), scale(report.getU(), ratio, flowType));
+        // Single-way bills upload only; two-way bills upload + download once.
+        return new TrafficDelta(flowType == 2 ? scale(report.getD(), ratio) : 0L, scale(report.getU(), ratio));
     }
 
-    private long scale(long bytes, BigDecimal ratio, int flowType) {
-        // Keep the historical billing rule: truncate the traffic ratio first,
-        // then apply the one-/two-way multiplier. Multiplying before the
-        // truncation changes charges for fractional ratios (for example,
-        // 1 byte * 1.5 * 2 used to be billed as 2, not 3).
+    private long scale(long bytes, BigDecimal ratio) {
+        // Preserve per-direction truncation for fractional traffic ratios.
         BigDecimal ratioAdjusted = BigDecimal.valueOf(bytes).multiply(ratio);
         if (ratioAdjusted.signum() < 0 || ratioAdjusted.compareTo(BigDecimal.valueOf(Long.MAX_VALUE)) > 0) {
             throw new IllegalArgumentException("计费流量超出允许范围");
         }
-        try {
-            return Math.multiplyExact(ratioAdjusted.longValue(), flowType);
-        } catch (ArithmeticException exception) {
-            throw new IllegalArgumentException("计费流量超出允许范围");
-        }
+        return ratioAdjusted.longValue();
     }
 
     private Long asLong(Integer value) {

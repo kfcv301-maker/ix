@@ -14,13 +14,16 @@ public interface FlowAccountingMapper {
             + "u.id AS ownerId, u.role_id AS ownerRoleId, u.status AS ownerStatus, u.exp_time AS ownerExpTime, "
             + "u.flow AS ownerFlow, u.in_flow AS ownerInFlow, u.out_flow AS ownerOutFlow, "
             + "ut.id AS userTunnelId, ut.user_id AS userTunnelUserId, ut.tunnel_id AS userTunnelTunnelId, "
+            + "CASE WHEN ut.id IS NOT NULL THEN #{userTunnelId} ELSE NULL END AS reportedUserTunnelId, "
             + "ut.status AS userTunnelStatus, ut.exp_time AS userTunnelExpTime, ut.flow AS userTunnelFlow, "
             + "ut.in_flow AS userTunnelInFlow, ut.out_flow AS userTunnelOutFlow, "
             + "CASE WHEN t.in_node_id = #{nodeId} OR EXISTS (SELECT 1 FROM tunnel_entry_node ten "
             + "WHERE ten.tunnel_id = t.id AND ten.node_id = #{nodeId}) THEN 1 ELSE 0 END AS ingressNode "
             + "FROM forward f INNER JOIN tunnel t ON t.id = f.tunnel_id "
             + "INNER JOIN `user` u ON u.id = f.user_id "
-            + "LEFT JOIN user_tunnel ut ON ut.id = #{userTunnelId} "
+            + "LEFT JOIN user_tunnel_alias ua ON ua.alias_id = #{userTunnelId} "
+            + "AND ua.user_id = f.user_id AND ua.tunnel_id = f.tunnel_id "
+            + "LEFT JOIN user_tunnel ut ON ut.id = COALESCE(ua.canonical_id, #{userTunnelId}) "
             + "WHERE f.id = #{forwardId}")
     FlowAccountingContext selectContext(@Param("forwardId") Long forwardId,
                                         @Param("userTunnelId") Long userTunnelId,
