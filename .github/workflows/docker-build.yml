@@ -56,6 +56,12 @@ jobs:
             echo "Version ${VERSION} is already published. Bump VERSION for the next release."
             exit 0
           fi
+          if [[ "$published" == "true" ]]; then
+            draft_source="$(gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" --json targetCommitish --jq '.targetCommitish')"
+            [[ "$draft_source" == "$GITHUB_SHA" ]] || {
+              echo 'Existing draft belongs to different source; bump VERSION or resolve the draft.' >&2; exit 1;
+            }
+          fi
           if git rev-parse -q --verify "refs/tags/${VERSION}" >/dev/null; then
             [[ "$(git rev-parse "refs/tags/${VERSION}^{commit}")" == "$GITHUB_SHA" ]] || {
               echo 'Existing tag points at different source; bump VERSION.' >&2; exit 1;
@@ -215,6 +221,7 @@ jobs:
       - name: Verify updater and installer regressions
         run: |
           python3 -m unittest discover -s updater -p 'test_*.py'
+          python3 tests/release_decision_test.py
           bash tests/install_tuning_test.sh
 
       - name: Verify backend container build
@@ -287,6 +294,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          [[ "$(gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')" == "true" ]] || {
+            echo 'Refusing to overwrite assets of a published release.' >&2; exit 1;
+          }
           gh release upload "${VERSION}" \
             --clobber \
             ./artifacts/flux-panel-agent-linux-amd64 \
