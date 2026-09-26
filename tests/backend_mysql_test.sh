@@ -15,6 +15,7 @@ cleanup() {
   docker network rm "$NETWORK" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
+trap 'printf "Backend integration check failed at line %s\n" "$LINENO" >&2; docker logs "$BACKEND_CONTAINER" 2>/dev/null || true' ERR
 docker network create "$NETWORK" >/dev/null
 docker volume create "$CONFIG_VOLUME" >/dev/null
 docker run -d --name "$MYSQL_CONTAINER" --network "$NETWORK" --network-alias mysql \
@@ -53,7 +54,7 @@ done
 [[ "$(sql -e 'SELECT canonical_id FROM user_tunnel_alias WHERE alias_id=8 AND user_id=3 AND tunnel_id=42')" == '9' ]]
 [[ "$(sql -e 'SELECT COUNT(*) FROM user_tunnel_duplicate_archive WHERE id IN (8,9)')" == '2' ]]
 [[ "$(sql -e 'SELECT user FROM user WHERE id=1')" == 'admin' ]]
-[[ "$(sql -e 'SELECT pwd LIKE "$2%" FROM user WHERE id=1')" == '1' ]]
+[[ "$(sql -e 'SELECT pwd LIKE "{bcrypt-sha256}$2%" FROM user WHERE id=1')" == '1' ]]
 docker exec "$BACKEND_CONTAINER" sh -c 'test "$(stat -c %a /app/config/initial-admin-credentials)" = 600'
 # Both idempotence and unchanged credential persistence survive a restart.
 digest="$(docker exec "$BACKEND_CONTAINER" sha256sum /app/config/initial-admin-credentials)"
