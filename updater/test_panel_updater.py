@@ -2,6 +2,7 @@ import unittest
 import tempfile
 import subprocess
 from pathlib import Path
+from http import HTTPStatus
 from unittest.mock import patch
 
 import panel_updater
@@ -73,6 +74,17 @@ class CurrentStateTest(unittest.TestCase):
                  patch.object(panel_updater, 'run', side_effect=run):
                 panel_updater.update_worker()
             self.assertEqual(panel_updater.STATE['state'], 'failed')
+
+    def test_second_request_is_rejected_while_first_worker_is_still_queued(self):
+        handler = panel_updater.UpdateHandler.__new__(panel_updater.UpdateHandler)
+        handler.path = '/update'
+        panel_updater.STATE.update(state='queued')
+        with patch.object(handler, 'authorized', return_value=True), \
+             patch.object(handler, 'write_json') as response, \
+             patch.object(panel_updater.threading, 'Thread') as worker:
+            handler.do_POST()
+        self.assertEqual(response.call_args.args[0], HTTPStatus.CONFLICT)
+        worker.assert_not_called()
 
 
 if __name__ == "__main__":

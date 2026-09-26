@@ -344,10 +344,12 @@ public class ForwardSyncTaskService {
             String error = userTunnelAliasService.removeLegacyOnNode(task.getNodeId(), forward, tunnel, grant, ingress);
             if (error != null) return error;
         }
-        String canonical = task.getServiceName();
-        List<String> names = new ArrayList<>();
+        String recordedName = task.getServiceName();
+        String canonical = forward.getId() + "_" + forward.getUserId() + "_" + (grant == null ? 0 : grant.getId());
+        Set<String> names = new LinkedHashSet<>();
         if (!OPERATION_RESUME.equals(task.getOperation())) names.addAll(userTunnelAliasService.legacyNames(forward, grant));
         names.add(canonical);
+        if (!OPERATION_RESUME.equals(task.getOperation())) names.add(recordedName);
         try {
             for (String name : names) {
                 task.setServiceName(name);
@@ -356,7 +358,7 @@ public class ForwardSyncTaskService {
             }
             return null;
         } finally {
-            task.setServiceName(canonical);
+            task.setServiceName(recordedName);
         }
     }
 

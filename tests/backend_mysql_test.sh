@@ -45,6 +45,7 @@ docker run -d --name "$BACKEND_CONTAINER" --network "$NETWORK" \
 ready=false
 for _ in $(seq 1 120); do
   if docker exec "$BACKEND_CONTAINER" curl -fsS http://localhost:6365/flow/test >/dev/null 2>&1; then ready=true; break; fi
+  [[ "$(docker inspect -f '{{.State.Running}}' "$BACKEND_CONTAINER")" == true ]] || break
   sleep 2
 done
 [[ "$ready" == true ]] || { docker logs "$BACKEND_CONTAINER"; exit 1; }
@@ -60,6 +61,7 @@ docker restart "$BACKEND_CONTAINER" >/dev/null
 ready=false
 for _ in $(seq 1 90); do
   if docker exec "$BACKEND_CONTAINER" curl -fsS http://localhost:6365/flow/test >/dev/null 2>&1; then ready=true; break; fi
+  [[ "$(docker inspect -f '{{.State.Running}}' "$BACKEND_CONTAINER")" == true ]] || break
   sleep 2
 done
 [[ "$ready" == true ]]

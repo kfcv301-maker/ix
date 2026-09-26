@@ -47,7 +47,7 @@ mybatis-plus:
 #    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
 
 jwt-secret: ${JWT_SECRET}
-log-dir: ${LOG_DIR}
+log-dir: ${LOG_DIR:logs}
 
 panel-updater:
   url: ${PANEL_UPDATER_URL:http://updater:18080}
