@@ -579,8 +579,7 @@ public class ForwardSyncTaskService {
     }
 
     private String formatAddress(String host, Integer port) {
-        if (host == null || port == null) return "";
-        return host.contains(":") ? "[" + host + "]:" + port : host + ":" + port;
+        return GostUtil.formatAddress(host, port);
     }
 
     private long value(Long value) {

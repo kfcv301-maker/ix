@@ -1245,10 +1245,7 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
      * 创建链服务
      */
     private R createChainService(Node inNode, String serviceName, String outIp, Integer outPort, String protocol, String interfaceName) {
-        String remoteAddr = outIp + ":" + outPort;
-        if (outIp.contains(":")) {
-            remoteAddr = "[" + outIp + "]:" + outPort;
-        }
+        String remoteAddr = GostUtil.formatAddress(outIp, outPort);
         GostDto result = GostUtil.AddChains(inNode.getId(), serviceName, remoteAddr, protocol, interfaceName);
         return isGostOperationSuccess(result) ? R.ok() : R.err(result.getMsg());
     }
@@ -1274,10 +1271,7 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
      */
     private R updateChainService(Node inNode, String serviceName, String outIp, Integer outPort, String protocol, String interfaceName) {
         // 创建新链
-        String remoteAddr = outIp + ":" + outPort;
-        if (outIp.contains(":")) {
-            remoteAddr = "[" + outIp + "]:" + outPort;
-        }
+        String remoteAddr = GostUtil.formatAddress(outIp, outPort);
         GostDto createResult = GostUtil.UpdateChains(inNode.getId(), serviceName, remoteAddr, protocol, interfaceName);
         if (createResult.getMsg().contains(GOST_NOT_FOUND_MSG)) {
             createResult = GostUtil.AddChains(inNode.getId(), serviceName, remoteAddr, protocol, interfaceName);

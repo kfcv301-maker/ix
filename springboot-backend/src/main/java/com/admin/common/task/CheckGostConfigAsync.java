@@ -483,7 +483,7 @@ public class CheckGostConfigAsync {
     }
 
     private String formatAddress(String host, Integer port) {
-        return host != null && host.contains(":") ? "[" + host + "]:" + port : host + ":" + port;
+        return GostUtil.formatAddress(host, port);
     }
 
     private void logRestoreResult(String configType, String serviceName, Long nodeId, GostDto result) {

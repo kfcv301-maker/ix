@@ -12,6 +12,16 @@ import java.util.Objects;
 
 public class GostUtil {
 
+    /** Endpoint syntax shared by listeners and relay chains. */
+    public static String formatAddress(String host, Integer port) {
+        if (host == null || port == null) return "";
+        String address = host.trim();
+        if (address.contains(":") && !(address.startsWith("[") && address.endsWith("]"))) {
+            address = "[" + address + "]";
+        }
+        return address + ":" + port;
+    }
+
 
     public static GostDto AddLimiters(Long node_id, Long name, String speed) {
         JSONObject data = createLimiterData(name, speed);
@@ -302,9 +312,9 @@ public class GostUtil {
         JSONObject service = new JSONObject();
         service.put("name", name + "_" + protocol);
         if (Objects.equals(protocol, "tcp")){
-            service.put("addr", tunnel.getTcpListenAddr() + ":" + in_port);
+            service.put("addr", formatAddress(tunnel.getTcpListenAddr(), in_port));
         }else {
-            service.put("addr", tunnel.getUdpListenAddr() + ":" + in_port);
+            service.put("addr", formatAddress(tunnel.getUdpListenAddr(), in_port));
         }
 
         if (StringUtils.isNotBlank(interfaceName)) {
