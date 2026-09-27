@@ -6,8 +6,28 @@ import org.springframework.test.util.ReflectionTestUtils;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import java.security.KeyPairGenerator;
+import net.schmizz.sshj.transport.verification.FingerprintVerifier;
 
 class VpsSshServiceImplTest {
+
+    @Test void fingerprintMatchesOpenSshAndLegacyPinsStillRequireTheSameKey() throws Exception {
+        KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
+        generator.initialize(2048);
+        var key = generator.generateKeyPair().getPublic();
+        var other = generator.generateKeyPair().getPublic();
+        String wire = ReflectionTestUtils.invokeMethod(VpsSshServiceImpl.class, "fingerprint", key);
+        String legacy = ReflectionTestUtils.invokeMethod(VpsSshServiceImpl.class, "legacyFingerprint", key);
+        assertNotNull(wire);
+        assertTrue(FingerprintVerifier.getInstance(wire).verify("localhost", 22, key));
+        assertFalse(FingerprintVerifier.getInstance(wire).verify("localhost", 22, other));
+        assertNotEquals(legacy, wire);
+        assertEquals(Boolean.TRUE, ReflectionTestUtils.invokeMethod(VpsSshServiceImpl.class, "matchesFingerprint", wire, key));
+        assertEquals(Boolean.TRUE, ReflectionTestUtils.invokeMethod(VpsSshServiceImpl.class, "matchesFingerprint", legacy, key));
+        assertEquals(Boolean.FALSE, ReflectionTestUtils.invokeMethod(VpsSshServiceImpl.class, "matchesFingerprint", legacy, other));
+    }
 
     @Test
     void backendTemplateDownloadsThenRunsTheBackendOnlyInstallerWithBash() {

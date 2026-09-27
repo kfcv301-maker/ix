@@ -58,6 +58,7 @@ done
 [[ "$(sql -e 'SELECT user FROM user WHERE id=1')" == 'admin' ]]
 [[ "$(sql -e 'SELECT pwd LIKE "{bcrypt-sha256}$2%" FROM user WHERE id=1')" == '1' ]]
 docker exec "$BACKEND_CONTAINER" sh -c 'test "$(stat -c %a /app/config/initial-admin-credentials)" = 600'
+python3 "$ROOT_DIR/tests/forward_dispatch_test.py" "$BACKEND_CONTAINER" "$MYSQL_CONTAINER"
 # Both idempotence and unchanged credential persistence survive a restart.
 digest="$(docker exec "$BACKEND_CONTAINER" sha256sum /app/config/initial-admin-credentials)"
 docker restart "$BACKEND_CONTAINER" >/dev/null

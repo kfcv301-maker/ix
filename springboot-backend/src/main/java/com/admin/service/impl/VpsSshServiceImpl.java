@@ -4,6 +4,7 @@ import com.admin.entity.VpsHost;
 import com.admin.common.utils.VpsSshTargetPolicy;
 import com.admin.service.VpsSshService;
 import net.schmizz.sshj.SSHClient;
+import net.schmizz.sshj.common.Buffer;
 import net.schmizz.sshj.connection.channel.direct.Session;
 import net.schmizz.sshj.transport.verification.HostKeyVerifier;
 import org.springframework.stereotype.Service;
@@ -24,6 +25,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
 /**
@@ -107,6 +109,7 @@ public class VpsSshServiceImpl implements VpsSshService {
 
         String targetAddress = vpsSshTargetPolicy.resolveForConnection(host);
         AtomicReference<String> presentedFingerprint = new AtomicReference<>();
+        AtomicBoolean acceptedFingerprint = new AtomicBoolean();
         String expectedFingerprint = trimToNull(host.getSshFingerprint());
         SSHClient client = new SSHClient();
         client.setConnectTimeout(CONNECT_TIMEOUT_MS);
@@ -116,7 +119,9 @@ public class VpsSshServiceImpl implements VpsSshService {
             public boolean verify(String hostname, int port, PublicKey key) {
                 String actualFingerprint = fingerprint(key);
                 presentedFingerprint.set(actualFingerprint);
-                return expectedFingerprint == null || constantTimeEquals(expectedFingerprint, actualFingerprint);
+                boolean accepted = matchesFingerprint(expectedFingerprint, key);
+                acceptedFingerprint.set(accepted);
+                return accepted;
             }
 
             @Override
@@ -137,7 +142,7 @@ public class VpsSshServiceImpl implements VpsSshService {
             }
             String actualFingerprint = presentedFingerprint.get();
             if (expectedFingerprint != null && actualFingerprint != null
-                    && !constantTimeEquals(expectedFingerprint, actualFingerprint)) {
+                    && !acceptedFingerprint.get()) {
                 throw new HostFingerprintChangedException(actualFingerprint);
             }
             throw exception;
@@ -185,11 +190,27 @@ public class VpsSshServiceImpl implements VpsSshService {
 
     private static String fingerprint(PublicKey key) {
         try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(new Buffer.PlainBuffer().putPublicKey(key).getCompactData());
+            return "SHA256:" + Base64.getEncoder().withoutPadding().encodeToString(digest);
+        } catch (Exception exception) {
+            return "unknown";
+        }
+    }
+
+    private static String legacyFingerprint(PublicKey key) {
+        try {
             byte[] digest = MessageDigest.getInstance("SHA-256").digest(key.getEncoded());
             return "SHA256:" + Base64.getEncoder().withoutPadding().encodeToString(digest);
         } catch (Exception exception) {
             return "unknown";
         }
+    }
+
+    private static boolean matchesFingerprint(String expected, PublicKey key) {
+        // Old pins remain bound to the exact same key during conversion.
+        return expected == null || constantTimeEquals(expected, fingerprint(key))
+                || constantTimeEquals(expected, legacyFingerprint(key));
     }
 
     private static boolean constantTimeEquals(String left, String right) {

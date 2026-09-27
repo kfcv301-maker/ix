@@ -194,7 +194,16 @@ public class ForwardSyncTaskService {
             }
         }
 
-        runAfterCommit(() -> dispatchReadyForOperation(operationId));
+        // afterCommit still has the original connection/session bound. Claim
+        // on a worker so its write commits before an endpoint worker reads it.
+        runAfterCommit(() -> {
+            try {
+                forwardSyncTaskExecutor.dispatchOperation(operationId);
+            } catch (TaskRejectedException exception) {
+                // Leave rows pending; the scheduled dispatcher will retry.
+                log.warn("节点同步调度器繁忙，操作 {} 将由定时任务重试", operationId);
+            }
+        });
         String message = OPERATION_DELETE.equals(operation)
                 ? "已进入删除同步队列，等待所有节点确认清理"
                 : "已进入节点同步队列";
@@ -287,7 +296,7 @@ public class ForwardSyncTaskService {
         return result;
     }
 
-    private void dispatchReadyForOperation(String operationId) {
+    public void dispatchReadyForOperation(String operationId) {
         if (operationId == null) return;
         long now = System.currentTimeMillis();
         List<ForwardSyncTask> ready = new ArrayList<>();
