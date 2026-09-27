@@ -21,7 +21,7 @@ docker volume create "$CONFIG_VOLUME" >/dev/null
 docker run -d --name "$MYSQL_CONTAINER" --network "$NETWORK" --network-alias mysql \
   -e MYSQL_ROOT_PASSWORD=integration-only-root -e MYSQL_DATABASE=flux_panel \
   -e MYSQL_USER=flux_panel -e MYSQL_PASSWORD=integration-only-password "$MYSQL_TEST_IMAGE" >/dev/null
-sql() { docker exec -i "$MYSQL_CONTAINER" mysql -uflux_panel -pintegration-only-password -N flux_panel "$@"; }
+sql() { docker exec -i "$MYSQL_CONTAINER" mysql -uroot -pintegration-only-root -N flux_panel "$@"; }
 ready=false
 for _ in $(seq 1 90); do
   if sql -e 'SELECT 1' >/dev/null 2>&1; then ready=true; break; fi
@@ -29,6 +29,8 @@ for _ in $(seq 1 90); do
 done
 [[ "$ready" == true ]] || { docker logs "$MYSQL_CONTAINER"; exit 1; }
 sql < "$ROOT_DIR/gost.sql"
+# Use root for fixtures/readiness so the application's caching_sha2_password
+# authentication cache stays cold until JDBC connects for the first time.
 # Simulate an old installation: public default admin, duplicate grant IDs,
 # and no PANEL_INITIAL_ADMIN_* variables supplied by its old updater.
 sql <<'SQL'
