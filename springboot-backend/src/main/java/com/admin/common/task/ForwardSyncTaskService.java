@@ -48,6 +48,8 @@ import java.util.UUID;
 @Slf4j
 @Service
 public class ForwardSyncTaskService {
+    @Resource
+    private com.admin.common.service.UserTunnelAliasService userTunnelAliasService;
 
     private static final String ENDPOINT_INGRESS = "ingress";
     private static final String ENDPOINT_EGRESS = "egress";
@@ -192,7 +194,16 @@ public class ForwardSyncTaskService {
             }
         }
 
-        runAfterCommit(() -> dispatchReadyForOperation(operationId));
+        // afterCommit still has the original connection/session bound. Claim
+        // on a worker so its write commits before an endpoint worker reads it.
+        runAfterCommit(() -> {
+            try {
+                forwardSyncTaskExecutor.dispatchOperation(operationId);
+            } catch (TaskRejectedException exception) {
+                // Leave rows pending; the scheduled dispatcher will retry.
+                log.warn("节点同步调度器繁忙，操作 {} 将由定时任务重试", operationId);
+            }
+        });
         String message = OPERATION_DELETE.equals(operation)
                 ? "已进入删除同步队列，等待所有节点确认清理"
                 : "已进入节点同步队列";
@@ -285,7 +296,7 @@ public class ForwardSyncTaskService {
         return result;
     }
 
-    private void dispatchReadyForOperation(String operationId) {
+    public void dispatchReadyForOperation(String operationId) {
         if (operationId == null) return;
         long now = System.currentTimeMillis();
         List<ForwardSyncTask> ready = new ArrayList<>();
@@ -329,6 +340,38 @@ public class ForwardSyncTaskService {
     }
 
     private String executeIngress(ForwardSyncTask task, Forward forward, Tunnel tunnel) {
+        return executeWithLegacyNames(task, forward, tunnel, true);
+    }
+
+    private String executeEgress(ForwardSyncTask task, Forward forward, Tunnel tunnel) {
+        return executeWithLegacyNames(task, forward, tunnel, false);
+    }
+
+    private String executeWithLegacyNames(ForwardSyncTask task, Forward forward, Tunnel tunnel, boolean ingress) {
+        UserTunnel grant = findUserTunnel(forward);
+        if (OPERATION_RESUME.equals(task.getOperation())) {
+            String error = userTunnelAliasService.removeLegacyOnNode(task.getNodeId(), forward, tunnel, grant, ingress);
+            if (error != null) return error;
+        }
+        String recordedName = task.getServiceName();
+        String canonical = forward.getId() + "_" + forward.getUserId() + "_" + (grant == null ? 0 : grant.getId());
+        Set<String> names = new LinkedHashSet<>();
+        if (!OPERATION_RESUME.equals(task.getOperation())) names.addAll(userTunnelAliasService.legacyNames(forward, grant));
+        names.add(canonical);
+        if (!OPERATION_RESUME.equals(task.getOperation())) names.add(recordedName);
+        try {
+            for (String name : names) {
+                task.setServiceName(name);
+                String error = ingress ? executeIngressName(task, forward, tunnel) : executeEgressName(task, forward, tunnel);
+                if (error != null) return error;
+            }
+            return null;
+        } finally {
+            task.setServiceName(recordedName);
+        }
+    }
+
+    private String executeIngressName(ForwardSyncTask task, Forward forward, Tunnel tunnel) {
         GostDto result;
         if (OPERATION_PAUSE.equals(task.getOperation())) {
             result = GostUtil.PauseService(task.getNodeId(), task.getServiceName());
@@ -350,7 +393,7 @@ public class ForwardSyncTaskService {
         return recreateIngress(task, forward, tunnel);
     }
 
-    private String executeEgress(ForwardSyncTask task, Forward forward, Tunnel tunnel) {
+    private String executeEgressName(ForwardSyncTask task, Forward forward, Tunnel tunnel) {
         GostDto result;
         if (OPERATION_PAUSE.equals(task.getOperation())) {
             result = GostUtil.PauseRemoteService(task.getNodeId(), task.getServiceName());
@@ -545,8 +588,7 @@ public class ForwardSyncTaskService {
     }
 
     private String formatAddress(String host, Integer port) {
-        if (host == null || port == null) return "";
-        return host.contains(":") ? "[" + host + "]:" + port : host + ":" + port;
+        return GostUtil.formatAddress(host, port);
     }
 
     private long value(Long value) {

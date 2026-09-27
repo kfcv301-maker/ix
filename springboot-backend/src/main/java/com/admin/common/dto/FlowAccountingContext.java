@@ -28,6 +28,8 @@ public class FlowAccountingContext {
     private Long ownerOutFlow;
 
     private Integer userTunnelId;
+    /** Original Agent ID, including a validated alias of an archived grant. */
+    private Integer reportedUserTunnelId;
     private Integer userTunnelUserId;
     private Integer userTunnelTunnelId;
     private Integer userTunnelStatus;

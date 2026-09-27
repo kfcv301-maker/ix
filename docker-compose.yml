@@ -1,8 +1,8 @@
 services:
   mysql:
-    # New installations use the supported LTS line. Existing 5.7 data must
-    # remain on MYSQL_IMAGE=mysql:5.7 until its staged migration is complete.
-    image: ${MYSQL_IMAGE:-mysql:8.4}
+    # Old updaters do not migrate .env. Missing variables must preserve 5.7;
+    # new installers explicitly select 8.4 for a new data directory.
+    image: ${MYSQL_IMAGE:-mysql:5.7}
     restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
@@ -36,9 +36,9 @@ services:
       DB_PASSWORD: ${DB_PASSWORD}
       JWT_SECRET: ${JWT_SECRET}
       PANEL_UPDATER_TOKEN: ${PANEL_UPDATER_TOKEN}
-      PANEL_INITIAL_ADMIN_USERNAME: ${PANEL_INITIAL_ADMIN_USERNAME}
-      PANEL_INITIAL_ADMIN_PASSWORD: ${PANEL_INITIAL_ADMIN_PASSWORD}
-      VPS_CREDENTIAL_KEY: ${VPS_CREDENTIAL_KEY}
+      PANEL_INITIAL_ADMIN_USERNAME: ${PANEL_INITIAL_ADMIN_USERNAME:-}
+      PANEL_INITIAL_ADMIN_PASSWORD: ${PANEL_INITIAL_ADMIN_PASSWORD:-}
+      VPS_CREDENTIAL_KEY: ${VPS_CREDENTIAL_KEY:-}
       VPS_BACKEND_INSTALL_RELEASE: ${VPS_BACKEND_INSTALL_RELEASE:-1.4.5}
       AGENT_INSTALL_RELEASE: ${AGENT_INSTALL_RELEASE:-1.4.5}
       VPS_ALLOW_PRIVATE_ADMIN_TARGETS: ${VPS_ALLOW_PRIVATE_ADMIN_TARGETS:-false}
@@ -52,9 +52,16 @@ services:
       - "${BACKEND_BIND_ADDRESS:-127.0.0.1}:${BACKEND_PORT:-6365}:6365"
     volumes:
       - backend_logs:/app/logs
+      - backend_config:/app/config
     depends_on:
       mysql:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:6365/flow/test"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 18
     networks: [flux-panel]
 
   frontend:
@@ -64,7 +71,8 @@ services:
     ports:
       - "${FRONTEND_BIND_ADDRESS:-127.0.0.1}:${FRONTEND_PORT:-6366}:80"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     networks: [flux-panel]
 
   # Deliberately has no published port.  The backend can reach it only on the
@@ -93,6 +101,8 @@ volumes:
     name: ${MYSQL_DATA_VOLUME:-flux-panel-enhanced_mysql_data}
   backend_logs:
     name: ${BACKEND_LOG_VOLUME:-flux-panel-enhanced_backend_logs}
+  backend_config:
+    name: ${BACKEND_CONFIG_VOLUME:-flux-panel-enhanced_backend_config}
 
 networks:
   flux-panel:

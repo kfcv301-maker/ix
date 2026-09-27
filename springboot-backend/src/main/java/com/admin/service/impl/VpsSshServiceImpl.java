@@ -4,6 +4,7 @@ import com.admin.entity.VpsHost;
 import com.admin.common.utils.VpsSshTargetPolicy;
 import com.admin.service.VpsSshService;
 import net.schmizz.sshj.SSHClient;
+import net.schmizz.sshj.common.Buffer;
 import net.schmizz.sshj.connection.channel.direct.Session;
 import net.schmizz.sshj.transport.verification.HostKeyVerifier;
 import org.springframework.stereotype.Service;
@@ -24,6 +25,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
 /**
@@ -107,6 +109,7 @@ public class VpsSshServiceImpl implements VpsSshService {
 
         String targetAddress = vpsSshTargetPolicy.resolveForConnection(host);
         AtomicReference<String> presentedFingerprint = new AtomicReference<>();
+        AtomicBoolean acceptedFingerprint = new AtomicBoolean();
         String expectedFingerprint = trimToNull(host.getSshFingerprint());
         SSHClient client = new SSHClient();
         client.setConnectTimeout(CONNECT_TIMEOUT_MS);
@@ -116,7 +119,9 @@ public class VpsSshServiceImpl implements VpsSshService {
             public boolean verify(String hostname, int port, PublicKey key) {
                 String actualFingerprint = fingerprint(key);
                 presentedFingerprint.set(actualFingerprint);
-                return expectedFingerprint == null || constantTimeEquals(expectedFingerprint, actualFingerprint);
+                boolean accepted = matchesFingerprint(expectedFingerprint, key);
+                acceptedFingerprint.set(accepted);
+                return accepted;
             }
 
             @Override
@@ -137,7 +142,7 @@ public class VpsSshServiceImpl implements VpsSshService {
             }
             String actualFingerprint = presentedFingerprint.get();
             if (expectedFingerprint != null && actualFingerprint != null
-                    && !constantTimeEquals(expectedFingerprint, actualFingerprint)) {
+                    && !acceptedFingerprint.get()) {
                 throw new HostFingerprintChangedException(actualFingerprint);
             }
             throw exception;
@@ -166,27 +171,47 @@ public class VpsSshServiceImpl implements VpsSshService {
             if (!release.matches("[0-9]+(?:\\.[0-9]+){1,3}")) {
                 throw new IllegalStateException("VPS 后端安装版本配置无效");
             }
-            // This endpoint is intentionally kept stable for existing VPS
-            // deployment integrations. The installer itself receives the
-            // reviewed source tag below, so it upgrades only that backend.
+            // Public integration contract: this URL must remain unchanged.
+            // The script may evolve, but the backend source stays pinned below.
             String installerUrl = "https://raw.githubusercontent.com/kfcv301-maker/ix/main/backend_install.sh";
             return "set -eu\n"
                     + "command -v bash >/dev/null 2>&1 || { echo '[后端安装] 缺少 bash。' >&2; exit 1; }\n"
                     + "backend_installer=$(mktemp)\n"
-                    + "trap 'rm -f \"$backend_installer\"' EXIT\n"
+                    + "backend_checksum=$(mktemp)\n"
+                    + "trap 'rm -f \"$backend_installer\" \"$backend_checksum\"' EXIT\n"
                     + "curl -fsSL --retry 3 " + installerUrl + " -o \"$backend_installer\"\n"
-                    + "REPO_REF=" + release + " bash \"$backend_installer\" install\n";
+                    + "curl -fsSL --retry 3 " + installerUrl + ".sha256 -o \"$backend_checksum\"\n"
+                    + "expected=$(awk '{print $1}' \"$backend_checksum\"); actual=$(sha256sum \"$backend_installer\" | awk '{print $1}')\n"
+                    + "[ \"$expected\" = \"$actual\" ] || { echo '后端安装脚本校验失败' >&2; exit 1; }\n"
+                    + "command -v flock >/dev/null 2>&1 || { echo '缺少 flock，请安装 util-linux' >&2; exit 1; }\n"
+                    + "REPO_REF=" + release + " flock -n /var/lock/lunaris-backend-install.lock bash \"$backend_installer\" install\n";
         }
         throw new IllegalArgumentException("不支持的部署模板");
     }
 
     private static String fingerprint(PublicKey key) {
         try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(new Buffer.PlainBuffer().putPublicKey(key).getCompactData());
+            return "SHA256:" + Base64.getEncoder().withoutPadding().encodeToString(digest);
+        } catch (Exception exception) {
+            return "unknown";
+        }
+    }
+
+    private static String legacyFingerprint(PublicKey key) {
+        try {
             byte[] digest = MessageDigest.getInstance("SHA-256").digest(key.getEncoded());
             return "SHA256:" + Base64.getEncoder().withoutPadding().encodeToString(digest);
         } catch (Exception exception) {
             return "unknown";
         }
+    }
+
+    private static boolean matchesFingerprint(String expected, PublicKey key) {
+        // Old pins remain bound to the exact same key during conversion.
+        return expected == null || constantTimeEquals(expected, fingerprint(key))
+                || constantTimeEquals(expected, legacyFingerprint(key));
     }
 
     private static boolean constantTimeEquals(String left, String right) {

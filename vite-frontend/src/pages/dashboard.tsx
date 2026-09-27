@@ -1245,11 +1245,11 @@ export default function DashboardPage() {
                               <div className="grid grid-cols-3 gap-1 text-xs">
                                 <div className="text-center">
                                   <div className="text-default-500 mb-1">上传</div>
-                                  <div className="font-medium text-green-600 dark:text-green-400 truncate">{formatFlow(forward.inFlow || 0)}</div>
+                                  <div className="font-medium text-green-600 dark:text-green-400 truncate">{formatFlow(forward.outFlow || 0)}</div>
                                 </div>
                                 <div className="text-center">
                                   <div className="text-default-500 mb-1">下载</div>
-                                  <div className="font-medium text-orange-600 dark:text-orange-400 truncate">{formatFlow(forward.outFlow || 0)}</div>
+                                  <div className="font-medium text-orange-600 dark:text-orange-400 truncate">{formatFlow(forward.inFlow || 0)}</div>
                                 </div>
                                 <div className="text-center">
                                   <div className="text-default-500 mb-1">计费</div>

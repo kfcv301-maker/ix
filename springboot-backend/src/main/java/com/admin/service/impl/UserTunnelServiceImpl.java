@@ -47,6 +47,8 @@ import java.util.Set;
  */
 @Service
 public class UserTunnelServiceImpl extends ServiceImpl<UserTunnelMapper, UserTunnel> implements UserTunnelService {
+    @Resource
+    private com.admin.common.service.UserTunnelAliasService userTunnelAliasService;
 
     // ========== 常量定义 ==========
     
@@ -437,6 +439,8 @@ public class UserTunnelServiceImpl extends ServiceImpl<UserTunnelMapper, UserTun
         // 5. 批量更新该用户在该隧道下所有转发的限速配置。
         for (Forward forward : userTunnelForwards) {
             String serviceName = buildServiceName(forward.getId(), Long.valueOf(userId), userTunnel.getId());
+            List<String> serviceNames = new java.util.ArrayList<>(userTunnelAliasService.legacyNames(forward, userTunnel));
+            serviceNames.add(serviceName);
 
             String interfaceName = null;
             // 创建主服务
@@ -447,8 +451,10 @@ public class UserTunnelServiceImpl extends ServiceImpl<UserTunnelMapper, UserTun
             // 6. Update every ingress; a later node inventory report repairs a
             // missing limiter before restoring a service on that node.
             for (Long nodeId : ingressNodeIds) {
-                GostUtil.UpdateService(nodeId, serviceName, forward.getInPort(), speedId,
-                        forward.getRemoteAddr(), tunnel.getType(), tunnel, forward.getStrategy(), interfaceName);
+                for (String name : serviceNames) {
+                    GostUtil.UpdateService(nodeId, name, forward.getInPort(), speedId,
+                            forward.getRemoteAddr(), tunnel.getType(), tunnel, forward.getStrategy(), interfaceName);
+                }
             }
         }
     }

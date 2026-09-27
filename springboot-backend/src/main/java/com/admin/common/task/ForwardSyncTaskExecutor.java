@@ -13,6 +13,11 @@ public class ForwardSyncTaskExecutor {
     private ForwardSyncTaskService forwardSyncTaskService;
 
     @Async("forwardSyncExecutor")
+    public void dispatchOperation(String operationId) {
+        forwardSyncTaskService.dispatchReadyForOperation(operationId);
+    }
+
+    @Async("forwardSyncExecutor")
     public void execute(Long taskId) {
         forwardSyncTaskService.executeClaimedTask(taskId);
     }

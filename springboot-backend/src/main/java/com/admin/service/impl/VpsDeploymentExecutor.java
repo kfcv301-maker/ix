@@ -14,6 +14,8 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import jakarta.annotation.Resource;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /** Runs a reviewed remote template outside the HTTP request thread. */
 @Service
@@ -21,6 +23,7 @@ public class VpsDeploymentExecutor {
 
     private static final int ACTIVE_STATUS = 1;
     private static final int MAX_LOG_LENGTH = 64 * 1024;
+    private final Set<Long> localExecutions = ConcurrentHashMap.newKeySet();
 
     @Resource
     private VpsDeploymentTaskMapper taskMapper;
@@ -36,8 +39,18 @@ public class VpsDeploymentExecutor {
 
     @Async("vpsDeploymentTaskExecutor")
     public void execute(Long taskId) {
+        if (!localExecutions.add(taskId)) return;
+        try {
+            executeTask(taskId);
+        } finally {
+            localExecutions.remove(taskId);
+        }
+    }
+
+    private void executeTask(Long taskId) {
         VpsDeploymentTask task = taskMapper.selectById(taskId);
-        if (task == null || task.getStatus() == null || task.getStatus() != ACTIVE_STATUS) return;
+        if (task == null || task.getStatus() == null || task.getStatus() != ACTIVE_STATUS
+                || !"pending".equals(task.getTaskStatus())) return;
         VpsHost host = vpsHostService.getById(task.getVpsId());
         if (host == null || host.getStatus() == null || host.getStatus() != ACTIVE_STATUS) {
             finish(task, "failed", "VPS 已被移除，任务未执行。\n");
@@ -58,6 +71,7 @@ public class VpsDeploymentExecutor {
         // Claim the task atomically. A queued task may have been cancelled by
         // the timeout reaper while this asynchronous worker was waiting.
         if (!setRunning(task)) return;
+        task.setTaskStatus("running");
         try {
             String password = vpsHostService.decryptSshPassword(host);
             if (password == null || password.trim().isEmpty()) {
@@ -103,12 +117,14 @@ public class VpsDeploymentExecutor {
     }
 
     private void finish(VpsDeploymentTask task, String status, String finalMessage) {
-        append(task.getId(), finalMessage);
-        taskMapper.update(null, new UpdateWrapper<VpsDeploymentTask>().eq("id", task.getId())
+        if (taskMapper.update(null, new UpdateWrapper<VpsDeploymentTask>().eq("id", task.getId())
+                .eq("status", ACTIVE_STATUS).eq("task_status", task.getTaskStatus())
                 .set("task_status", status)
                 .set("finished_time", System.currentTimeMillis())
                 .set("updated_time", System.currentTimeMillis())
-                .set("active_lock", null));
+                .set("active_lock", null)) == 1) {
+            append(task.getId(), finalMessage);
+        }
     }
 
     /** A process crash must not leave a VPS permanently locked. */
@@ -117,8 +133,21 @@ public class VpsDeploymentExecutor {
         long deadline = System.currentTimeMillis() - 40L * 60 * 1000;
         for (VpsDeploymentTask task : taskMapper.selectList(new QueryWrapper<VpsDeploymentTask>()
                 .eq("status", ACTIVE_STATUS).in("task_status", "pending", "running")
-                .lt("created_time", deadline))) {
-            finish(task, "failed", "\n任务超时未完成，已自动释放 VPS 锁。\n");
+                .and(query -> query.and(pending -> pending.eq("task_status", "pending").lt("created_time", deadline))
+                        .or(running -> running.eq("task_status", "running").lt("started_time", deadline))))) {
+            if (localExecutions.contains(task.getId())) continue;
+            String expected = task.getTaskStatus();
+            Long timedFrom = "running".equals(expected) ? task.getStartedTime() : task.getCreatedTime();
+            if (timedFrom == null || timedFrom >= deadline) continue;
+            // A queued task may start after the SELECT. Do not expire its new run.
+            String timeColumn = "running".equals(expected) ? "started_time" : "created_time";
+            if (taskMapper.update(null, new UpdateWrapper<VpsDeploymentTask>()
+                    .eq("id", task.getId()).eq("status", ACTIVE_STATUS).eq("task_status", expected)
+                    .lt(timeColumn, deadline)
+                    .set("task_status", "failed").set("finished_time", System.currentTimeMillis())
+                    .set("updated_time", System.currentTimeMillis()).set("active_lock", null)) == 1) {
+                append(task.getId(), "\n任务等待超时或原执行进程已退出，已释放面板任务锁；远端安装互斥锁仍提供保护。\n");
+            }
         }
     }
 

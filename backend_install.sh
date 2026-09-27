@@ -7,6 +7,8 @@ REPO_REF="${REPO_REF:-1.4.5}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/flux-panel-backend}"
 BACKEND_PORT="${BACKEND_PORT:-6365}"
 BACKEND_BIND_ADDRESS="${BACKEND_BIND_ADDRESS:-127.0.0.1}"
+BACKEND_COMPOSE_PROJECT="${BACKEND_COMPOSE_PROJECT:-flux-panel-backend}"
+INITIAL_ADMIN_CREDENTIAL_FILE="${INITIAL_ADMIN_CREDENTIAL_FILE:-/root/flux-panel-initial-admin-credentials}"
 
 info() { printf '\033[1;34m[INFO]\033[0m %s\n' "$*"; }
 ok() { printf '\033[1;32m[ OK ]\033[0m %s\n' "$*"; }
@@ -14,6 +16,7 @@ fail() { printf '\033[1;31m[FAIL]\033[0m %s\n' "$*" >&2; exit 1; }
 
 require_root() {
   [[ "${EUID}" -eq 0 ]] || fail "请使用 root 或 sudo 运行后端安装。"
+  [[ "$BACKEND_COMPOSE_PROJECT" =~ ^[a-z0-9][a-z0-9_-]*$ ]] || fail "后端 Compose 项目名称无效。"
 }
 
 install_packages() {
@@ -33,6 +36,7 @@ install_packages() {
 }
 
 ensure_prerequisites() {
+  command -v python3 >/dev/null 2>&1 || install_packages python3
   command -v curl >/dev/null 2>&1 || install_packages curl ca-certificates
   command -v git >/dev/null 2>&1 || install_packages git
   if ! command -v docker >/dev/null 2>&1; then
@@ -81,8 +85,13 @@ prepare_environment() {
   ensure_env_value DB_PASSWORD "$(random_secret)"
   ensure_env_value JWT_SECRET "$(random_secret)"
   ensure_env_value PANEL_UPDATER_TOKEN "$(random_secret)"
-  ensure_env_value PANEL_INITIAL_ADMIN_USERNAME admin
-  ensure_env_value PANEL_INITIAL_ADMIN_PASSWORD "$(random_secret)"
+  if [[ "$existing_environment" -eq 0 ]]; then
+    ensure_env_value MYSQL_DATA_VOLUME "${BACKEND_COMPOSE_PROJECT}_mysql_data"
+    ensure_env_value BACKEND_LOG_VOLUME "${BACKEND_COMPOSE_PROJECT}_backend_logs"
+    ensure_env_value BACKEND_CONFIG_VOLUME "${BACKEND_COMPOSE_PROJECT}_backend_config"
+    ensure_env_value PANEL_INITIAL_ADMIN_USERNAME admin
+    ensure_env_value PANEL_INITIAL_ADMIN_PASSWORD "$(random_secret)"
+  fi
   ensure_env_value VPS_CREDENTIAL_KEY "$(random_secret)"
   if [[ "$existing_environment" -eq 1 ]]; then
     ensure_env_value MYSQL_IMAGE mysql:5.7
@@ -97,8 +106,9 @@ prepare_environment() {
   ensure_env_value BACKEND_PORT "$BACKEND_PORT"
   ensure_env_value BACKEND_BIND_ADDRESS "$BACKEND_BIND_ADDRESS"
   chmod 600 "$ENV_FILE"
-  local credential_file=/root/flux-panel-initial-admin-credentials
-  if [[ ! -e "$credential_file" ]]; then
+  python3 "$INSTALL_DIR/updater/env_migration.py" "$ENV_FILE" "$REPO_REF"
+  local credential_file="$INITIAL_ADMIN_CREDENTIAL_FILE"
+  if [[ "$existing_environment" -eq 0 && ! -e "$credential_file" ]]; then
     printf 'username=%s\npassword=%s\n' \
       "$(sed -n 's/^PANEL_INITIAL_ADMIN_USERNAME=//p' "$ENV_FILE")" \
       "$(sed -n 's/^PANEL_INITIAL_ADMIN_PASSWORD=//p' "$ENV_FILE")" > "$credential_file"
@@ -114,9 +124,9 @@ install_backend() {
   [[ -f "$INSTALL_DIR/docker-compose.yml" ]] || fail "项目缺少 docker-compose.yml"
   prepare_environment
   info "构建并启动后端与 MySQL；不会启动前端或更新器。"
-  docker compose --project-name flux-panel-backend --env-file "$ENV_FILE" -f "$INSTALL_DIR/docker-compose.yml" up -d --build mysql backend
+  docker compose --project-name "$BACKEND_COMPOSE_PROJECT" --env-file "$ENV_FILE" -f "$INSTALL_DIR/docker-compose.yml" up -d --build --wait --wait-timeout 240 mysql backend
   ok "后端安装完成"
-  docker compose --project-name flux-panel-backend --env-file "$ENV_FILE" -f "$INSTALL_DIR/docker-compose.yml" ps mysql backend
+  docker compose --project-name "$BACKEND_COMPOSE_PROJECT" --env-file "$ENV_FILE" -f "$INSTALL_DIR/docker-compose.yml" ps mysql backend
 }
 
 case "${1:-install}" in

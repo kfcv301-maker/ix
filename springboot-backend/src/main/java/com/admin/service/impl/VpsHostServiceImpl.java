@@ -302,12 +302,7 @@ public class VpsHostServiceImpl extends ServiceImpl<VpsHostMapper, VpsHost> impl
                 .set("last_check_message", limit(isBlank(message) ? "SSH 认证成功" : message, 500))
                 .set("last_latency_ms", null)
                 .set("updated_time", now);
-        if (isBlank(host.getSshFingerprint()) && !isBlank(fingerprint) && !"unknown".equals(fingerprint)) {
-            update.set("ssh_fingerprint", fingerprint);
-            update.set("ssh_fingerprint_verified", false);
-            host.setSshFingerprint(fingerprint);
-            host.setSshFingerprintVerified(false);
-        }
+        recordAuthenticatedFingerprint(update, host, fingerprint);
         update(new VpsHost(), update);
         host.setHealthStatus("online");
         host.setLastCheckTime(now);
@@ -367,13 +362,24 @@ public class VpsHostServiceImpl extends ServiceImpl<VpsHostMapper, VpsHost> impl
                 .set("last_latency_ms", result.isOnline() ? result.getLatencyMs() : null)
                 .set("health_status", result.isFingerprintChanged() ? "fingerprint_changed" : result.isOnline() ? "online" : "offline")
                 .set("updated_time", now);
-        if (isBlank(host.getSshFingerprint()) && result.isOnline() && !isBlank(result.getFingerprint())) {
-            updateWrapper.set("ssh_fingerprint", result.getFingerprint());
-            updateWrapper.set("ssh_fingerprint_verified", false);
-            host.setSshFingerprint(result.getFingerprint());
-            host.setSshFingerprintVerified(false);
-        }
+        if (result.isOnline()) recordAuthenticatedFingerprint(updateWrapper, host, result.getFingerprint());
         update(new VpsHost(), updateWrapper);
+    }
+
+    private void recordAuthenticatedFingerprint(UpdateWrapper<VpsHost> update, VpsHost host, String fingerprint) {
+        if (isBlank(fingerprint) || "unknown".equals(fingerprint)) return;
+        String previous = host.getSshFingerprint();
+        if (Objects.equals(previous, fingerprint)) return;
+        // Authentication already verified any old pin against the same public
+        // key. Preserve that confirmation while converting its representation.
+        if (isBlank(previous)) {
+            update.set("ssh_fingerprint_verified", false);
+            host.setSshFingerprintVerified(false);
+        } else {
+            update.eq("ssh_fingerprint", previous);
+        }
+        update.set("ssh_fingerprint", fingerprint);
+        host.setSshFingerprint(fingerprint);
     }
 
     private Actor currentActor() {
