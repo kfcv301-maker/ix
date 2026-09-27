@@ -1566,11 +1566,11 @@ export default function UserPage() {
                   <div className="mt-1 space-y-1">
                     <div className="flex justify-between">
                       <span>上行流量：</span>
-                      <span className="font-mono">{userToReset ? formatFlow(userToReset.inFlow || 0) : '-'}</span>
+                      <span className="font-mono">{userToReset ? formatFlow(userToReset.outFlow || 0) : '-'}</span>
                     </div>
                     <div className="flex justify-between">
                       <span>下行流量：</span>
-                      <span className="font-mono">{userToReset ? formatFlow(userToReset.outFlow || 0) : '-'}</span>
+                      <span className="font-mono">{userToReset ? formatFlow(userToReset.inFlow || 0) : '-'}</span>
                     </div>
                     <div className="flex justify-between font-medium">
                       <span>总计：</span>
@@ -1635,11 +1635,11 @@ export default function UserPage() {
                   <div className="mt-1 space-y-1">
                     <div className="flex justify-between">
                       <span>上行流量：</span>
-                      <span className="font-mono">{tunnelToReset ? formatFlow(tunnelToReset.inFlow || 0) : '-'}</span>
+                      <span className="font-mono">{tunnelToReset ? formatFlow(tunnelToReset.outFlow || 0) : '-'}</span>
                     </div>
                     <div className="flex justify-between">
                       <span>下行流量：</span>
-                      <span className="font-mono">{tunnelToReset ? formatFlow(tunnelToReset.outFlow || 0) : '-'}</span>
+                      <span className="font-mono">{tunnelToReset ? formatFlow(tunnelToReset.inFlow || 0) : '-'}</span>
                     </div>
                     <div className="flex justify-between font-medium">
                       <span>总计：</span>

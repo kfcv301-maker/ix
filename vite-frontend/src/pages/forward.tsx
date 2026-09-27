@@ -1596,12 +1596,12 @@ export default function ForwardPage() {
               </Chip>
               <div className="flex items-center gap-1">
                 <Chip variant="flat" size="sm" className="text-xs" color="primary">
-                  ↑{formatFlow(forward.inFlow || 0)}
+                  ↑{formatFlow(forward.outFlow || 0)}
                 </Chip>
                
               </div>
               <Chip variant="flat" size="sm" className="text-xs" color="success">
-                  ↓{formatFlow(forward.outFlow || 0)}
+                  ↓{formatFlow(forward.inFlow || 0)}
                 </Chip>
             </div>
           </div>
