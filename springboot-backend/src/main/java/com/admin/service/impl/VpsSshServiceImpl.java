@@ -171,8 +171,9 @@ public class VpsSshServiceImpl implements VpsSshService {
             if (!release.matches("[0-9]+(?:\\.[0-9]+){1,3}")) {
                 throw new IllegalStateException("VPS 后端安装版本配置无效");
             }
-            String releaseUrl = "https://github.com/kfcv301-maker/ix/releases/download/" + release;
-            String installerUrl = releaseUrl + "/backend_install.sh";
+            // Public integration contract: this URL must remain unchanged.
+            // The script may evolve, but the backend source stays pinned below.
+            String installerUrl = "https://raw.githubusercontent.com/kfcv301-maker/ix/main/backend_install.sh";
             return "set -eu\n"
                     + "command -v bash >/dev/null 2>&1 || { echo '[后端安装] 缺少 bash。' >&2; exit 1; }\n"
                     + "backend_installer=$(mktemp)\n"

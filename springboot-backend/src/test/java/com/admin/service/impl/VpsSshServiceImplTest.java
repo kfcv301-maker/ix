@@ -36,9 +36,10 @@ class VpsSshServiceImplTest {
         String script = ReflectionTestUtils.invokeMethod(service, "resolveTemplate", "backend");
 
         assertNotNull(script);
-        assertTrue(script.contains("releases/download/1.4.5/backend_install.sh"));
-        assertFalse(script.contains("/main/"));
-        assertTrue(script.contains("backend_install.sh.sha256"));
+        String stableUrl = "https://raw.githubusercontent.com/kfcv301-maker/ix/main/backend_install.sh";
+        assertTrue(script.contains("curl -fsSL --retry 3 " + stableUrl + " -o"));
+        assertTrue(script.contains("curl -fsSL --retry 3 " + stableUrl + ".sha256 -o"));
+        assertFalse(script.contains("releases/download/"));
         assertTrue(script.contains("sha256sum"));
         assertTrue(script.contains("REPO_REF=1.4.5 flock -n"));
         assertTrue(script.contains("bash \"$backend_installer\" install"));

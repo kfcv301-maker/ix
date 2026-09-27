@@ -140,6 +140,14 @@ curl -fsSL https://github.com/kfcv301-maker/ix/releases/download/1.4.5/install.s
 - 在线 SSH：浏览器仅收到终端输入输出，真正的 SSH 连接由后端建立；首次成功连接后会固定 SSH 主机指纹，指纹变化时必须由可管理者确认后重新验证。
 - 一键安装后端：固定安装 Spring Boot 后端及其必需的 MySQL，不会部署前端、更新器或完整面板；不接受浏览器提交任意 Shell 命令，并保留有限长度的任务日志。
 
+后端一键安装入口是长期兼容地址，不随发布版本更改：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/backend_install.sh | sudo bash
+```
+
+脚本通过 `REPO_REF` 固定后端源码的发布标签，面板同时校验固定入口旁的 `backend_install.sh.sha256`。调整版本时保留此入口地址。隔离安装可设置 `INSTALL_DIR`、`BACKEND_PORT`、`BACKEND_COMPOSE_PROJECT` 和 `INITIAL_ADMIN_CREDENTIAL_FILE`；默认项目、数据卷及凭据文件路径兼容既有安装。
+
 ### Cloudflare DDNS（可选）
 
 在“新增/编辑节点”中开启 Cloudflare DDNS，并填写 API Token 和完整记录域名；这些设置会随节点保存。Token 使用面板 JWT 密钥派生的 AES-GCM 加密后才写入数据库，节点列表与日志不会返回明文。编辑已配置节点时令牌框留空并保存会保留原令牌；填写新值才会替换。此后点击“安装”不再要求重复填写。安装完成及每次开机后的首次任务都会核验 Cloudflare 记录，仅在不一致时更新；节点运行期间每 1 分钟检查公网 IPv4/IPv6，地址变化时才调用 Cloudflare 更新记录。每种记录类型只能有一条，若同一个 DDNS 域名存在多条 A 或 AAAA 记录，脚本会拒绝修改以避免误改。AWS 换机后重跑同一条命令即可恢复。检测到 IPv6 时会创建或更新同名 AAAA 记录；没有可用 IPv6 时不会创建、修改或删除 AAAA 记录。Token 需要 Cloudflare 的 `Zone:Read` 与 `DNS:Edit` 权限。
