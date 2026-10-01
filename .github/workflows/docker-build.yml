@@ -223,6 +223,7 @@ jobs:
           python3 -m unittest discover -s updater -p 'test_*.py'
           python3 tests/release_decision_test.py
           python3 tests/backend_installer_contract_test.py
+          python3 tests/realtime_node_access_test.py
           bash tests/install_tuning_test.sh
 
       - name: Verify backend container build
