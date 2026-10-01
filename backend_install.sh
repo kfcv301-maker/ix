@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 
 REPO_URL="${REPO_URL:-https://github.com/kfcv301-maker/ix.git}"
-REPO_REF="${REPO_REF:-1.4.5}"
+REPO_REF="${REPO_REF:-1.4.6}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/flux-panel-backend}"
 BACKEND_PORT="${BACKEND_PORT:-6365}"
 BACKEND_BIND_ADDRESS="${BACKEND_BIND_ADDRESS:-127.0.0.1}"
@@ -52,7 +52,7 @@ ensure_prerequisites() {
 }
 
 sync_source() {
-  [[ "$REPO_REF" =~ ^[0-9]+(\.[0-9]+){1,3}$ ]] || fail "仅允许经过审核的发布标签（例如 1.4.5）。"
+  [[ "$REPO_REF" =~ ^[0-9]+(\.[0-9]+){1,3}$ ]] || fail "仅允许经过审核的发布标签（例如 1.4.6）。"
   mkdir -p "$(dirname "$INSTALL_DIR")"
   if [[ -d "$INSTALL_DIR/.git" ]]; then
     [[ -z "$(git -C "$INSTALL_DIR" status --porcelain)" ]] || fail "后端目录含有本地修改；请先备份后再更新。"

@@ -27,7 +27,7 @@ from env_migration import migrate_env
 WORKSPACE = Path(os.environ.get("INSTALL_DIR", "/workspace")).resolve()
 PROJECT_NAME = os.environ.get("PROJECT_NAME", "flux-panel-enhanced")
 REPO_URL = os.environ.get("REPO_URL", "https://github.com/kfcv301-maker/ix.git")
-RELEASE_REF = os.environ.get("BRANCH", "1.4.5")
+RELEASE_REF = os.environ.get("BRANCH", "1.4.6")
 TOKEN = os.environ.get("PANEL_UPDATER_TOKEN", "")
 # The updater runs inside this Compose project. Never include it in an
 # update-triggered `compose up`: Docker may recreate the updater container

@@ -70,14 +70,14 @@ cors:
 
 agent:
   install:
-    release: ${AGENT_INSTALL_RELEASE:1.4.5}
+    release: ${AGENT_INSTALL_RELEASE:1.4.6}
 
 vps:
   credential-key: ${VPS_CREDENTIAL_KEY:}
   backend-install:
     # The stable installer URL remains unchanged; this pins the backend source
     # version it installs on the VPS.
-    release: ${VPS_BACKEND_INSTALL_RELEASE:1.4.5}
+    release: ${VPS_BACKEND_INSTALL_RELEASE:1.4.6}
   security:
     # User-submitted VPSes are always public-only. This opt-in only permits
     # administrator inventory to use RFC1918 / ULA addresses.

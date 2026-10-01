@@ -6,7 +6,7 @@ import toast from 'react-hot-toast';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 
-import { createRealtimeTicket, getNodeList, getSubscriptionToken, getUserPackageInfo } from "@/api";
+import { createRealtimeTicket, getRealtimeNodes, getSubscriptionToken, getUserPackageInfo } from "@/api";
 import { getRealtimeSocketUrl } from "@/utils/realtime-socket";
 
 interface UserInfo {
@@ -212,27 +212,12 @@ export default function DashboardPage() {
     const currentUserIsAdmin = adminStatus === 'true' || roleId === '0';
     setIsAdmin(currentUserIsAdmin);
 
-    // 节点列表接口在服务端按归属过滤，普通用户也可显示自己的节点名称。
-    void getNodeList().then((res) => {
-      if (res.code !== 0 || !Array.isArray(res.data)) return;
-      const names: Record<number, string> = {};
-      res.data.forEach((node: { id?: unknown; name?: unknown }) => {
-        const nodeId = Number(node.id);
-        if (Number.isFinite(nodeId) && nodeId > 0) {
-          names[nodeId] = String(node.name || `节点 #${nodeId}`);
-        }
-      });
-      setNodeNames(names);
-    }).catch(() => {
-      // 名称只是展示增强；实时流量本身不应被一次列表请求失败阻断。
-    });
-    
     loadPackageData();
     localStorage.setItem('e', '/dashboard');
   }, []);
 
   // 仪表盘直接复用节点监控的只读实时上报。服务端会依据登录角色过滤节点，
-  // 普通用户只会收到自己创建的节点数据。
+  // 普通用户会收到自建节点及有效隧道授权节点的摘要流量。
   useEffect(() => {
     let disposed = false;
     const closeSocket = () => {
@@ -288,6 +273,22 @@ export default function DashboardPage() {
       }
       realtimeSocketRef.current = socket;
 
+      socket.onopen = () => {
+        void getRealtimeNodes().then((res) => {
+          if (disposed || res.code !== 0 || !Array.isArray(res.data)) return;
+          const names: Record<number, string> = {};
+          res.data.forEach((node) => {
+            const nodeId = Number(node.id);
+            if (Number.isFinite(nodeId) && nodeId > 0) {
+              names[nodeId] = String(node.name || `节点 #${nodeId}`);
+            }
+          });
+          setNodeNames(names);
+        }).catch(() => {
+          // 名称请求失败不阻断实时流量。
+        });
+      };
+
       socket.onmessage = (event) => {
         try {
           const message = JSON.parse(event.data);
@@ -329,6 +330,8 @@ export default function DashboardPage() {
       socket.onclose = () => {
         if (realtimeSocketRef.current === socket) {
           realtimeSocketRef.current = null;
+          realtimeTrafficByNodeRef.current.clear();
+          publishSummary();
         }
         scheduleReconnect();
       };
@@ -895,7 +898,7 @@ export default function DashboardPage() {
                    <svg className="h-5 w-5 text-primary" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true">
                      <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v3.586l2.707 2.707a1 1 0 001.414-1.414L12 8.586V6z" clipRule="evenodd" />
                    </svg>
-                   <h2 className="text-lg lg:text-xl font-semibold text-foreground">{isAdmin ? '全节点实时流量' : '我的节点实时流量'}</h2>
+                   <h2 className="text-lg lg:text-xl font-semibold text-foreground">{isAdmin ? '全节点实时流量' : '可用节点实时流量'}</h2>
                  </div>
                  <div className="flex items-center gap-2 self-start sm:self-auto">
                    <Button
@@ -924,7 +927,7 @@ export default function DashboardPage() {
                      <p className="mt-1 font-mono text-2xl font-semibold tracking-tight text-foreground lg:text-3xl">
                        {formatFlow(realtimeTraffic.uploadSpeed + realtimeTraffic.downloadSpeed)}/s
                      </p>
-                     <p className="mt-1 text-xs text-default-500">{isAdmin ? '所有 15 秒内有监控上报的节点汇总' : '仅汇总自己创建的节点'}</p>
+                     <p className="mt-1 text-xs text-default-500">{isAdmin ? '所有 15 秒内有监控上报的节点汇总' : '自建及已授权隧道节点的网卡总吞吐；共享节点包含其他用户流量'}</p>
                    </div>
                    <div className="rounded-xl border border-primary-200 bg-primary-50 p-3 dark:border-primary-300/20 dark:bg-primary-100/20">
                      <p className="text-xs text-primary-700 dark:text-primary-300">↑ 上行</p>
@@ -973,7 +976,7 @@ export default function DashboardPage() {
                        <p className="mt-0.5 text-xs text-default-500">
                          {isAdmin
                            ? '按每台节点已上报的网卡实时流量展开。'
-                           : '仅显示自己创建的节点实时流量。'}
+                           : '显示自建及管理员授权隧道所用节点的网卡流量；共享节点包含其他用户流量。'}
                        </p>
                      </div>
                      <span className="text-xs text-default-500">{realtimeNodeTraffic.length} 个节点正在上报</span>

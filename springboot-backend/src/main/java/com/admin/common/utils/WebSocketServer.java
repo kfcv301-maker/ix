@@ -515,6 +515,19 @@ public class WebSocketServer extends TextWebSocketHandler {
             return false;
         }
 
+        Object expiry = session.getAttributes().get("monitorAccessExpiresAt");
+        if (expiry instanceof Number && System.currentTimeMillis() >= ((Number) expiry).longValue()) {
+            // A grant expired while this socket was open. Reconnect through the
+            // authenticated handshake so its node list is recalculated.
+            cleanupSession(session);
+            try {
+                session.close(CloseStatus.POLICY_VIOLATION);
+            } catch (Exception exception) {
+                log.debug("关闭已过期的监控会话失败: {}", exception.getMessage());
+            }
+            return false;
+        }
+
         Object roleValue = session.getAttributes().get("roleId");
         if (roleValue instanceof Number && ((Number) roleValue).intValue() == 0) {
             return true;

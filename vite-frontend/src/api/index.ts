@@ -46,6 +46,11 @@ export interface RealtimeTicket {
   expiresAt: number;
 }
 export const createRealtimeTicket = () => Network.post<RealtimeTicket>("/realtime/ticket");
+export interface RealtimeNode {
+  id: number;
+  name: string;
+}
+export const getRealtimeNodes = () => Network.post<RealtimeNode[]>("/realtime/nodes");
 
 // 节点CRUD操作 - 全部使用POST请求
 export const createNode = (data: any) => Network.post("/node/create", data);

@@ -1,6 +1,7 @@
 package com.admin.mapper;
 
 import com.admin.entity.User;
+import com.admin.common.dto.RealtimeNodeDto;
 import com.admin.common.dto.UserPackageDto;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import org.apache.ibatis.annotations.Param;
@@ -31,11 +32,17 @@ public interface UserMapper extends BaseMapper<User> {
      */
     List<UserPackageDto.UserForwardDetailDto> getUserForwardDetails(@Param("userId") Integer userId);
 
-    /**
-     * Return only nodes created by this user, for both the node page and
-     * monitoring WebSocket. A shared tunnel does not grant node monitoring.
-     */
+    /** Full node details and detailed monitoring stay limited to owned nodes. */
     List<Long> getAccessibleNodeIds(@Param("userId") Long userId);
+
+    /** Names and summary traffic for owned and currently assigned tunnel nodes. */
+    List<RealtimeNodeDto> getRealtimeNodes(@Param("userId") Long userId, @Param("now") Long now);
+
+    /** Close summary sockets when the first current grant expires, then recheck access. */
+    Long getNextRealtimeGrantExpiry(@Param("userId") Long userId, @Param("now") Long now);
+
+    /** Administrators can see summary traffic for every node. */
+    List<RealtimeNodeDto> getAllRealtimeNodes();
     
     /**
      * 管理员查询所有隧道（流量和转发设置为99999）

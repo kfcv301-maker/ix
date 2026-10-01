@@ -4,7 +4,7 @@
 set -Eeuo pipefail
 
 REPO_URL="${REPO_URL:-https://github.com/kfcv301-maker/ix.git}"
-REPO_REF="${REPO_REF:-1.4.5}"
+REPO_REF="${REPO_REF:-1.4.6}"
 SOURCE_DIR="$PWD"
 TARGET_DIR="${TARGET_DIR:-/opt/flux-panel-enhanced}"
 DRY_RUN=false
@@ -100,7 +100,7 @@ validate_source() {
 }
 
 clone_target() {
-  [[ "$REPO_REF" =~ ^[0-9]+(\.[0-9]+){1,3}$ ]] || fail "仅允许经过审核的发布标签（例如 1.4.5）。"
+  [[ "$REPO_REF" =~ ^[0-9]+(\.[0-9]+){1,3}$ ]] || fail "仅允许经过审核的发布标签（例如 1.4.6）。"
   [[ ! -e "$TARGET_DIR" ]] || fail "新版目录已存在：$TARGET_DIR；为避免覆盖未知文件，已停止迁移。"
   mkdir -p "$(dirname "$TARGET_DIR")"
   info "下载已审核的新版发布版本：$REPO_REF"
@@ -202,7 +202,7 @@ main() {
   printf '新版目录：%s\n' "$TARGET_DIR"
   printf '原目录仍保留：%s\n' "$SOURCE_DIR"
   printf '若原版仍使用 admin_user/admin_user，安全升级后请从 %s/.env 读取新的初始密码。\n' "$TARGET_DIR"
-  printf '日后更新：curl -fsSL https://github.com/kfcv301-maker/ix/releases/download/1.4.5/panel_install.sh | sudo bash -s -- update\n'
+  printf '日后更新：curl -fsSL https://github.com/kfcv301-maker/ix/releases/download/1.4.6/panel_install.sh | sudo bash -s -- update\n'
 }
 
 main

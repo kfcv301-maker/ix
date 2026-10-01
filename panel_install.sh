@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 
 REPO_URL="${REPO_URL:-https://github.com/kfcv301-maker/ix.git}"
-REPO_REF="${REPO_REF:-1.4.5}"
+REPO_REF="${REPO_REF:-1.4.6}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/flux-panel-enhanced}"
 FRONTEND_PORT="${FRONTEND_PORT:-6366}"
 BACKEND_PORT="${BACKEND_PORT:-6365}"
@@ -30,7 +30,7 @@ Lunaris Relay 管理脚本
   FRONTEND_PORT=6366 BACKEND_PORT=6365
   FRONTEND_BIND_ADDRESS=127.0.0.1  # 使用现有 Nginx 时保持仅本机监听；直连时设为 0.0.0.0
   BACKEND_BIND_ADDRESS=127.0.0.1   # 后端通过前端代理访问，默认只在本机监听
-  REPO_URL=https://github.com/kfcv301-maker/ix.git REPO_REF=1.4.5
+  REPO_URL=https://github.com/kfcv301-maker/ix.git REPO_REF=1.4.6
 EOF
 }
 
@@ -71,7 +71,7 @@ ensure_prerequisites() {
 }
 
 sync_source() {
-  [[ "$REPO_REF" =~ ^[0-9]+(\.[0-9]+){1,3}$ ]] || fail "仅允许经过审核的发布标签（例如 1.4.5）。"
+  [[ "$REPO_REF" =~ ^[0-9]+(\.[0-9]+){1,3}$ ]] || fail "仅允许经过审核的发布标签（例如 1.4.6）。"
   mkdir -p "$(dirname "$INSTALL_DIR")"
   if [[ -d "$INSTALL_DIR/.git" ]]; then
     info "更新已有源码：$INSTALL_DIR"
