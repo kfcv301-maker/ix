@@ -2,6 +2,7 @@ package com.admin.config;
 
 
 import com.admin.common.utils.IpUtils;
+import com.admin.common.dto.RealtimeNodeDto;
 import com.admin.entity.User;
 import com.admin.entity.Node;
 import com.admin.mapper.UserMapper;
@@ -25,6 +26,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 
 @Configuration
@@ -88,15 +90,22 @@ public class WebSocketInterceptor extends HttpSessionHandshakeInterceptor {
             // asks for detail; old clients keep the former full-metric behavior.
             attributes.put("monitorMetrics", "summary".equalsIgnoreCase(metrics) ? "summary" : "detail");
 
-            // Do the authorization lookup during the authenticated handshake. The
-            // WebSocket handler then filters every node status and metric event
-            // without trusting the browser to hide data it should not receive.
+            // Resolve access during the authenticated handshake. A dashboard
+            // sees assigned tunnel nodes, while detailed monitoring remains
+            // limited to nodes created by the user.
             if (!Objects.equals(roleId, 0)) {
-                List<Long> nodeIds = userMapper.getAccessibleNodeIds(userId);
+                List<Long> nodeIds = "summary".equalsIgnoreCase(metrics)
+                        ? userMapper.getRealtimeNodes(userId, System.currentTimeMillis()).stream()
+                                .map(RealtimeNodeDto::getId).collect(Collectors.toList())
+                        : userMapper.getAccessibleNodeIds(userId);
                 Set<Long> allowedNodeIds = nodeIds == null
                         ? Collections.emptySet()
                         : Collections.unmodifiableSet(new HashSet<>(nodeIds));
                 attributes.put("allowedNodeIds", allowedNodeIds);
+                if ("summary".equalsIgnoreCase(metrics)) {
+                    Long accessExpiresAt = userMapper.getNextRealtimeGrantExpiry(userId, System.currentTimeMillis());
+                    if (accessExpiresAt != null) attributes.put("monitorAccessExpiresAt", accessExpiresAt);
+                }
             }
         }
         attributes.put("type", type);

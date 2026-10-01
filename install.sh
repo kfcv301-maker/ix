@@ -2,7 +2,7 @@
 # Lunaris Relay 节点 Agent 安装脚本。
 set -Eeuo pipefail
 
-AGENT_RELEASE="${AGENT_RELEASE:-1.4.5}"
+AGENT_RELEASE="${AGENT_RELEASE:-1.4.6}"
 [[ "$AGENT_RELEASE" =~ ^[0-9]+(\.[0-9]+){1,3}$ ]] || { printf '无效的 Agent 发布版本：%s\n' "$AGENT_RELEASE" >&2; exit 1; }
 AGENT_RELEASE_BASE="${AGENT_RELEASE_BASE:-https://github.com/kfcv301-maker/ix/releases/download/${AGENT_RELEASE}}"
 INSTALL_DIR="${INSTALL_DIR:-/etc/flux-panel-agent}"
@@ -59,8 +59,8 @@ Lunaris Relay 节点 Agent 安装脚本
   install.sh --uninstall
 
 可选环境变量：
-  AGENT_RELEASE=1.4.5
-  AGENT_RELEASE_BASE=https://github.com/kfcv301-maker/ix/releases/download/1.4.5
+  AGENT_RELEASE=1.4.6
+  AGENT_RELEASE_BASE=https://github.com/kfcv301-maker/ix/releases/download/1.4.6
   INSTALL_DIR=/etc/flux-panel-agent
 EOF
 }

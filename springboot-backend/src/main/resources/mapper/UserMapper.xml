@@ -47,9 +47,45 @@
         ORDER BY f.created_time DESC
     </select>
 
-    <!-- 普通用户只能查看本人创建的节点；隧道授权不授予共享节点的监控数据。 -->
+    <!-- 节点管理及详细监控仍只允许查看本人创建的节点。 -->
     <select id="getAccessibleNodeIds" resultType="java.lang.Long">
         SELECT id FROM node WHERE owner_user_id = #{userId}
+    </select>
+
+    <!-- 实时流量看板只返回节点名称；启用且未到期的隧道授权可查看对应节点的摘要流量。 -->
+    <select id="getRealtimeNodes" resultType="com.admin.common.dto.RealtimeNodeDto">
+        SELECT n.id, n.name
+        FROM node n
+        WHERE n.owner_user_id = #{userId}
+           OR EXISTS (
+               SELECT 1
+               FROM user_tunnel ut
+               INNER JOIN tunnel t ON t.id = ut.tunnel_id
+               LEFT JOIN tunnel_entry_node ten ON ten.tunnel_id = t.id
+                   AND (ten.status IS NULL OR ten.status = 1)
+               WHERE ut.user_id = #{userId}
+                 AND ut.status = 1
+                 AND (ut.exp_time IS NULL OR ut.exp_time > #{now})
+                 AND t.status = 1
+                 AND (t.owner_user_id IS NULL OR t.owner_user_id = #{userId})
+                 AND (n.id = t.in_node_id OR n.id = t.out_node_id OR n.id = ten.node_id)
+           )
+        ORDER BY n.id
+    </select>
+
+    <select id="getAllRealtimeNodes" resultType="com.admin.common.dto.RealtimeNodeDto">
+        SELECT id, name FROM node ORDER BY id
+    </select>
+
+    <select id="getNextRealtimeGrantExpiry" resultType="java.lang.Long">
+        SELECT MIN(ut.exp_time)
+        FROM user_tunnel ut
+        INNER JOIN tunnel t ON t.id = ut.tunnel_id
+        WHERE ut.user_id = #{userId}
+          AND ut.status = 1
+          AND ut.exp_time > #{now}
+          AND t.status = 1
+          AND (t.owner_user_id IS NULL OR t.owner_user_id = #{userId})
     </select>
 
     <!-- 管理员查询所有隧道（流量和转发设置为99999） -->
