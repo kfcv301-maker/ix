@@ -107,10 +107,10 @@ func (s *defaultService) policyConnection(c net.Conn) (net.Conn, bool) {
 		if p.TLS == TLSUnrestricted {
 			return c, true
 		}
-		return &protocolConn{Conn: c, tlsPolicy: p.TLS}, true
+		return &protocolConn{Conn: c, tlsPolicy: p.TLS, loadPolicy: s.userPolicy.Load}, true
 	}
 	if flags := protocolBlocks.Load(); flags != 0 {
-		return &protocolConn{Conn: c, flags: flags}, true
+		return &protocolConn{Conn: c, flags: flags, loadPolicy: s.userPolicy.Load}, true
 	}
 	return c, true
 }
@@ -120,11 +120,25 @@ func (s *defaultService) policyConnection(c net.Conn) (net.Conn, bool) {
 // No TLS termination, certificate checks, or buffering of application payloads.
 type protocolConn struct {
 	net.Conn
-	tlsPolicy string
-	flags     uint32
-	detected  bool
-	prefix    []byte
-	err       error
+	tlsPolicy  string
+	flags      uint32
+	detected   bool
+	prefix     []byte
+	err        error
+	loadPolicy func() *UserProtocolPolicy
+}
+
+func (c *protocolConn) refreshPolicy() {
+	if c.loadPolicy == nil {
+		return
+	}
+	if p := c.loadPolicy(); p != nil {
+		c.tlsPolicy = p.TLS
+		c.flags = 0
+	} else {
+		c.tlsPolicy = ""
+		c.flags = protocolBlocks.Load()
+	}
 }
 
 func (c *protocolConn) Read(b []byte) (int, error) {
@@ -133,6 +147,10 @@ func (c *protocolConn) Read(b []byte) (int, error) {
 	}
 	if !c.detected {
 		c.detected = true
+		c.refreshPolicy()
+		if c.tlsPolicy != TLSOnly && c.tlsPolicy != TLSDeny && c.flags == 0 {
+			return c.Conn.Read(b)
+		}
 		if c.tlsPolicy == TLSOnly {
 			c.Conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 			defer c.Conn.SetReadDeadline(time.Time{})
@@ -163,6 +181,9 @@ func (c *protocolConn) Read(b []byte) (int, error) {
 			}
 		}
 		isTLS := n >= 6 && detectTLS(header[:n]) && (header[3] != 0 || header[4] != 0) && header[5] == 1
+		// A relaxation can arrive while an idle connection waits for its first
+		// bytes. Evaluate the current policy before rejecting the retained data.
+		c.refreshPolicy()
 		blocked := c.tlsPolicy == TLSOnly && !isTLS || c.tlsPolicy == TLSDeny && isTLS ||
 			c.flags&blockTLS != 0 && isTLS || c.flags&blockHTTP != 0 && detectHTTP(header[:n]) ||
 			c.flags&blockSOCKS != 0 && detectSOCKS(header[:n])

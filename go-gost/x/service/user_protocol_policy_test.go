@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -187,4 +188,57 @@ func TestRepeatedPolicySyncPreservesConnections(t *testing.T) {
 	p.AllowUDP = false
 	s.SetUserProtocolPolicy(p)
 	assertEcho(t, c, []byte("UDP ban does not interrupt TCP"))
+}
+
+func TestRelaxingPolicyAllowsAnIdleExistingConnection(t *testing.T) {
+	p := UserProtocolPolicy{TLS: TLSOnly, AllowUDP: true, Revision: 1}
+	s := &defaultService{}
+	s.userPolicy.Store(&p)
+	a, b := net.Pipe()
+	defer a.Close()
+	defer b.Close()
+	signal := &policyReadSignalConn{Conn: a, started: make(chan struct{})}
+	c, allowed := s.policyConnection(signal)
+	if !allowed {
+		t.Fatal("rejected TCP before handshake")
+	}
+	done := make(chan error, 1)
+	go func() {
+		buf := make([]byte, 5)
+		_, err := io.ReadFull(c, buf)
+		if err == nil && string(buf) != "plain" {
+			err = io.ErrUnexpectedEOF
+		}
+		done <- err
+	}()
+	select {
+	case <-signal.started:
+	case <-time.After(time.Second):
+		t.Fatal("first read did not start")
+	}
+	relaxed := UserProtocolPolicy{TLS: TLSUnrestricted, AllowUDP: true, Revision: 2}
+	s.userPolicy.Store(&relaxed)
+	b.SetWriteDeadline(time.Now().Add(time.Second))
+	if _, err := b.Write([]byte("plain")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal("relaxed connection still blocked", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("relaxation did not take effect")
+	}
+}
+
+type policyReadSignalConn struct {
+	net.Conn
+	started chan struct{}
+	once    sync.Once
+}
+
+func (c *policyReadSignalConn) Read(b []byte) (int, error) {
+	c.once.Do(func() { close(c.started) })
+	return c.Conn.Read(b)
 }
