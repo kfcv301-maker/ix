@@ -1,7 +1,6 @@
 package service
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,6 +12,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-gost/core/admission"
@@ -42,22 +42,24 @@ type options struct {
 	observer       observer.Observer
 	observerPeriod time.Duration
 	logger         logger.Logger
+	userPolicy     *UserProtocolPolicy
 }
 
-var isTls = 0
-
-var isHttp = 0
-
-var isSocks = 0
-
-var needWrap = false
+var protocolBlocks atomic.Uint32
 
 // SetProtocolBlock sets protocol blocking switches and recomputes wrapper need
 func SetProtocolBlock(httpOn int, tlsOn int, socksOn int) {
-	isHttp = httpOn
-	isTls = tlsOn
-	isSocks = socksOn
-	needWrap = isTls+isSocks+isHttp > 0
+	var flags uint32
+	if httpOn == 1 {
+		flags |= blockHTTP
+	}
+	if tlsOn == 1 {
+		flags |= blockTLS
+	}
+	if socksOn == 1 {
+		flags |= blockSOCKS
+	}
+	protocolBlocks.Store(flags)
 }
 
 type Option func(opts *options)
@@ -72,7 +74,6 @@ func init() {
 	if _, err := LoadConfig("config.json"); err != nil {
 		log.Printf("protocol block config not loaded during package init: %v", err)
 	}
-	needWrap = isTls+isSocks+isHttp > 0
 }
 
 func AdmissionOption(admission admission.Admission) Option {
@@ -136,14 +137,15 @@ func LoggerOption(logger logger.Logger) Option {
 }
 
 type defaultService struct {
-	name     string
-	listener listener.Listener
-	handler  handler.Handler
-	status   *Status
-	options  options
-	connMu   sync.Mutex
-	conns    map[net.Conn]struct{}
-	closing  bool
+	name       string
+	listener   listener.Listener
+	handler    handler.Handler
+	status     *Status
+	options    options
+	connMu     sync.Mutex
+	conns      map[net.Conn]struct{}
+	closing    bool
+	userPolicy atomic.Pointer[UserProtocolPolicy]
 }
 
 func NewService(name string, ln listener.Listener, h handler.Handler, opts ...Option) service.Service {
@@ -163,6 +165,7 @@ func NewService(name string, ln listener.Listener, h handler.Handler, opts ...Op
 			stats:      options.stats,
 		},
 	}
+	s.userPolicy.Store(options.userPolicy)
 	s.setState(StateRunning)
 
 	s.execCmds("pre-up", s.options.preUp)
@@ -300,8 +303,10 @@ func (s *defaultService) Serve() error {
 				}()
 			}
 
-			if needWrap {
-				conn = wrapConnPDetection(conn)
+			var allowed bool
+			conn, allowed = s.policyConnection(conn)
+			if !allowed {
+				return
 			}
 
 			if err := s.handler.Handle(ctx, conn); err != nil {
@@ -560,54 +565,6 @@ func (ServiceEvent) Type() observer.EventType {
 	return observer.EventStatus
 }
 
-func wrapConnPDetection(conn net.Conn) net.Conn {
-	return &detectConn{
-		Conn:   conn,
-		reader: bufio.NewReader(conn),
-	}
-}
-
-type detectConn struct {
-	net.Conn
-	reader   *bufio.Reader
-	detected bool
-}
-
-func (c *detectConn) Read(b []byte) (int, error) {
-	n, err := c.reader.Read(b)
-	if n > 0 && !c.detected {
-		c.detected = true
-		if detectProtocol(b[:n], c.Conn) {
-			return 0, fmt.Errorf("connection blocked")
-		}
-	}
-	return n, err
-}
-
-func detectProtocol(data []byte, conn net.Conn) (blocked bool) {
-	// 如果是 UDP，则不检测，直接放行
-	if conn.RemoteAddr().Network() == "udp" || conn.RemoteAddr().Network() == "udp4" || conn.RemoteAddr().Network() == "udp6" {
-		return false
-	}
-
-	if isHttp == 1 && detectHTTP(data) {
-		conn.Close()
-		return true
-	}
-
-	if isTls == 1 && detectTLS(data) {
-		conn.Close()
-		return true
-	}
-
-	if isSocks == 1 && detectSOCKS(data) {
-		conn.Close()
-		return true
-	}
-
-	return false
-}
-
 func detectHTTP(data []byte) bool {
 	if len(data) < 3 {
 		return false
@@ -704,9 +661,7 @@ func LoadConfig(configPath string) (string, error) {
 		return "", fmt.Errorf("解析配置文件失败: %v", err)
 	}
 
-	isTls = config.Tls
-	isSocks = config.Socks
-	isHttp = config.Http
+	SetProtocolBlock(config.Http, config.Tls, config.Socks)
 
 	return "", nil
 

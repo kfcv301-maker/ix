@@ -6,6 +6,7 @@ export type IconSvgProps = SVGProps<SVGSVGElement> & {
 
 // 用户管理相关类型
 export interface User {
+  roleId?: number;
   id: number;
   name?: string;
   user: string;
@@ -33,6 +34,10 @@ export interface UserForm {
 }
 
 export interface UserTunnel {
+  tlsPolicy?: 'UNRESTRICTED' | 'TLS_ONLY' | 'TLS_DENY';
+  allowUdp?: boolean;
+  protocolSyncPending?: boolean;
+  protocolSyncError?: string | null;
   id: number;
   userId: number;
   tunnelId: number;
@@ -54,6 +59,8 @@ export interface UserTunnel {
 }
 
 export interface UserTunnelForm {
+  tlsPolicy: 'UNRESTRICTED' | 'TLS_ONLY' | 'TLS_DENY';
+  allowUdp: boolean;
   tunnelId: number | null;
   flow: number;
   num: number;

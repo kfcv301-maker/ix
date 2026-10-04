@@ -20,6 +20,12 @@ import com.baomidou.mybatisplus.annotation.TableId;
 @Data
 @EqualsAndHashCode(callSuper = false)
 public class UserTunnel implements Serializable {
+    private String tlsPolicy;
+    private Boolean allowUdp;
+    private Boolean protocolSyncPending;
+    private String protocolSyncGeneration;
+    private String protocolSyncError;
+    private Long protocolPolicyRevision;
 
     private static final long serialVersionUID = 1L;
 

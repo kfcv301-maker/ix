@@ -6,6 +6,8 @@ import jakarta.validation.constraints.Min;
 
 @Data
 public class UserTunnelDto {
+    private String tlsPolicy;
+    private Boolean allowUdp;
     
     @NotNull(message = "用户ID不能为空")
     private Integer userId;

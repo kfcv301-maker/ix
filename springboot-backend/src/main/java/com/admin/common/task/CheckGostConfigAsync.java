@@ -25,6 +25,8 @@ import java.util.concurrent.ConcurrentHashMap;
 @Slf4j
 @Service
 public class CheckGostConfigAsync {
+    @Resource private com.admin.common.service.UserProtocolPolicyService userProtocolPolicyService;
+    @Resource @Lazy private UserProtocolPolicySyncService userProtocolPolicySyncService;
     @Resource
     private com.admin.common.service.UserTunnelAliasService userTunnelAliasService;
 
@@ -96,6 +98,7 @@ public class CheckGostConfigAsync {
                 // 重装节点会让 GOST 侧的运行时服务消失，但数据库中的转发记录仍然存在。
                 // 配置上报发生在 WebSocket 建立之后，正是无人工编辑即可恢复缺失服务的安全时机。
                 syncMissingForwards(gostConfig, node);
+                userProtocolPolicySyncService.syncInventory(node.getId(), gostConfig.getServices());
             }
             // Run durable quota/expiry pauses after the inventory has been
             // reconciled. This avoids a reconnect briefly restoring a service
@@ -477,7 +480,8 @@ public class CheckGostConfigAsync {
         if (mainServiceMissing) {
             String interfaceName = Objects.equals(tunnel.getType(), 2) ? null : forward.getInterfaceName();
             GostDto result = GostUtil.AddService(node.getId(), serviceName, forward.getInPort(), limiter,
-                    forward.getRemoteAddr(), tunnel.getType(), tunnel, forward.getStrategy(), interfaceName);
+                    forward.getRemoteAddr(), tunnel.getType(), tunnel, forward.getStrategy(), interfaceName,
+                    userProtocolPolicyService.forForward(forward));
             logRestoreResult("主服务", serviceName, node.getId(), result);
         }
     }

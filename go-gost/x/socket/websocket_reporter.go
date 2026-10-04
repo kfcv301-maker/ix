@@ -728,6 +728,12 @@ func (w *WebSocketReporter) routeCommand(cmd CommandMessage) {
 	case "SetProtocol":
 		err = w.handleSetProtocol(cmd.Data)
 		response.Type = "SetProtocolResponse"
+	case "UserProtocolPolicyCapabilities":
+		response.Type = "UserProtocolPolicyCapabilitiesResponse"
+		response.Data = map[string]any{"userProtocolPolicy": 1}
+	case "SetUserProtocolPolicy":
+		err = w.handleSetUserProtocolPolicy(cmd.Data)
+		response.Type = "SetUserProtocolPolicyResponse"
 
 	default:
 		err = fmt.Errorf("未知命令类型: %s", cmd.Type)
@@ -735,12 +741,13 @@ func (w *WebSocketReporter) routeCommand(cmd CommandMessage) {
 	}
 
 	// 发送响应
+	if err == nil && cmd.Type != "UserProtocolPolicyCapabilities" {
+		err = saveConfig()
+	}
 	if err != nil {
-		saveConfig()
 		response.Success = false
 		response.Message = err.Error()
 	} else {
-		saveConfig()
 		response.Success = true
 		response.Message = "OK"
 	}

@@ -11,6 +11,24 @@ import org.aspectj.apache.bcel.generic.RET;
 import java.util.Objects;
 
 public class GostUtil {
+    public static GostDto SetUserProtocolPolicy(Long nodeId, java.util.Collection<String> names, JSONObject policy) {
+        JSONObject data = new JSONObject();
+        data.put("services", names);
+        data.put("policy", policy);
+        return WebSocketServer.send_msg(nodeId, data, "SetUserProtocolPolicy");
+    }
+
+    private static GostDto checkPolicySupport(Long nodeId, JSONObject policy) {
+        if (!com.admin.common.service.UserProtocolPolicyService.restricted(policy)) return null;
+        GostDto result = WebSocketServer.send_msg(nodeId, new JSONObject(), "UserProtocolPolicyCapabilities");
+        if (result != null && "OK".equals(result.getMsg()) && result.getData() != null) {
+            JSONObject capabilities = JSONObject.parseObject(JSONObject.toJSONString(result.getData()));
+            if (capabilities.getIntValue("userProtocolPolicy") >= 1) return null;
+        }
+        GostDto denied = new GostDto();
+        denied.setMsg("入口节点未确认支持用户协议限制，请先升级节点后端或检查节点连接");
+        return denied;
+    }
 
     /** Endpoint syntax shared by listeners and relay chains. */
     public static String formatAddress(String host, Integer port) {
@@ -43,23 +61,44 @@ public class GostUtil {
     }
 
     public static GostDto AddService(Long node_id, String name, Integer in_port, Integer limiter, String remoteAddr, Integer fow_type, Tunnel tunnel, String strategy, String interfaceName) {
+        return AddService(node_id, name, in_port, limiter, remoteAddr, fow_type, tunnel, strategy, interfaceName, null);
+    }
+
+    public static GostDto AddService(Long node_id, String name, Integer in_port, Integer limiter, String remoteAddr, Integer fow_type, Tunnel tunnel, String strategy, String interfaceName, JSONObject policy) {
+        GostDto unsupported = checkPolicySupport(node_id, policy);
+        if (unsupported != null) return unsupported;
         JSONArray services = new JSONArray();
         String[] protocols = {"tcp", "udp"};
         for (String protocol : protocols) {
             JSONObject service = createServiceConfig(name, in_port, limiter, remoteAddr, protocol, fow_type, tunnel, strategy, interfaceName);
+            applyUserPolicy(service, policy);
             services.add(service);
         }
         return WebSocketServer.send_msg(node_id, services, "AddService");
     }
 
     public static GostDto UpdateService(Long node_id, String name, Integer in_port, Integer limiter, String remoteAddr, Integer fow_type, Tunnel tunnel, String strategy, String interfaceName) {
+        return UpdateService(node_id, name, in_port, limiter, remoteAddr, fow_type, tunnel, strategy, interfaceName, null);
+    }
+
+    public static GostDto UpdateService(Long node_id, String name, Integer in_port, Integer limiter, String remoteAddr, Integer fow_type, Tunnel tunnel, String strategy, String interfaceName, JSONObject policy) {
+        GostDto unsupported = checkPolicySupport(node_id, policy);
+        if (unsupported != null) return unsupported;
         JSONArray services = new JSONArray();
         String[] protocols = {"tcp", "udp"};
         for (String protocol : protocols) {
             JSONObject service = createServiceConfig(name, in_port, limiter, remoteAddr, protocol, fow_type, tunnel, strategy, interfaceName);
+            applyUserPolicy(service, policy);
             services.add(service);
         }
         return WebSocketServer.send_msg(node_id, services, "UpdateService");
+    }
+
+    private static void applyUserPolicy(JSONObject service, JSONObject policy) {
+        if (policy == null) return;
+        JSONObject metadata = service.getJSONObject("metadata");
+        if (metadata == null) { metadata = new JSONObject(); service.put("metadata", metadata); }
+        metadata.put("userProtocolPolicy", policy);
     }
 
     public static GostDto DeleteService(Long node_id, String name) {

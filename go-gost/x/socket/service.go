@@ -10,6 +10,7 @@ import (
 	"github.com/go-gost/x/config"
 	parser "github.com/go-gost/x/config/parsing/service"
 	"github.com/go-gost/x/registry"
+	xservice "github.com/go-gost/x/service"
 )
 
 func createServices(req createServicesRequest) error {
@@ -86,8 +87,14 @@ func updateServices(req updateServicesRequest) error {
 		return errors.New("services list cannot be empty")
 	}
 
-	// 第一阶段：验证所有服务存在
-	for _, serviceConfig := range req.Data {
+	// Validate the complete batch, including policies, before closing services.
+	current := make(map[string]*config.ServiceConfig)
+	for _, cfg := range config.Global().Services {
+		if cfg != nil {
+			current[cfg.Name] = cfg
+		}
+	}
+	for i, serviceConfig := range req.Data {
 		name := strings.TrimSpace(serviceConfig.Name)
 		if name == "" {
 			return errors.New("service name is required")
@@ -98,6 +105,10 @@ func updateServices(req updateServicesRequest) error {
 		if old == nil {
 			return errors.New("service " + name + " not found")
 		}
+		if err := preserveServicePolicy(&serviceConfig, current[name]); err != nil {
+			return err
+		}
+		req.Data[i] = serviceConfig
 	}
 
 	// 第二阶段：按照原来的updateService逻辑，逐个更新服务
@@ -143,6 +154,33 @@ func updateServices(req updateServicesRequest) error {
 		return nil
 	})
 
+	return nil
+}
+
+func preserveServicePolicy(incoming, current *config.ServiceConfig) error {
+	p, err := xservice.ParseUserProtocolPolicy(incoming.Metadata)
+	if err != nil {
+		return err
+	}
+	if current == nil {
+		return nil
+	}
+	old, err := xservice.ParseUserProtocolPolicy(current.Metadata)
+	if err != nil || old == nil {
+		return err
+	}
+	if p == nil {
+		md := make(map[string]any, len(incoming.Metadata)+1)
+		for k, v := range incoming.Metadata {
+			md[k] = v
+		}
+		md[xservice.UserPolicyMetadataKey] = *old
+		incoming.Metadata = md
+		return nil
+	}
+	if !p.Administrator && p.Revision < old.Revision {
+		return fmt.Errorf("stale user protocol policy revision for %s", incoming.Name)
+	}
 	return nil
 }
 

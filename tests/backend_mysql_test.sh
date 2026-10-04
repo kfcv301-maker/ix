@@ -39,6 +39,11 @@ INSERT INTO user (id,user,pwd,token_version,role_id,exp_time,flow,in_flow,out_fl
 VALUES (1,'admin_user','3c85cdebade1c51cf64ca9f3c09d182d',0,0,4102444800000,99999,0,0,1,99999,1,1,1);
 INSERT INTO user_tunnel (id,user_id,tunnel_id,num,flow,in_flow,out_flow,flow_reset_time,exp_time,status)
 VALUES (8,3,42,1,10,100,200,1,4102444800000,1), (9,3,42,2,20,300,400,1,4102444800000,1);
+CREATE TABLE user_tunnel_duplicate_archive LIKE user_tunnel;
+ALTER TABLE user_tunnel DROP COLUMN tls_policy, DROP COLUMN allow_udp, DROP COLUMN protocol_sync_pending,
+  DROP COLUMN protocol_sync_generation, DROP COLUMN protocol_sync_error, DROP COLUMN protocol_policy_revision;
+ALTER TABLE user_tunnel_duplicate_archive DROP COLUMN tls_policy, DROP COLUMN allow_udp, DROP COLUMN protocol_sync_pending,
+  DROP COLUMN protocol_sync_generation, DROP COLUMN protocol_sync_error, DROP COLUMN protocol_policy_revision;
 SQL
 docker run -d --name "$BACKEND_CONTAINER" --network "$NETWORK" \
   -v "$CONFIG_VOLUME:/app/config" -e DB_HOST=mysql -e DB_NAME=flux_panel \
@@ -55,6 +60,7 @@ done
 [[ "$(sql -e 'SELECT CONCAT(id, ":", in_flow, ":", out_flow, ":", flow) FROM user_tunnel WHERE user_id=3 AND tunnel_id=42')" == '9:400:600:20' ]]
 [[ "$(sql -e 'SELECT canonical_id FROM user_tunnel_alias WHERE alias_id=8 AND user_id=3 AND tunnel_id=42')" == '9' ]]
 [[ "$(sql -e 'SELECT COUNT(*) FROM user_tunnel_duplicate_archive WHERE id IN (8,9)')" == '2' ]]
+[[ "$(sql -e 'SELECT CONCAT(tls_policy, ":", allow_udp, ":", protocol_sync_pending, ":", protocol_policy_revision) FROM user_tunnel WHERE id=9')" == 'UNRESTRICTED:1:0:0' ]]
 [[ "$(sql -e 'SELECT user FROM user WHERE id=1')" == 'admin' ]]
 [[ "$(sql -e 'SELECT pwd LIKE "{bcrypt-sha256}$2%" FROM user WHERE id=1')" == '1' ]]
 docker exec "$BACKEND_CONTAINER" sh -c 'test "$(stat -c %a /app/config/initial-admin-credentials)" = 600'
