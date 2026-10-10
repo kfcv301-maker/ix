@@ -17,6 +17,8 @@ import java.util.List;
  * @since 2025-06-03
  */
 public interface UserMapper extends BaseMapper<User> {
+    @org.apache.ibatis.annotations.Select("SELECT * FROM `user` WHERE id = #{id} FOR UPDATE")
+    User lockById(@Param("id") Long id);
     
     /**
      * 查询用户隧道权限详情

@@ -80,7 +80,9 @@ public class ForwardPauseTaskService {
         forwardPauseTaskMapper.insertIfAbsent(forwardId, now);
         ForwardPauseTask task = forwardPauseTaskMapper.selectOne(new QueryWrapper<ForwardPauseTask>()
                 .eq("forward_id", forwardId).eq("status", 1));
-        if (task != null) {
+        // Inside a transaction, leave the row pending for the durable dispatcher;
+        // an asynchronous worker cannot see it until the caller commits.
+        if (task != null && !org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive()) {
             dispatch(task.getId());
         }
     }

@@ -48,7 +48,7 @@ public class VpsSshServiceImpl implements VpsSshService {
     @jakarta.annotation.Resource
     private VpsSshTargetPolicy vpsSshTargetPolicy;
 
-    @Value("${vps.backend-install.release:1.4.9}")
+    @Value("${vps.backend-install.release:1.4.10}")
     private String backendInstallRelease;
 
     @Override

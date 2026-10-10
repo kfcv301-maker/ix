@@ -87,7 +87,7 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
     @Value("${jwt-secret}")
     private String jwtSecret;
 
-    @Value("${agent.install.release:1.4.9}")
+    @Value("${agent.install.release:1.4.10}")
     private String agentInstallRelease;
 
     private volatile AESCrypto ddnsCrypto;

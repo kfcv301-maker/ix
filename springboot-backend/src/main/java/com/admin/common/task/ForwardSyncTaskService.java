@@ -76,6 +76,9 @@ public class ForwardSyncTaskService {
     private NodeMapper nodeMapper;
 
     @Resource
+    private com.admin.mapper.UserMapper userMapper;
+
+    @Resource
     @Lazy
     private ForwardService forwardService;
 
@@ -113,6 +116,17 @@ public class ForwardSyncTaskService {
 
     public R requestDelete(Long forwardId) {
         return self.beginOperation(forwardId, OPERATION_DELETE, false);
+    }
+
+    /** Account disable and all pause intents commit together, including in-flight resumes. */
+    @Transactional
+    public void pauseAllForUser(Long userId) {
+        List<Forward> forwards = forwardService.list(new QueryWrapper<Forward>().eq("user_id", userId)
+                .in("status", ForwardStatus.ACTIVE, ForwardStatus.SYNCING, ForwardStatus.ERROR));
+        for (Forward forward : forwards) {
+            R result = self.queueSafetyPause(forward.getId());
+            if (result.getCode() != 0) throw new IllegalStateException("暂停用户转发失败：" + result.getMsg());
+        }
     }
 
     /** Durable cleanup snapshots survive the immediate removal of a node's tunnels/forwards. */
@@ -215,6 +229,11 @@ public class ForwardSyncTaskService {
         Forward forward = forwardService.getById(forwardId);
         if (forward == null) {
             return R.err("转发不存在");
+        }
+        if (OPERATION_RESUME.equals(operation)) {
+            // Serialize with account disable before accepting a new resume intent.
+            User owner = userMapper.lockById(forward.getUserId().longValue());
+            if (owner == null || !Objects.equals(owner.getStatus(), 1)) return R.err("转发所属用户已禁用");
         }
         if (Objects.equals(forward.getStatus(), ForwardStatus.DELETING)) {
             return OPERATION_DELETE.equals(operation)
@@ -604,9 +623,9 @@ public class ForwardSyncTaskService {
         if (!Objects.equals(tunnel.getStatus(), ForwardStatus.ACTIVE)) return "隧道已禁用，无法恢复服务";
         User owner = userService.getById(forward.getUserId());
         if (owner == null) return "转发归属用户不存在";
+        if (!Objects.equals(owner.getStatus(), 1)) return "转发所属用户已禁用";
         if (Objects.equals(owner.getRoleId(), 0)) return null;
         long now = System.currentTimeMillis();
-        if (!Objects.equals(owner.getStatus(), 1)) return "转发所属用户已禁用";
         if (owner.getExpTime() != null && owner.getExpTime() <= now) return "转发所属用户已到期";
         if (!hasRemainingQuota(owner.getFlow(), owner.getInFlow(), owner.getOutFlow())) return "转发所属用户流量已用完";
 

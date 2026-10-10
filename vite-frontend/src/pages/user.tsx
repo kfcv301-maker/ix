@@ -944,6 +944,7 @@ export default function UserPage() {
               <Radio value="1">正常</Radio>
               <Radio value="0">禁用</Radio>
             </RadioGroup>
+            <p className="text-small text-default-500">禁用账号会暂停该用户的全部转发；离线节点会在恢复连接后同步暂停。重新启用账号不会自动恢复转发。</p>
           </ModalBody>
           <ModalFooter>
             <Button onPress={onUserModalClose}>

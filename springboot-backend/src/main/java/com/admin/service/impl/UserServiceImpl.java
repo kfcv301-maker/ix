@@ -129,6 +129,10 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     @Lazy
     private ForwardPauseTaskService forwardPauseTaskService;
 
+    @Resource
+    @Lazy
+    private com.admin.common.task.ForwardSyncTaskService forwardSyncTaskService;
+
     // ========== 公共接口实现 ==========
 
     /**
@@ -249,13 +253,14 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
      * @return 更新结果响应
      */
     @Override
+    @org.springframework.transaction.annotation.Transactional(rollbackFor = Exception.class)
     public R updateUser(UserUpdateDto userUpdateDto) {
         if (StrUtil.isNotBlank(userUpdateDto.getPwd())) {
             R passwordValidation = validateNewPassword(userUpdateDto.getPwd(), userUpdateDto.getUser());
             if (passwordValidation.getCode() != 0) return passwordValidation;
         }
         // 1. 验证用户是否存在
-        User existingUser = this.getById(userUpdateDto.getId());
+        User existingUser = baseMapper.lockById(userUpdateDto.getId());
         if (existingUser == null) {
             return R.err(ERROR_USER_NOT_FOUND);
         }
@@ -282,7 +287,11 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             }
             // A manual disable, expiry reduction, or quota reduction needs the
             // same durable multi-node pause path as a flow-triggered limit.
-            forwardPauseTaskService.enqueueForCurrentLimits(existingUser.getId(), null);
+            if (Objects.equals(userUpdateDto.getStatus(), 0)) {
+                forwardSyncTaskService.pauseAllForUser(existingUser.getId());
+            } else {
+                forwardPauseTaskService.enqueueForCurrentLimits(existingUser.getId(), null);
+            }
             // 5. 处理到期时间延时任务
             return R.ok(SUCCESS_UPDATE_MSG);
         } else {
@@ -568,6 +577,17 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     }
 
     private void revokeLiveSessions(Long userId) {
+        if (org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive()) {
+            org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
+                    new org.springframework.transaction.support.TransactionSynchronization() {
+                        @Override public void afterCommit() { closeLiveSessions(userId); }
+                    });
+            return;
+        }
+        closeLiveSessions(userId);
+    }
+
+    private void closeLiveSessions(Long userId) {
         WebSocketServer.closeUserSessions(userId);
         vpsTerminalWebSocketHandler.closeUserSessions(userId);
         vpsTerminalTicketService.revokeUserTickets(userId);

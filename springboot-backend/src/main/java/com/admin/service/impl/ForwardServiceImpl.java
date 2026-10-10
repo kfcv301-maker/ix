@@ -161,6 +161,7 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
                 return R.err("节点或隧道已删除，正在清理刚创建的节点配置");
             }
             forwardPortReservationService.commit(reservation);
+            forwardCreationService.enforceOwnerStatus(forward);
             return R.ok();
         }
         return R.err(lastReservationError == null ? "端口已被并发占用，请重试" : lastReservationError);
@@ -280,7 +281,7 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
         }
         updatedForward.setStatus(1);
         // 9. 保存更新
-        boolean result = this.updateById(updatedForward);
+        boolean result = forwardCreationService.saveUpdated(updatedForward);
         if (result) {
             forwardPortReservationService.commit(reservation);
         } else {
