@@ -70,7 +70,7 @@ cors:
 
 agent:
   install:
-    release: ${AGENT_INSTALL_RELEASE:1.4.6}
+    release: ${AGENT_INSTALL_RELEASE:1.4.7}
 
 vps:
   credential-key: ${VPS_CREDENTIAL_KEY:}
