@@ -484,6 +484,18 @@ public class WebSocketServer extends TextWebSocketHandler {
         return !"summary".equalsIgnoreCase(String.valueOf(session.getAttributes().get("monitorMetrics")));
     }
 
+    /** Retired nodes lose their active session after best-effort cleanup. */
+    public static void closeNodeSession(Long nodeId) {
+        WebSocketSession session = nodeSessions.remove(nodeId);
+        if (session == null) return;
+        cleanupSession(session);
+        try {
+            if (session.isOpen()) session.close(CloseStatus.POLICY_VIOLATION);
+        } catch (Exception exception) {
+            log.debug("关闭已删除节点 {} 的会话失败", nodeId);
+        }
+    }
+
     /** Immediately close dashboard sockets for an account whose JWT was revoked. */
     public static void closeUserSessions(Long userId) {
         if (userId == null) return;

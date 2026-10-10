@@ -85,6 +85,9 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
     @Resource
     private VpsHostService vpsHostService;
 
+    @Resource
+    private com.admin.common.service.ForwardCreationService forwardCreationService;
+
 
     @Override
     public R createForward(ForwardDto forwardDto) {
@@ -122,8 +125,8 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
             }
 
             Forward forward = createForwardEntity(forwardDto, currentUser, portAllocation);
-            if (!this.save(forward)) {
-                return R.err("端口转发创建失败");
+            if (!forwardCreationService.save(forward)) {
+                return R.err("端口转发创建失败，隧道可能已被删除或禁用");
             }
 
             ForwardPortReservationService.ReservationLease reservation =
@@ -152,6 +155,11 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
                 return gostResult;
             }
 
+            if (this.getById(forward.getId()) == null) {
+                // Deletion may have committed while the create command was in flight.
+                forwardSyncTaskService.prepareCascadeDelete(forward, tunnel);
+                return R.err("节点或隧道已删除，正在清理刚创建的节点配置");
+            }
             forwardPortReservationService.commit(reservation);
             return R.ok();
         }

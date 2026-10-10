@@ -708,7 +708,7 @@ export default function NodePage() {
     try {
       const res = await deleteNode(nodeToDelete.id);
       if (res.code === 0) {
-        toast.success('删除成功');
+        toast.success(typeof res.data === 'string' ? res.data : '节点及关联隧道、转发已删除');
         setNodeList(prev => prev.filter(n => n.id !== nodeToDelete.id));
         setDeleteModalOpen(false);
         setNodeToDelete(null);
@@ -1614,7 +1614,8 @@ export default function NodePage() {
                 </ModalHeader>
                 <ModalBody>
                   <p>确定要删除节点 <strong>"{nodeToDelete?.name}"</strong> 吗？</p>
-                  <p className="text-small text-default-500">此操作不可恢复，请谨慎操作。</p>
+                  <p className="text-small text-danger">该节点关联的全部隧道、隧道内的转发规则及用户授权将一起删除，包括使用其他入口节点的同一隧道。</p>
+                  <p className="text-small text-default-500">节点离线也可以删除。其他节点上的残留配置会在连接可用时清理。此操作不可恢复。</p>
                 </ModalBody>
                 <ModalFooter>
                   <Button variant="light" onPress={onClose}>

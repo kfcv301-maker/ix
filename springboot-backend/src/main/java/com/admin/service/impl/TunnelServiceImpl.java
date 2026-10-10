@@ -122,6 +122,9 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
     @Resource
     private TunnelForwardDiagnosisTaskService tunnelForwardDiagnosisTaskService;
 
+    @Resource
+    private com.admin.mapper.NodeDeletionMapper nodeDeletionMapper;
+
     // ========== 公共接口实现 ==========
 
     /**
@@ -137,6 +140,13 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
         List<Long> entryNodeIds = normalizeEntryNodeIds(tunnelDto);
         if (entryNodeIds.isEmpty()) {
             return R.err("请至少选择一个入口节点");
+        }
+        java.util.Set<Long> lockedNodes = new java.util.TreeSet<>(entryNodeIds);
+        if (Objects.equals(tunnelDto.getType(), TUNNEL_TYPE_TUNNEL_FORWARD) && tunnelDto.getOutNodeId() != null) {
+            lockedNodes.add(tunnelDto.getOutNodeId());
+        }
+        for (Long nodeId : lockedNodes) {
+            if (nodeDeletionMapper.lockNode(nodeId) == null) return R.err("节点不存在或已删除");
         }
         if (!isAdministrator()) {
             for (Long nodeId : entryNodeIds) {

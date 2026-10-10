@@ -13,7 +13,6 @@ import com.admin.common.utils.JwtUtil;
 import com.admin.entity.Node;
 import com.admin.entity.Tunnel;
 import com.admin.mapper.NodeMapper;
-import com.admin.mapper.TunnelMapper;
 import com.admin.mapper.TunnelEntryNodeMapper;
 import com.admin.mapper.UserMapper;
 import com.admin.service.NodeService;
@@ -54,17 +53,12 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
     /** 成功响应消息 */
     private static final String SUCCESS_CREATE_MSG = "节点创建成功";
     private static final String SUCCESS_UPDATE_MSG = "节点更新成功";
-    private static final String SUCCESS_DELETE_MSG = "节点删除成功";
     
     /** 错误响应消息 */
     private static final String ERROR_CREATE_MSG = "节点创建失败";
     private static final String ERROR_UPDATE_MSG = "节点更新失败";
-    private static final String ERROR_DELETE_MSG = "节点删除失败";
     private static final String ERROR_NODE_NOT_FOUND = "节点不存在";
     
-    /** 隧道使用检查相关消息 */
-    private static final String ERROR_IN_NODE_IN_USE = "该节点还有 %d 个隧道作为入口节点在使用，请先删除相关隧道";
-    private static final String ERROR_OUT_NODE_IN_USE = "该节点还有 %d 个隧道作为出口节点在使用，请先删除相关隧道";
     
     /** 端口范围验证相关消息 */
     private static final String ERROR_PORT_STA_REQUIRED = "起始端口不能为空";
@@ -77,9 +71,6 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
     // ========== 依赖注入 ==========
     
     @Resource
-    private TunnelMapper tunnelMapper;
-
-    @Resource
     private UserMapper userMapper;
 
     @Resource
@@ -89,10 +80,14 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
     @Lazy
     private TunnelService tunnelService;
 
+    @Resource
+    @Lazy
+    private com.admin.common.service.NodeDeletionService nodeDeletionService;
+
     @Value("${jwt-secret}")
     private String jwtSecret;
 
-    @Value("${agent.install.release:1.4.8}")
+    @Value("${agent.install.release:1.4.9}")
     private String agentInstallRelease;
 
     private volatile AESCrypto ddnsCrypto;
@@ -235,29 +230,14 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
 
     /**
      * 删除节点
-     * 删除前会检查是否有隧道正在使用该节点
+     * 同时删除关联隧道与转发，不等待节点在线确认。
      * 
      * @param id 节点ID
      * @return 删除结果响应
      */
     @Override
     public R deleteNode(Long id) {
-        // 1. 验证节点是否存在
-        Node node = this.getById(id);
-        if (node == null) {
-            return R.err(ERROR_NODE_NOT_FOUND);
-        }
-        if (!canManage(node)) return R.err(403, "只能删除自己创建的节点");
-
-        // 2. 检查节点使用情况
-        R usageCheckResult = checkNodeUsage(id);
-        if (usageCheckResult.getCode() != 0) {
-            return usageCheckResult;
-        }
-
-        // 3. 执行删除操作
-        boolean result = this.removeById(id);
-        return result ? R.ok(SUCCESS_DELETE_MSG) : R.err(ERROR_DELETE_MSG);
+        return nodeDeletionService.deleteNode(id);
     }
 
     /**
@@ -476,69 +456,6 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
         });
     }
 
-
-    /**
-     * 检查节点使用情况
-     * 验证是否有隧道正在使用该节点作为入口或出口节点
-     * 
-     * @param nodeId 节点ID
-     * @return 检查结果响应
-     */
-    private R checkNodeUsage(Long nodeId) {
-        // 检查入口节点使用情况
-        R inNodeCheckResult = checkInNodeUsage(nodeId);
-        if (inNodeCheckResult.getCode() != 0) {
-            return inNodeCheckResult;
-        }
-
-        // 检查出口节点使用情况
-        return checkOutNodeUsage(nodeId);
-    }
-
-    /**
-     * 检查节点作为入口节点的使用情况
-     * 
-     * @param nodeId 节点ID
-     * @return 检查结果响应
-     */
-    private R checkInNodeUsage(Long nodeId) {
-        long multiIngressCount = tunnelEntryNodeMapper.selectCount(
-                new QueryWrapper<com.admin.entity.TunnelEntryNode>().eq("node_id", nodeId));
-        if (multiIngressCount > 0) {
-            String errorMsg = String.format(ERROR_IN_NODE_IN_USE, multiIngressCount);
-            return R.err(errorMsg);
-        }
-
-        QueryWrapper<Tunnel> query = new QueryWrapper<>();
-        query.eq("in_node_id", nodeId);
-        
-        long tunnelCount = tunnelMapper.selectCount(query);
-        if (tunnelCount > 0) {
-            String errorMsg = String.format(ERROR_IN_NODE_IN_USE, tunnelCount);
-            return R.err(errorMsg);
-        }
-        
-        return R.ok();
-    }
-
-    /**
-     * 检查节点作为出口节点的使用情况
-     * 
-     * @param nodeId 节点ID
-     * @return 检查结果响应
-     */
-    private R checkOutNodeUsage(Long nodeId) {
-        QueryWrapper<Tunnel> query = new QueryWrapper<>();
-        query.eq("out_node_id", nodeId);
-        
-        long tunnelCount = tunnelMapper.selectCount(query);
-        if (tunnelCount > 0) {
-            String errorMsg = String.format(ERROR_OUT_NODE_IN_USE, tunnelCount);
-            return R.err(errorMsg);
-        }
-        
-        return R.ok();
-    }
 
     /**
      * 获取节点安装命令

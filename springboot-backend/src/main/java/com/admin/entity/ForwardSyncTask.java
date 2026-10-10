@@ -16,7 +16,7 @@ public class ForwardSyncTask extends BaseEntity {
 
     /** ingress or egress */
     private String endpoint;
-    /** pause, resume or delete */
+    /** pause, resume, delete, or cleanup (snapshot after cascading database deletion) */
     private String operation;
     /** Service name captured when the operation is requested. */
     private String serviceName;

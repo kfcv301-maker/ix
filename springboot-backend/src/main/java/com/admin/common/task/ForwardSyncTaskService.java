@@ -13,6 +13,7 @@ import com.admin.entity.Tunnel;
 import com.admin.entity.User;
 import com.admin.entity.UserTunnel;
 import com.admin.mapper.ForwardSyncTaskMapper;
+import com.admin.mapper.NodeMapper;
 import com.admin.service.ForwardService;
 import com.admin.service.TunnelService;
 import com.admin.service.UserService;
@@ -56,6 +57,7 @@ public class ForwardSyncTaskService {
     private static final String OPERATION_PAUSE = "pause";
     private static final String OPERATION_RESUME = "resume";
     private static final String OPERATION_DELETE = "delete";
+    private static final String OPERATION_CLEANUP = "cleanup";
     private static final String TASK_PENDING = "pending";
     private static final String TASK_RUNNING = "running";
     private static final String TASK_SUCCEEDED = "succeeded";
@@ -69,6 +71,9 @@ public class ForwardSyncTaskService {
 
     @Resource
     private ForwardSyncTaskMapper forwardSyncTaskMapper;
+
+    @Resource
+    private NodeMapper nodeMapper;
 
     @Resource
     @Lazy
@@ -108,6 +113,89 @@ public class ForwardSyncTaskService {
 
     public R requestDelete(Long forwardId) {
         return self.beginOperation(forwardId, OPERATION_DELETE, false);
+    }
+
+    /** Durable cleanup snapshots survive the immediate removal of a node's tunnels/forwards. */
+    @Transactional
+    public void prepareCascadeDelete(Forward forward, Tunnel tunnel) {
+        long now = System.currentTimeMillis();
+        Set<String> names = new LinkedHashSet<>(userTunnelAliasService.legacyNames(forward, findUserTunnel(forward)));
+        names.add(serviceName(forward));
+        List<ForwardSyncTask> previous = forwardSyncTaskMapper.selectList(
+                new QueryWrapper<ForwardSyncTask>().eq("forward_id", forward.getId()));
+        for (ForwardSyncTask task : previous) {
+            if (task.getServiceName() != null) names.add(task.getServiceName());
+        }
+        forwardSyncTaskMapper.cancelOperationsForForward(forward.getId(), now);
+        Set<Long> ingress = new LinkedHashSet<>(ingressNodeResolver.resolveNodeIds(tunnel));
+        if (tunnel.getInNodeId() != null) ingress.add(tunnel.getInNodeId());
+        for (String name : names) {
+            for (Long nodeId : ingress) queueCleanup(forward, nodeId, ENDPOINT_INGRESS, name, now);
+            if (Objects.equals(tunnel.getType(), TUNNEL_TYPE_TUNNEL_FORWARD) && tunnel.getOutNodeId() != null) {
+                queueCleanup(forward, tunnel.getOutNodeId(), ENDPOINT_EGRESS, name, now);
+            }
+        }
+        // Older in-flight operations may refer to an endpoint no longer in the tunnel.
+        for (ForwardSyncTask task : previous) {
+            if (task.getNodeId() != null && task.getServiceName() != null) {
+                queueCleanup(forward, task.getNodeId(), task.getEndpoint(), task.getServiceName(), now);
+            }
+        }
+    }
+
+    private void queueCleanup(Forward forward, Long nodeId, String endpoint, String name, long now) {
+        String operationId = UUID.randomUUID().toString();
+        ForwardSyncTask task = newTask(operationId, forward, nodeId, endpoint,
+                OPERATION_CLEANUP, name, ForwardStatus.DELETING, now);
+        if (forwardSyncTaskMapper.insert(task) != 1) throw new IllegalStateException("保存节点清理任务失败");
+        runAfterCommit(() -> {
+            try { forwardSyncTaskExecutor.dispatchOperation(operationId); }
+            catch (RuntimeException e) { log.warn("节点清理任务等待定时重试: {}", operationId); }
+        });
+    }
+
+    /** A cancelled resume can arrive after deletion; persist another cleanup for its late ACK. */
+    @Transactional
+    public void queueLateCleanup(ForwardSyncTask previous) {
+        Forward snapshot = new Forward();
+        snapshot.setId(previous.getForwardId());
+        queueCleanup(snapshot, previous.getNodeId(), previous.getEndpoint(), previous.getServiceName(),
+                System.currentTimeMillis());
+    }
+
+    private void executeCleanup(ForwardSyncTask task, long now) {
+        GostDto result = ENDPOINT_EGRESS.equals(task.getEndpoint())
+                ? GostUtil.DeleteRemoteService(task.getNodeId(), task.getServiceName())
+                : GostUtil.DeleteService(task.getNodeId(), task.getServiceName());
+        if (successOrAlreadyAbsent(result) && ENDPOINT_INGRESS.equals(task.getEndpoint())) {
+            result = GostUtil.DeleteChains(task.getNodeId(), task.getServiceName());
+        }
+        // A retired node cannot authenticate again. Existing nodes must ACK even if offline now.
+        if (successOrAlreadyAbsent(result) || nodeMapper.selectById(task.getNodeId()) == null) {
+            forwardSyncTaskMapper.markSucceeded(task.getId(), now);
+            self.releaseCleanupReservations(task.getForwardId());
+            closeRetiredNodeIfClean(task.getNodeId());
+        } else {
+            forwardSyncTaskMapper.markRetry(task.getId(), endpointError("清理已删除转发", result),
+                    nextRetryTime(task, now), now);
+        }
+    }
+
+    @Transactional
+    public void releaseCleanupReservations(Long forwardId) {
+        if (forwardService.getById(forwardId) != null) return;
+        long pending = forwardSyncTaskMapper.selectCount(new QueryWrapper<ForwardSyncTask>()
+                .eq("forward_id", forwardId).eq("operation", OPERATION_CLEANUP)
+                .in("task_status", TASK_PENDING, TASK_RUNNING));
+        if (pending == 0) forwardPortReservationService.releaseAll(forwardId);
+    }
+
+    public void closeRetiredNodeIfClean(Long nodeId) {
+        if (nodeMapper.selectById(nodeId) != null) return;
+        long pending = forwardSyncTaskMapper.selectCount(new QueryWrapper<ForwardSyncTask>()
+                .eq("node_id", nodeId).eq("operation", OPERATION_CLEANUP)
+                .in("task_status", TASK_PENDING, TASK_RUNNING));
+        if (pending == 0) com.admin.common.utils.WebSocketServer.closeNodeSession(nodeId);
     }
 
     /**
@@ -221,6 +309,10 @@ public class ForwardSyncTaskService {
         }
         long now = System.currentTimeMillis();
         try {
+            if (OPERATION_CLEANUP.equals(task.getOperation())) {
+                executeCleanup(task, now);
+                return;
+            }
             Forward forward = forwardService.getById(task.getForwardId());
             if (forward == null) {
                 forwardSyncTaskMapper.markSucceeded(task.getId(), now);
@@ -496,6 +588,10 @@ public class ForwardSyncTaskService {
      * can never leave the database claiming a safely paused service.
      */
     private void compensateCancelledCommand(ForwardSyncTask task, Forward forward) {
+        if (OPERATION_RESUME.equals(task.getOperation()) && forwardService.getById(task.getForwardId()) == null) {
+            self.queueLateCleanup(task);
+            return;
+        }
         if (!OPERATION_RESUME.equals(task.getOperation()) || forward == null
                 || !Objects.equals(forward.getStatus(), ForwardStatus.SYNCING)) {
             return;
