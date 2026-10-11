@@ -36,6 +36,10 @@ def main():
     benchmarks = source[source.index("func BenchmarkUDPListenerThroughput"):]
     fixture = 'package udp\nimport("bytes";"errors";"io";"net";"strconv";"testing";"time")\n' + helpers + benchmarks
     (original / "internal/net/udp/resource_benchmark_test.go").write_text(fixture, encoding="utf-8")
+    # Keep the QUIC dependency initialization identical. Otherwise the proposed
+    # test binary loads quic-go while the baseline's synthetic fixture does not.
+    quic_fixture = (repaired / "internal/net/udp/quic_integration_test.go").read_text(encoding="utf-8")
+    (original / "internal/net/udp/quic_integration_test.go").write_text(quic_fixture, encoding="utf-8")
     env = dict(os.environ, CGO_ENABLED="0", GOMAXPROCS="4")
     # Compile before collecting timings. Alternate execution order to reduce
     # bias from host warmup and retain all raw measurements for review.
@@ -44,13 +48,13 @@ def main():
     observations = {"original": {}, "repaired": {}}
     raw = {"original": [], "repaired": []}
     pattern = re.compile(r"BenchmarkUDPListenerThroughput/(\S+)-\d+\s+\d+\s+([\d.]+) ns/op")
-    for iteration in range(3):
+    for iteration in range(6):
         variants = [("original", original), ("repaired", repaired)]
         if iteration % 2:
             variants.reverse()
         for label, folder in variants:
             output = run(["go", "test", "-run=^$", "-bench=BenchmarkUDPListenerThroughput",
-                          "-benchmem", "-benchtime=350ms", "-count=2", "-timeout=120s",
+                          "-benchmem", "-benchtime=1s", "-count=1", "-timeout=120s",
                           "./internal/net/udp"], folder, env)
             raw[label].append(output)
             for name, elapsed in pattern.findall(output):
@@ -66,7 +70,9 @@ def main():
         cases[name] = {"original_ns": before, "repaired_ns": after, "median_throughput_change_percent": delta}
         print(f"{name}: median throughput change {delta:+.2f}%", flush=True)
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps({"baseline_ref": args.baseline_ref, "go_version": run(["go", "version"], root).strip(),
+    args.output.write_text(json.dumps({"baseline_ref": args.baseline_ref,
+                                      "proposed_ref": run(["git", "rev-parse", "HEAD"], root).strip(),
+                                      "go_version": run(["go", "version"], root).strip(),
                                       "gomaxprocs": 4, "cases": cases, "raw": raw}, indent=2), encoding="utf-8")
 
 

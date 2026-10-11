@@ -3,6 +3,7 @@ package udp
 import (
 	"errors"
 	"net"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -147,7 +148,8 @@ func (ln *listener) getConn(raddr net.Addr) *conn {
 		return nil
 	default:
 	}
-	c, ok := ln.connPool.Get(raddr.String())
+	key := peerKey(raddr)
+	c, ok := ln.connPool.Get(key)
 	if ok && !c.isClosed() {
 		return c
 	}
@@ -155,7 +157,7 @@ func (ln *listener) getConn(raddr net.Addr) *conn {
 	c = newConn(ln.conn, ln.Addr(), raddr, ln.config.ReadQueueSize, ln.config.Keepalive)
 	select {
 	case ln.cqueue <- c:
-		if !ln.connPool.Set(raddr.String(), c) {
+		if !ln.connPool.Set(key, c) {
 			return nil
 		}
 		return c
@@ -165,6 +167,19 @@ func (ln *listener) getConn(raddr net.Addr) *conn {
 		ln.reportDrop(errors.New("connection queue is full"))
 		return nil
 	}
+}
+
+// UDP sockets already supply a typed address. Avoid formatting and allocating
+// a string on every packet; normalize mapped IPv4 as UDPAddr.String did.
+func peerKey(addr net.Addr) any {
+	if udpAddr, ok := addr.(*net.UDPAddr); ok {
+		endpoint := udpAddr.AddrPort()
+		ip := endpoint.Addr().Unmap()
+		if uint(udpAddr.Port) <= 65535 && ip.IsValid() && (udpAddr.Zone == "" || ip.Is6()) {
+			return netip.AddrPortFrom(ip, endpoint.Port())
+		}
+	}
+	return addr.String()
 }
 
 // Log overload at most once a second rather than writing one line per packet.

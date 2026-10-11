@@ -164,16 +164,14 @@ func acceptTestPeer(t testing.TB, ln *listener) *conn {
 
 func TestUDPDatagramsPreserveBoundariesAndContents(t *testing.T) {
 	ln, client := udpTestListener(t, 65535)
+	var c *conn
 	for i, size := range []int{32, 1450, 8192, 32768, 65507} {
 		payload := bytes.Repeat([]byte{byte(i + 1)}, size)
 		if _, err := client.Write(payload); err != nil {
 			t.Fatal(err)
 		}
-		var c *conn
 		if i == 0 {
 			c = acceptTestPeer(t, ln)
-		} else {
-			c, _ = ln.connPool.Get(client.LocalAddr().String())
 		}
 		buffer := make([]byte, 65535)
 		n, addr, err := c.ReadFrom(buffer)
