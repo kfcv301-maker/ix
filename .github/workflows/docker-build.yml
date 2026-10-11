@@ -181,15 +181,36 @@ jobs:
             exit 0
           fi
           source_revision="$(git log -1 --format=%H -- go-gost)"
-          build_dir="$(mktemp -d "${RUNNER_TEMP}/lunaris-agent-build.XXXXXX")"
-          # Build outside the checkout so both architectures use clean source
-          # metadata. Installer assets stay unpacked to preserve Go build info.
+          artifacts_current=true
           for arch in amd64 arm64; do
-            (cd go-gost && CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -ldflags="-s -w" -o "$build_dir/flux-panel-agent-linux-$arch")
+            binary="artifacts/flux-panel-agent-linux-${arch}"
+            embedded_revision="$(go version -m "$binary" | awk '$1 == "build" && $2 ~ /^vcs.revision=/ { sub(/^vcs.revision=/, "", $2); print $2 }')"
+            if [[ "$embedded_revision" != "$source_revision" ]] || ! (cd artifacts && sha256sum -c "flux-panel-agent-linux-${arch}.sha256"); then
+              artifacts_current=false
+            fi
+          done
+          if [[ "$artifacts_current" == true ]]; then
+            echo 'Installer artifacts already match the Agent source and checksums.'
+            exit 0
+          fi
+          build_dir="$(mktemp -d "${RUNNER_TEMP}/lunaris-agent-build.XXXXXX")"
+          source_dir="$build_dir/source"
+          # Documentation/artifact-only commits may follow the last Go change.
+          # Build that actual source commit, rather than embedding a later HEAD.
+          git worktree add --detach "$source_dir" "$source_revision"
+          # Keep outputs outside the source checkout for clean VCS metadata.
+          # Installer assets stay unpacked to preserve Go build info.
+          for arch in amd64 arm64; do
+            (cd "$source_dir/go-gost" && CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -ldflags="-s -w" -o "$build_dir/flux-panel-agent-linux-$arch")
             binary="$build_dir/flux-panel-agent-linux-$arch"
             embedded_revision="$(go version -m "$binary" | awk '$1 == "build" && $2 ~ /^vcs.revision=/ { sub(/^vcs.revision=/, "", $2); print $2 }')"
             [[ "$embedded_revision" == "$source_revision" ]] || { echo 'Agent build revision mismatch' >&2; exit 1; }
           done
+          actual_head="$(git ls-remote origin "refs/heads/${HEAD_BRANCH}" | awk '{print $1}')"
+          if [[ "$actual_head" != "$EXPECTED_HEAD" ]]; then
+            echo 'The branch changed during the build; leaving its artifacts untouched.'
+            exit 0
+          fi
           for arch in amd64 arm64; do
             install -m 0755 "$build_dir/flux-panel-agent-linux-$arch" "artifacts/flux-panel-agent-linux-$arch"
             (cd artifacts && sha256sum "flux-panel-agent-linux-$arch" > "flux-panel-agent-linux-$arch.sha256")

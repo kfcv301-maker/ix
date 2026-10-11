@@ -21,7 +21,9 @@ docker volume create "$CONFIG_VOLUME" >/dev/null
 docker run -d --name "$MYSQL_CONTAINER" --network "$NETWORK" --network-alias mysql \
   -e MYSQL_ROOT_PASSWORD=integration-only-root -e MYSQL_DATABASE=flux_panel \
   -e MYSQL_USER=flux_panel -e MYSQL_PASSWORD=integration-only-password "$MYSQL_TEST_IMAGE" >/dev/null
-sql() { docker exec -i "$MYSQL_CONTAINER" mysql -uroot -pintegration-only-root -N flux_panel "$@"; }
+# The image's temporary initialization server only opens a Unix socket. Wait
+# for the final TCP server so fixture imports cannot race its shutdown.
+sql() { docker exec -i "$MYSQL_CONTAINER" mysql --protocol=TCP -h127.0.0.1 -uroot -pintegration-only-root -N flux_panel "$@"; }
 ready=false
 for _ in $(seq 1 90); do
   if sql -e 'SELECT 1' >/dev/null 2>&1; then ready=true; break; fi
