@@ -121,7 +121,7 @@ jobs:
 
       - name: Check Agent resource lifecycle races
         working-directory: ./go-gost/x
-        run: go test -race -count=5 -timeout=180s ./internal/net/udp ./service ./socket
+        run: go test -race -count=5 -timeout=180s ./internal/net/udp ./service ./socket ./api
 
       - name: Build GOST binary (AMD64)
         working-directory: ./go-gost

@@ -1,6 +1,6 @@
 # Agent 资源回收与 UDP 排队内存
 
-本次修改修复服务创建失败后的监听残留、TCP/UDP 恢复失败后的状态不一致，以及 UDP 缓冲区和会话池回收不完整的问题。服务更新失败时会重建原配置；正常配置更新原有的连接重建行为不变。TCP 的 16 KiB 缓冲、流量统计包装、限速和原始 TCP 零拷贝路径保持原样。
+本次修改修复 WebSocket 命令与 HTTP 批量创建失败后的监听残留、WebSocket TCP/UDP 恢复失败后的状态不一致，以及 UDP 缓冲区和会话池回收不完整的问题。WebSocket 服务更新失败时会重建原配置；原来暂停的服务在更新和回滚后仍保持暂停。正常配置更新原有的连接重建行为不变。TCP 的 16 KiB 缓冲、流量统计包装、限速和原始 TCP 零拷贝路径保持原样。
 
 ## UDP 内存预算
 
@@ -13,17 +13,25 @@
 
 ## 验证
 
-回归测试覆盖配对创建失败后重新绑定端口、初始化失败清理监听、恢复失败后重试、更新失败恢复原 TCP/UDP 配置、重复/并发关闭、UDP 全局预算、关闭时队列回收、完整大数据报和真实 QUIC 多流双向传输。
+回归测试覆盖 WebSocket 和 HTTP 配对创建失败后重新绑定端口、初始化失败清理监听、恢复失败后重试、更新失败恢复原 TCP/UDP 配置、保持暂停状态、重复/并发关闭、UDP 全局预算、关闭时队列回收、完整大数据报和真实 QUIC 多流双向传输。
 
 64 个 1450 字节数据报排队的测试中，底层数组总容量从 512 KiB 降到 176 KiB，减少约 65.6%；这是排队缓冲的结果，不是整个进程 RSS 的降幅。
 
 ```sh
 cd go-gost/x
 go test ./...
-go test -race -count=10 -timeout=180s ./internal/net/udp ./service ./socket
+go test -race -count=10 -timeout=180s ./internal/net/udp ./service ./socket ./api
 go test -run '^$' -bench BenchmarkUDPListenerThroughput -benchmem ./internal/net/udp
 ```
 
 `tests/agent_resource_benchmark.py` 在独立临时工作树中对原版和修改后的版本使用同一基准，交替顺序，各测六次，保留原始结果。CI 在 Linux 上执行此对比并上传 `agent-resource-benchmark` 产物。单机回环测试不能替代 AWS1 实际线路的持续负载验证。
+
+2026-10-11 的 [Linux CI 对比](https://github.com/kfcv301-maker/ix/actions/runs/38139895469) 使用 Go 1.23.4、GOMAXPROCS=4，相对主分支 `5c08a4c` 的吞吐中位数变化如下。负数表示测得较低；本轮没有观察到明显降速，仍需上线前用实际线路验收。
+
+| 数据报大小 | 单包往返 | 每轮 32 个包 |
+| --- | ---: | ---: |
+| 64 B | -0.18% | +1.00% |
+| 1450 B | -0.20% | -0.04% |
+| 8192 B | -0.23% | +0.59% |
 
 仓库维护者发起的 PR 通过 Agent 测试后，CI 会从该 PR 的精确源码版本生成两种架构的一键安装二进制及校验和，并仅提交到该 PR 分支。若分支期间有新提交，旧任务跳过更新。主分支发布继续校验源码和安装包版本一致；安装入口 URL 保持原有契约。

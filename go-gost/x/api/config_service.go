@@ -101,35 +101,52 @@ func createServices(ctx *gin.Context) {
 	//       200: createServicesResponse
 
 	var req createServicesRequest
-	ctx.ShouldBindJSON(&req.Data)
+	if err := ctx.ShouldBindJSON(&req.Data); err != nil {
+		writeError(ctx, NewError(http.StatusBadRequest, ErrCodeInvalid, err.Error()))
+		return
+	}
 
 	if len(req.Data) == 0 {
 		writeError(ctx, NewError(http.StatusBadRequest, ErrCodeInvalid, "services list cannot be empty"))
 		return
 	}
 
-	// 第一阶段：验证所有服务配置
-	var parsedServices []struct {
-		config  config.ServiceConfig
-		service service.Service
-	}
-
-	for _, serviceConfig := range req.Data {
-		name := strings.TrimSpace(serviceConfig.Name)
+	// Preflight the whole request before any listener binds a socket.
+	names := make(map[string]bool, len(req.Data))
+	for i := range req.Data {
+		name := strings.TrimSpace(req.Data[i].Name)
 		if name == "" {
 			writeError(ctx, NewError(http.StatusBadRequest, ErrCodeInvalid, "service name is required"))
 			return
 		}
-		serviceConfig.Name = name
-
-		if registry.ServiceRegistry().IsRegistered(name) {
+		if names[name] || registry.ServiceRegistry().IsRegistered(name) {
 			writeError(ctx, NewError(http.StatusBadRequest, ErrCodeDup, fmt.Sprintf("service %s already exists", name)))
 			return
 		}
+		names[name] = true
+		req.Data[i].Name = name
+	}
 
+	var parsedServices []struct {
+		config  config.ServiceConfig
+		service service.Service
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			for _, ps := range parsedServices {
+				if registry.ServiceRegistry().Get(ps.config.Name) == ps.service {
+					registry.ServiceRegistry().Unregister(ps.config.Name)
+				}
+				ps.service.Close()
+			}
+		}
+	}()
+
+	for _, serviceConfig := range req.Data {
 		svc, err := parser.ParseService(&serviceConfig)
 		if err != nil {
-			writeError(ctx, NewError(http.StatusInternalServerError, ErrCodeFailed, fmt.Sprintf("create service %s failed: %s", name, err.Error())))
+			writeError(ctx, NewError(http.StatusInternalServerError, ErrCodeFailed, fmt.Sprintf("create service %s failed: %s", serviceConfig.Name, err.Error())))
 			return
 		}
 
@@ -140,36 +157,26 @@ func createServices(ctx *gin.Context) {
 	}
 
 	// 第二阶段：注册所有服务
-	var registeredServices []string
 	for _, ps := range parsedServices {
 		if err := registry.ServiceRegistry().Register(ps.config.Name, ps.service); err != nil {
-			// 如果注册失败，回滚已注册的服务
-			for _, regName := range registeredServices {
-				if svc := registry.ServiceRegistry().Get(regName); svc != nil {
-					registry.ServiceRegistry().Unregister(regName)
-					svc.Close()
-				}
-			}
 			writeError(ctx, NewError(http.StatusBadRequest, ErrCodeDup, fmt.Sprintf("service %s already exists", ps.config.Name)))
 			return
 		}
-		registeredServices = append(registeredServices, ps.config.Name)
 	}
 
-	// 第三阶段：启动所有服务
-	for _, ps := range parsedServices {
-		if svc := registry.ServiceRegistry().Get(ps.config.Name); svc != nil {
-			go svc.Serve()
-		}
-	}
-
-	// 第四阶段：更新配置
-	config.OnUpdate(func(c *config.Config) error {
-		for _, ps := range parsedServices {
-			c.Services = append(c.Services, &ps.config)
+	if err := config.OnUpdate(func(c *config.Config) error {
+		for i := range parsedServices {
+			c.Services = append(c.Services, &parsedServices[i].config)
 		}
 		return nil
-	})
+	}); err != nil {
+		writeError(ctx, NewError(http.StatusInternalServerError, ErrCodeFailed, err.Error()))
+		return
+	}
+	committed = true
+	for _, ps := range parsedServices {
+		go ps.service.Serve()
+	}
 
 	ctx.JSON(http.StatusOK, Response{
 		Msg: "OK",
