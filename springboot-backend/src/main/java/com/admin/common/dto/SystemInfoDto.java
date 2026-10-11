@@ -103,6 +103,16 @@ public class SystemInfoDto {
     @JsonProperty("udp_connections")
     private Long udpConnections;
 
+    /** UDP 排队缓冲内存、全节点预算（字节）和本次 Agent 运行累计丢包数。 */
+    @JsonProperty("udp_queued_bytes")
+    private Long udpQueuedBytes;
+
+    @JsonProperty("udp_queue_byte_limit")
+    private Long udpQueueByteLimit;
+
+    @JsonProperty("udp_queue_drops")
+    private Long udpQueueDrops;
+
     /** Optional status reported by the node-local adaptive TCP memory guard. */
     @JsonProperty("tcp_tuning_mode")
     private String tcpTuningMode;

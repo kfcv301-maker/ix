@@ -136,14 +136,16 @@ func LoggerOption(logger logger.Logger) Option {
 }
 
 type defaultService struct {
-	name     string
-	listener listener.Listener
-	handler  handler.Handler
-	status   *Status
-	options  options
-	connMu   sync.Mutex
-	conns    map[net.Conn]struct{}
-	closing  bool
+	name      string
+	listener  listener.Listener
+	handler   handler.Handler
+	status    *Status
+	options   options
+	connMu    sync.Mutex
+	conns     map[net.Conn]struct{}
+	closing   bool
+	closeOnce sync.Once
+	closeErr  error
 }
 
 func NewService(name string, ln listener.Listener, h handler.Handler, opts ...Option) service.Service {
@@ -199,6 +201,10 @@ func (s *defaultService) Serve() error {
 
 	var wg sync.WaitGroup
 	defer wg.Wait()
+	// A terminal Accept error must close active connections before waiting
+	// for their handlers, otherwise their blocked reads can retain the service
+	// and its resources indefinitely. Close is also safe after an explicit stop.
+	defer s.Close()
 
 	var tempDelay time.Duration
 	for {
@@ -323,25 +329,27 @@ func (s *defaultService) Status() *Status {
 }
 
 func (s *defaultService) Close() error {
-	s.execCmds("pre-down", s.options.preDown)
-	defer s.execCmds("post-down", s.options.postDown)
+	s.closeOnce.Do(func() {
+		s.execCmds("pre-down", s.options.preDown)
+		defer s.execCmds("post-down", s.options.postDown)
 
-	s.connMu.Lock()
-	s.closing = true
-	active := make([]net.Conn, 0, len(s.conns))
-	for conn := range s.conns {
-		active = append(active, conn)
-	}
-	s.connMu.Unlock()
+		s.connMu.Lock()
+		s.closing = true
+		active := make([]net.Conn, 0, len(s.conns))
+		for conn := range s.conns {
+			active = append(active, conn)
+		}
+		s.connMu.Unlock()
 
-	err := s.listener.Close()
-	for _, conn := range active {
-		conn.Close()
-	}
-	if closer, ok := s.handler.(io.Closer); ok {
-		closer.Close()
-	}
-	return err
+		s.closeErr = s.listener.Close()
+		for _, conn := range active {
+			conn.Close()
+		}
+		if closer, ok := s.handler.(io.Closer); ok {
+			closer.Close()
+		}
+	})
+	return s.closeErr
 }
 
 func (s *defaultService) trackConnection(conn net.Conn) bool {

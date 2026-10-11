@@ -91,6 +91,7 @@ jobs:
             go-gost/x/go.sum
 
       - name: Verify one-click Agent binaries match source
+        if: github.event_name != 'pull_request'
         shell: bash
         run: |
           source_revision="$(git log -1 --format=%H -- go-gost)"
@@ -118,6 +119,10 @@ jobs:
         working-directory: ./go-gost/x
         run: go test ./...
 
+      - name: Check Agent resource lifecycle races
+        working-directory: ./go-gost/x
+        run: go test -race -count=5 -timeout=180s ./internal/net/udp ./service ./socket
+
       - name: Build GOST binary (AMD64)
         working-directory: ./go-gost
         run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o flux-panel-agent-linux-amd64
@@ -143,6 +148,79 @@ jobs:
             go-gost/flux-panel-agent-linux-amd64.sha256
             go-gost/flux-panel-agent-linux-arm64
             go-gost/flux-panel-agent-linux-arm64.sha256
+          if-no-files-found: error
+
+  package-agent-installer:
+    name: Refresh installer binaries for owned pull requests
+    needs: build-gost
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.23.4"
+          cache-dependency-path: |
+            go-gost/go.sum
+            go-gost/x/go.sum
+      - name: Build and verify immutable-source installer binaries
+        env:
+          HEAD_BRANCH: ${{ github.head_ref }}
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          # Never replace a contributor's newer work with an older build.
+          actual_head="$(git ls-remote origin "refs/heads/${HEAD_BRANCH}" | awk '{print $1}')"
+          if [[ "$actual_head" != "$EXPECTED_HEAD" ]]; then
+            echo 'The branch changed during verification; leaving its artifacts untouched.'
+            exit 0
+          fi
+          source_revision="$(git log -1 --format=%H -- go-gost)"
+          build_dir="$(mktemp -d "${RUNNER_TEMP}/lunaris-agent-build.XXXXXX")"
+          # Build outside the checkout so both architectures use clean source
+          # metadata. Installer assets stay unpacked to preserve Go build info.
+          for arch in amd64 arm64; do
+            (cd go-gost && CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -ldflags="-s -w" -o "$build_dir/flux-panel-agent-linux-$arch")
+            binary="$build_dir/flux-panel-agent-linux-$arch"
+            embedded_revision="$(go version -m "$binary" | awk '$1 == "build" && $2 ~ /^vcs.revision=/ { sub(/^vcs.revision=/, "", $2); print $2 }')"
+            [[ "$embedded_revision" == "$source_revision" ]] || { echo 'Agent build revision mismatch' >&2; exit 1; }
+          done
+          for arch in amd64 arm64; do
+            install -m 0755 "$build_dir/flux-panel-agent-linux-$arch" "artifacts/flux-panel-agent-linux-$arch"
+            (cd artifacts && sha256sum "flux-panel-agent-linux-$arch" > "flux-panel-agent-linux-$arch.sha256")
+          done
+          git add artifacts/flux-panel-agent-linux-amd64 artifacts/flux-panel-agent-linux-amd64.sha256 artifacts/flux-panel-agent-linux-arm64 artifacts/flux-panel-agent-linux-arm64.sha256
+          if git diff --cached --quiet; then exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m "Build installer Agents from ${source_revision}"
+          git push origin "HEAD:refs/heads/${HEAD_BRANCH}"
+
+  benchmark-agent-resources:
+    name: Compare native UDP throughput
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.23.4"
+          cache-dependency-path: go-gost/x/go.sum
+      - name: Compare original and proposed UDP listeners
+        env:
+          BASELINE_REF: ${{ github.event.pull_request.base.sha }}
+        run: python3 tests/agent_resource_benchmark.py --baseline-ref "$BASELINE_REF" --output "$RUNNER_TEMP/agent-resource-benchmark.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-resource-benchmark
+          path: ${{ runner.temp }}/agent-resource-benchmark.json
           if-no-files-found: error
 
   build-vite:

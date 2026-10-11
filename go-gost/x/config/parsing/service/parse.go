@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"io"
 	"runtime"
 	"strings"
 	"time"
@@ -246,6 +247,18 @@ func ParseService(cfg *config.ServiceConfig) (service.Service, error) {
 		listenerLogger.Error("init: ", err)
 		return nil, err
 	}
+	// Listener initialization binds sockets. Until NewService takes ownership,
+	// every later failure must release the listener and any handler resources.
+	var h handler.Handler
+	owned := false
+	defer func() {
+		if !owned {
+			ln.Close()
+			if closer, ok := h.(io.Closer); ok {
+				closer.Close()
+			}
+		}
+	}()
 
 	handlerLogger := serviceLogger.WithFields(map[string]any{
 		"kind": "handler",
@@ -310,7 +323,6 @@ func ParseService(cfg *config.ServiceConfig) (service.Service, error) {
 		)
 	}
 
-	var h handler.Handler
 	if rf := registry.HandlerRegistry().Get(cfg.Handler.Type); rf != nil {
 		h = rf(
 			handler.RouterOption(xchain.NewRouter(routerOpts...)),
@@ -371,6 +383,7 @@ func ParseService(cfg *config.ServiceConfig) (service.Service, error) {
 	)
 
 	serviceLogger.Infof("listening on %s/%s", s.Addr().String(), s.Addr().Network())
+	owned = true
 	return s, nil
 }
 

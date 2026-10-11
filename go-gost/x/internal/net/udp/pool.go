@@ -8,23 +8,23 @@ import (
 )
 
 type connPool struct {
-	m      sync.Map
-	ttl    time.Duration
-	closed chan struct{}
-	logger logger.Logger
+	m         sync.Map
+	ttl       time.Duration
+	closed    chan struct{}
+	logger    logger.Logger
+	mu        sync.RWMutex
+	closeOnce sync.Once
 }
 
-func newConnPool(ttl time.Duration) *connPool {
+func newConnPool(ttl time.Duration, loggers ...logger.Logger) *connPool {
 	p := &connPool{
 		ttl:    ttl,
 		closed: make(chan struct{}),
 	}
+	if len(loggers) > 0 {
+		p.logger = loggers[0]
+	}
 	go p.idleCheck()
-	return p
-}
-
-func (p *connPool) WithLogger(logger logger.Logger) *connPool {
-	p.logger = logger
 	return p
 }
 
@@ -40,12 +40,21 @@ func (p *connPool) Get(key any) (c *conn, ok bool) {
 	return
 }
 
-func (p *connPool) Set(key any, c *conn) {
+func (p *connPool) Set(key any, c *conn) bool {
 	if p == nil {
-		return
+		c.Close()
+		return false
 	}
-
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	select {
+	case <-p.closed:
+		c.Close()
+		return false
+	default:
+	}
 	p.m.Store(key, c)
+	return true
 }
 
 func (p *connPool) Delete(key any) {
@@ -60,19 +69,17 @@ func (p *connPool) Close() {
 		return
 	}
 
-	select {
-	case <-p.closed:
-		return
-	default:
-	}
-
-	close(p.closed)
-
-	p.m.Range(func(k, v any) bool {
-		if c, ok := v.(*conn); ok && c != nil {
-			c.Close()
-		}
-		return true
+	p.closeOnce.Do(func() {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		close(p.closed)
+		p.m.Range(func(k, v any) bool {
+			p.m.Delete(k)
+			if c, ok := v.(*conn); ok && c != nil {
+				c.Close()
+			}
+			return true
+		})
 	})
 }
 
@@ -95,8 +102,9 @@ func (p *connPool) idleCheck() {
 
 				if c.IsIdle() {
 					idles++
-					p.Delete(key)
-					c.Close()
+					if p.m.CompareAndDelete(key, c) {
+						c.Close()
+					}
 					return true
 				}
 
@@ -105,7 +113,7 @@ func (p *connPool) idleCheck() {
 				return true
 			})
 
-			if idles > 0 {
+			if idles > 0 && p.logger != nil {
 				p.logger.Debugf("connection pool: size=%d, idle=%d", size, idles)
 			}
 		case <-p.closed:

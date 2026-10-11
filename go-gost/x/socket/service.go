@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
+	"sync"
 
 	"github.com/go-gost/core/service"
 	"github.com/go-gost/x/config"
@@ -12,32 +12,52 @@ import (
 	"github.com/go-gost/x/registry"
 )
 
+// Serialize commands that replace registry entries and configuration together.
+// This lock is never taken by packet forwarding or traffic accounting.
+var serviceMutationMu sync.Mutex
+
 func createServices(req createServicesRequest) error {
+	serviceMutationMu.Lock()
+	defer serviceMutationMu.Unlock()
 
 	if len(req.Data) == 0 {
 		return errors.New("services list cannot be empty")
 	}
 
-	// 第一阶段：验证所有服务配置
+	// Validate the complete batch before binding any listener.
+	names := make(map[string]bool, len(req.Data))
+	for i := range req.Data {
+		name := strings.TrimSpace(req.Data[i].Name)
+		if name == "" {
+			return errors.New("service name is required")
+		}
+		if names[name] || registry.ServiceRegistry().IsRegistered(name) {
+			return errors.New("service " + name + " already exists")
+		}
+		names[name] = true
+		req.Data[i].Name = name
+	}
+
 	var parsedServices []struct {
 		config  config.ServiceConfig
 		service service.Service
 	}
+	committed := false
+	defer func() {
+		if !committed {
+			for _, ps := range parsedServices {
+				if registry.ServiceRegistry().Get(ps.config.Name) == ps.service {
+					registry.ServiceRegistry().Unregister(ps.config.Name)
+				}
+				ps.service.Close()
+			}
+		}
+	}()
 
 	for _, serviceConfig := range req.Data {
-		name := strings.TrimSpace(serviceConfig.Name)
-		if name == "" {
-			return errors.New("service name is required")
-		}
-		serviceConfig.Name = name
-
-		if registry.ServiceRegistry().IsRegistered(name) {
-			return errors.New("service " + name + " already exists")
-		}
-
 		svc, err := parser.ParseService(&serviceConfig)
 		if err != nil {
-			return errors.New("create service " + name + " failed: " + err.Error())
+			return errors.New("create service " + serviceConfig.Name + " failed: " + err.Error())
 		}
 
 		parsedServices = append(parsedServices, struct {
@@ -47,106 +67,161 @@ func createServices(req createServicesRequest) error {
 	}
 
 	// 第二阶段：注册所有服务
-	var registeredServices []string
 	for _, ps := range parsedServices {
 		if err := registry.ServiceRegistry().Register(ps.config.Name, ps.service); err != nil {
-			// 如果注册失败，回滚已注册的服务
-			for _, regName := range registeredServices {
-				if svc := registry.ServiceRegistry().Get(regName); svc != nil {
-					registry.ServiceRegistry().Unregister(regName)
-					svc.Close()
-				}
-			}
 			return errors.New("service " + ps.config.Name + " already exists")
 		}
-		registeredServices = append(registeredServices, ps.config.Name)
 	}
 
-	// 第三阶段：启动所有服务
-	for _, ps := range parsedServices {
-		if svc := registry.ServiceRegistry().Get(ps.config.Name); svc != nil {
-			go svc.Serve()
-		}
-	}
-
-	// 第四阶段：更新配置
-	config.OnUpdate(func(c *config.Config) error {
-		for _, ps := range parsedServices {
-			c.Services = append(c.Services, &ps.config)
+	if err := config.OnUpdate(func(c *config.Config) error {
+		for i := range parsedServices {
+			c.Services = append(c.Services, &parsedServices[i].config)
 		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	committed = true
+	for _, ps := range parsedServices {
+		go ps.service.Serve()
+	}
 
 	return nil
 }
 
-func updateServices(req updateServicesRequest) error {
+func updateServices(req updateServicesRequest) (resultErr error) {
+	serviceMutationMu.Lock()
+	defer serviceMutationMu.Unlock()
 
 	if len(req.Data) == 0 {
 		return errors.New("services list cannot be empty")
 	}
 
-	// 第一阶段：验证所有服务存在
-	for _, serviceConfig := range req.Data {
+	previous := make([]*config.ServiceConfig, len(req.Data))
+	names := make(map[string]bool, len(req.Data))
+	current := config.Global()
+	for i := range req.Data {
+		serviceConfig := &req.Data[i]
 		name := strings.TrimSpace(serviceConfig.Name)
 		if name == "" {
 			return errors.New("service name is required")
 		}
+		if names[name] {
+			return fmt.Errorf("duplicate service %s", name)
+		}
+		names[name] = true
 		serviceConfig.Name = name
-
-		old := registry.ServiceRegistry().Get(name)
-		if old == nil {
+		if registry.ServiceRegistry().Get(name) == nil {
 			return errors.New("service " + name + " not found")
 		}
-	}
-
-	// 第二阶段：按照原来的updateService逻辑，逐个更新服务
-	for _, serviceConfig := range req.Data {
-		name := strings.TrimSpace(serviceConfig.Name)
-		serviceConfig.Name = name
-
-		// 1. 获取旧服务
-		old := registry.ServiceRegistry().Get(name)
-
-		// 2. 关闭旧服务
-		old.Close()
-
-		// 3. 从注册表移除旧服务
-		registry.ServiceRegistry().Unregister(name)
-
-		// 4. 解析新服务配置
-		svc, err := parser.ParseService(&serviceConfig)
-		if err != nil {
-			return errors.New("create service " + name + " failed: " + err.Error())
+		for _, cfg := range current.Services {
+			if cfg.Name == name {
+				previous[i] = cfg
+				break
+			}
 		}
-
-		// 5. 注册新服务
-		if err := registry.ServiceRegistry().Register(name, svc); err != nil {
+		if previous[i] == nil {
+			return fmt.Errorf("service %s configuration not found", name)
+		}
+		if previous[i].Metadata != nil && previous[i].Metadata["paused"] == true {
+			md := make(map[string]any, len(serviceConfig.Metadata)+1)
+			for k, v := range serviceConfig.Metadata {
+				md[k] = v
+			}
+			md["paused"] = true
+			serviceConfig.Metadata = md
+		}
+		listenerType, handlerType := "tcp", "auto"
+		if serviceConfig.Listener != nil && strings.TrimSpace(serviceConfig.Listener.Type) != "" {
+			listenerType = serviceConfig.Listener.Type
+		}
+		if serviceConfig.Handler != nil && strings.TrimSpace(serviceConfig.Handler.Type) != "" {
+			handlerType = serviceConfig.Handler.Type
+		}
+		if registry.ListenerRegistry().Get(listenerType) == nil {
+			return fmt.Errorf("unknown listener: %s", listenerType)
+		}
+		if registry.HandlerRegistry().Get(handlerType) == nil {
+			return fmt.Errorf("unknown handler: %s", handlerType)
+		}
+	}
+	staged := make([]service.Service, 0, len(req.Data))
+	committed := false
+	defer func() {
+		if committed {
+			return
+		}
+		for i, svc := range staged {
+			if registry.ServiceRegistry().Get(req.Data[i].Name) == svc {
+				registry.ServiceRegistry().Unregister(req.Data[i].Name)
+			}
 			svc.Close()
-			return errors.New("service " + name + " already exists")
 		}
-
-		// 6. 启动新服务
-		go svc.Serve()
+		// Updating an existing port requires releasing the old listener. Restore
+		// its original configuration when the replacement cannot be installed.
+		for _, cfg := range previous {
+			svc, err := parser.ParseService(cfg)
+			if err == nil {
+				paused := cfg.Metadata != nil && cfg.Metadata["paused"] == true
+				if paused {
+					svc.Close()
+				}
+				err = registry.ServiceRegistry().Register(cfg.Name, svc)
+				if err != nil {
+					svc.Close()
+				} else if !paused {
+					go svc.Serve()
+				}
+			}
+			if err != nil {
+				resultErr = errors.Join(resultErr, fmt.Errorf("restore service %s failed: %w", cfg.Name, err))
+			}
+		}
+	}()
+	for _, cfg := range previous {
+		old := registry.ServiceRegistry().Get(cfg.Name)
+		old.Close()
+		registry.ServiceRegistry().Unregister(cfg.Name)
 	}
-
-	// 第三阶段：更新配置
-	config.OnUpdate(func(c *config.Config) error {
-		for _, serviceConfig := range req.Data {
+	for i := range req.Data {
+		svc, err := parser.ParseService(&req.Data[i])
+		if err != nil {
+			return fmt.Errorf("update service %s failed: %w", req.Data[i].Name, err)
+		}
+		staged = append(staged, svc)
+	}
+	for i, svc := range staged {
+		if err := registry.ServiceRegistry().Register(req.Data[i].Name, svc); err != nil {
+			return fmt.Errorf("service %s already exists", req.Data[i].Name)
+		}
+	}
+	if err := config.OnUpdate(func(c *config.Config) error {
+		for j := range req.Data {
 			for i := range c.Services {
-				if c.Services[i].Name == serviceConfig.Name {
-					c.Services[i] = &serviceConfig
+				if c.Services[i].Name == req.Data[j].Name {
+					c.Services[i] = &req.Data[j]
 					break
 				}
 			}
 		}
 		return nil
-	})
-
+	}); err != nil {
+		return err
+	}
+	committed = true
+	for i, svc := range staged {
+		if req.Data[i].Metadata != nil && req.Data[i].Metadata["paused"] == true {
+			svc.Close()
+		} else {
+			go svc.Serve()
+		}
+	}
 	return nil
 }
 
 func deleteServices(req deleteServicesRequest) error {
+	serviceMutationMu.Lock()
+	defer serviceMutationMu.Unlock()
 
 	if len(req.Services) == 0 {
 		return errors.New("services list cannot be empty")
@@ -204,6 +279,8 @@ func deleteServices(req deleteServicesRequest) error {
 }
 
 func pauseServices(req pauseServicesRequest) error {
+	serviceMutationMu.Lock()
+	defer serviceMutationMu.Unlock()
 
 	if len(req.Services) == 0 {
 		return errors.New("services list cannot be empty")
@@ -302,32 +379,27 @@ func pauseServices(req pauseServicesRequest) error {
 }
 
 func resumeServices(req resumeServicesRequest) error {
+	serviceMutationMu.Lock()
+	defer serviceMutationMu.Unlock()
 	if len(req.Services) == 0 {
 		return errors.New("services list cannot be empty")
 	}
-
-	// 第一阶段：验证所有服务是否存在，并筛选需要恢复的服务
 	var servicesToResume []struct {
 		name          string
 		service       service.Service
 		serviceConfig *config.ServiceConfig
 	}
-	var skippedServices []string
-
+	names := make(map[string]bool, len(req.Services))
 	cfg := config.Global()
 	for _, serviceName := range req.Services {
 		name := strings.TrimSpace(serviceName)
 		if name == "" {
 			return errors.New("service name is required")
 		}
-
-		// 检查服务是否存在
-		svc := registry.ServiceRegistry().Get(name)
-		if svc == nil {
-			return errors.New(fmt.Sprintf("service %s not found", name))
+		if names[name] {
+			continue
 		}
-
-		// 查找配置中的服务
+		names[name] = true
 		var serviceConfig *config.ServiceConfig
 		for _, s := range cfg.Services {
 			if s.Name == name {
@@ -340,65 +412,57 @@ func resumeServices(req resumeServicesRequest) error {
 			return errors.New(fmt.Sprintf("service %s configuration not found", name))
 		}
 
-		// 检查是否处于暂停状态
-		paused := false
-		if serviceConfig.Metadata != nil {
-			if pausedVal, exists := serviceConfig.Metadata["paused"]; exists && pausedVal == true {
-				paused = true
-			}
-		}
-
-		// 如果服务没有暂停(即正在运行)，跳过
-		if !paused {
-			skippedServices = append(skippedServices, name)
+		svc := registry.ServiceRegistry().Get(name)
+		paused := serviceConfig.Metadata != nil && serviceConfig.Metadata["paused"] == true
+		if !paused && svc != nil {
 			continue
 		}
-
 		servicesToResume = append(servicesToResume, struct {
 			name          string
 			service       service.Service
 			serviceConfig *config.ServiceConfig
 		}{name, svc, serviceConfig})
 	}
-
-	// 第二阶段：事务性恢复所有服务
-	var resumedServices []struct {
-		name          string
-		service       service.Service
-		serviceConfig *config.ServiceConfig
-	}
-
-	// 逐个恢复服务，如果失败则回滚
+	// Keep the closed, paused registry entries until the complete batch has
+	// parsed successfully. A failed TCP/UDP pair can then be retried without
+	// leaving one side missing or one side running.
+	staged := make([]service.Service, 0, len(servicesToResume))
+	committed := false
+	defer func() {
+		if committed {
+			return
+		}
+		for i, svc := range staged {
+			str := servicesToResume[i]
+			if registry.ServiceRegistry().Get(str.name) == svc {
+				registry.ServiceRegistry().Unregister(str.name)
+				if str.service != nil {
+					_ = registry.ServiceRegistry().Register(str.name, str.service)
+				}
+			}
+			svc.Close()
+		}
+	}()
 	for _, str := range servicesToResume {
-		// 先关闭现有服务
-		str.service.Close()
-		registry.ServiceRegistry().Unregister(str.name)
-
-		// 等待端口释放
-		time.Sleep(100 * time.Millisecond)
-
-		// 重新解析并启动服务
+		if str.service != nil {
+			str.service.Close()
+		}
 		svc, err := parser.ParseService(str.serviceConfig)
 		if err != nil {
-			// 恢复失败，回滚已恢复的服务
-			rollbackResumedServices(resumedServices)
-			return errors.New(fmt.Sprintf("resume service %s failed: %s", str.name, err.Error()))
+			return fmt.Errorf("resume service %s failed: %w", str.name, err)
 		}
-
-		if err := registry.ServiceRegistry().Register(str.name, svc); err != nil {
-			svc.Close()
-			// 恢复失败，回滚已恢复的服务
-			rollbackResumedServices(resumedServices)
-			return errors.New(fmt.Sprintf("service %s already exists", str.name))
-		}
-
-		go svc.Serve()
-
-		// 记录已成功恢复的服务
-		resumedServices = append(resumedServices, str)
+		staged = append(staged, svc)
 	}
-
-	// 第三阶段：更新配置，移除暂停状态
+	for i, svc := range staged {
+		str := servicesToResume[i]
+		registry.ServiceRegistry().Unregister(str.name)
+		if err := registry.ServiceRegistry().Register(str.name, svc); err != nil {
+			if str.service != nil {
+				_ = registry.ServiceRegistry().Register(str.name, str.service)
+			}
+			return fmt.Errorf("service %s already exists", str.name)
+		}
+	}
 	err := config.OnUpdate(func(c *config.Config) error {
 		for _, str := range servicesToResume {
 			for i := range c.Services {
@@ -416,13 +480,13 @@ func resumeServices(req resumeServicesRequest) error {
 		}
 		return nil
 	})
-
 	if err != nil {
-		// 配置更新失败，回滚所有已恢复的服务
-		rollbackResumedServices(resumedServices)
-		return errors.New(fmt.Sprintf("Failed to update config, rolling back resumed services: %v", err))
+		return fmt.Errorf("failed to update resumed services configuration: %w", err)
 	}
-
+	committed = true
+	for _, svc := range staged {
+		go svc.Serve()
+	}
 	return nil
 }
 

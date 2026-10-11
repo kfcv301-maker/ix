@@ -73,6 +73,9 @@ interface NodeSystemInfo {
     load1?: number;
     tcpConnections?: number;
     udpConnections?: number;
+    udpQueuedBytes?: number;
+    udpQueueByteLimit?: number;
+    udpQueueDrops?: number;
     tcpTuningMode?: string;
     tcpTuningMinimum?: string;
     tcpTuningMaximum?: string;
@@ -418,6 +421,9 @@ export default function NodePage() {
               load1: keepPreviousOptionalNumber(systemInfo.load_1, previousInfo?.load1),
               tcpConnections: keepPreviousOptionalNumber(systemInfo.tcp_connections, previousInfo?.tcpConnections),
               udpConnections: keepPreviousOptionalNumber(systemInfo.udp_connections, previousInfo?.udpConnections),
+              udpQueuedBytes: keepPreviousOptionalNumber(systemInfo.udp_queued_bytes, previousInfo?.udpQueuedBytes),
+              udpQueueByteLimit: keepPreviousOptionalNumber(systemInfo.udp_queue_byte_limit, previousInfo?.udpQueueByteLimit),
+              udpQueueDrops: keepPreviousOptionalNumber(systemInfo.udp_queue_drops, previousInfo?.udpQueueDrops),
               tcpTuningMode: keepPreviousOptionalString(systemInfo.tcp_tuning_mode, previousInfo?.tcpTuningMode),
               tcpTuningMinimum: keepPreviousOptionalString(systemInfo.tcp_tuning_minimum, previousInfo?.tcpTuningMinimum),
               tcpTuningMaximum: keepPreviousOptionalString(systemInfo.tcp_tuning_maximum, previousInfo?.tcpTuningMaximum),
@@ -1203,6 +1209,8 @@ export default function NodePage() {
                   <div className="grid grid-cols-2 gap-3 rounded-lg border border-divider p-3 text-center text-sm md:grid-cols-4">
                     <div><div className="text-default-500">TCP 已建立</div><div className="mt-1 font-mono">{formatOptionalNumber(monitorNode.systemInfo.tcpConnections)}</div></div>
                     <div><div className="text-default-500">UDP 活动套接字</div><div className="mt-1 font-mono">{formatOptionalNumber(monitorNode.systemInfo.udpConnections)}</div></div>
+                    <div><div className="text-default-500">UDP 排队内存 / 预算</div><div className="mt-1 font-mono">{formatOptionalRatio(monitorNode.systemInfo.udpQueuedBytes, monitorNode.systemInfo.udpQueueByteLimit)}</div></div>
+                    <div><div className="text-default-500">UDP 累计丢包</div><div className="mt-1 font-mono">{formatOptionalNumber(monitorNode.systemInfo.udpQueueDrops)}</div></div>
                     <div><div className="text-default-500">内存可用</div><div className="mt-1 font-mono">{formatOptionalCapacity(monitorNode.systemInfo.memoryAvailable)}</div></div>
                     <div><div className="text-default-500">缓存</div><div className="mt-1 font-mono">{formatOptionalCapacity(monitorNode.systemInfo.memoryCached)}</div></div>
                     <div><div className="text-default-500">Swap 已用</div><div className="mt-1 font-mono">{formatOptionalRatio(monitorNode.systemInfo.swapUsed, monitorNode.systemInfo.swapTotal)}</div></div>
