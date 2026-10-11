@@ -137,6 +137,7 @@ func (ln *listener) Close() error {
 		close(ln.closed)
 		ln.conn.Close()
 		ln.connPool.Close()
+		ln.drainBacklog()
 	})
 
 	return nil
@@ -158,6 +159,9 @@ func (ln *listener) getConn(raddr net.Addr) *conn {
 	select {
 	case ln.cqueue <- c:
 		if !ln.connPool.Set(key, c) {
+			// Close may have drained just before this in-flight enqueue. Its
+			// rejected producer also drains so closed peers are not retained.
+			ln.drainBacklog()
 			return nil
 		}
 		return c
@@ -166,6 +170,17 @@ func (ln *listener) getConn(raddr net.Addr) *conn {
 		sharedQueueBudget.dropped.Add(1)
 		ln.reportDrop(errors.New("connection queue is full"))
 		return nil
+	}
+}
+
+func (ln *listener) drainBacklog() {
+	for {
+		select {
+		case c := <-ln.cqueue:
+			c.Close()
+		default:
+			return
+		}
 	}
 }
 

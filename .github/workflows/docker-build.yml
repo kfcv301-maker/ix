@@ -194,18 +194,21 @@ jobs:
             exit 0
           fi
           build_dir="$(mktemp -d "${RUNNER_TEMP}/lunaris-agent-build.XXXXXX")"
-          source_dir="$build_dir/source"
           # Documentation/artifact-only commits may follow the last Go change.
           # Build that actual source commit, rather than embedding a later HEAD.
-          git worktree add --detach "$source_dir" "$source_revision"
+          # Go 1.23 does not embed VCS info for a linked worktree (.git is a
+          # file), so use this isolated runner's original checkout instead.
+          git checkout --detach "$source_revision"
           # Keep outputs outside the source checkout for clean VCS metadata.
           # Installer assets stay unpacked to preserve Go build info.
           for arch in amd64 arm64; do
-            (cd "$source_dir/go-gost" && CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -ldflags="-s -w" -o "$build_dir/flux-panel-agent-linux-$arch")
+            (cd go-gost && CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -mod=readonly -ldflags="-s -w" -o "$build_dir/flux-panel-agent-linux-$arch")
             binary="$build_dir/flux-panel-agent-linux-$arch"
             embedded_revision="$(go version -m "$binary" | awk '$1 == "build" && $2 ~ /^vcs.revision=/ { sub(/^vcs.revision=/, "", $2); print $2 }')"
             [[ "$embedded_revision" == "$source_revision" ]] || { echo 'Agent build revision mismatch' >&2; exit 1; }
+            go version -m "$binary" | grep -q 'vcs.modified=false' || { echo 'Agent source checkout is dirty' >&2; exit 1; }
           done
+          git checkout --detach "$EXPECTED_HEAD"
           actual_head="$(git ls-remote origin "refs/heads/${HEAD_BRANCH}" | awk '{print $1}')"
           if [[ "$actual_head" != "$EXPECTED_HEAD" ]]; then
             echo 'The branch changed during the build; leaving its artifacts untouched.'
