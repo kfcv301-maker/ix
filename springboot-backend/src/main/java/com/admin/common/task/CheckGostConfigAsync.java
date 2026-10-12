@@ -25,6 +25,8 @@ import java.util.concurrent.ConcurrentHashMap;
 @Slf4j
 @Service
 public class CheckGostConfigAsync {
+    @Resource private com.admin.common.service.UserProtocolPolicyService userProtocolPolicyService;
+    @Resource @Lazy private UserProtocolPolicySyncService userProtocolPolicySyncService;
     @Resource
     private com.admin.common.service.UserTunnelAliasService userTunnelAliasService;
 
@@ -92,10 +94,11 @@ public class CheckGostConfigAsync {
                 cleanOrphanedLimiters(gostConfig, node);
                 // Restore limiters first. A recovered service that references a
                 // limiter before it exists can start without its assigned cap.
-                syncLimiters(gostConfig, node);
+                Set<Long> confirmedLimiters = syncLimiters(gostConfig, node);
                 // 重装节点会让 GOST 侧的运行时服务消失，但数据库中的转发记录仍然存在。
                 // 配置上报发生在 WebSocket 建立之后，正是无人工编辑即可恢复缺失服务的安全时机。
-                syncMissingForwards(gostConfig, node);
+                syncMissingForwards(gostConfig, node, confirmedLimiters);
+                userProtocolPolicySyncService.syncInventory(node.getId(), gostConfig.getServices());
             }
             // Run durable quota/expiry pauses after the inventory has been
             // reconciled. This avoids a reconnect briefly restoring a service
@@ -114,6 +117,8 @@ public class CheckGostConfigAsync {
         }
 
         Map<Long, Forward> forwardsById = loadForwardsByConfigItems(gostConfig.getServices());
+        if (forwardsById == null) return;
+        Set<String> cleanedIngressBases = new HashSet<>();
         for (ConfigItem service : gostConfig.getServices()) {
             if (service == null) {
                 continue;
@@ -134,10 +139,22 @@ public class CheckGostConfigAsync {
                         Forward forward = forwardsById.get(forwardRecordId);
 
                         String baseServiceName = forwardId + "_" + userId + "_" + userTunnelId;
-                        if (Objects.equals(type, "tcp")) { // 只处理TCP，避免重复处理
-                            if (forward == null) {
+                        if (Objects.equals(type, "tcp") || Objects.equals(type, "udp")) {
+                            if (forward == null && cleanedIngressBases.add(baseServiceName)) {
                                 log.info("删除孤立的服务: {} (节点: {})", service.getName(), node.getId());
-                                GostUtil.DeleteService(node.getId(), baseServiceName);
+                                // Older Agents reject a pair if either side is
+                                // absent. Singleton commands also clean UDP-only
+                                // orphans without deleting a healthy forward.
+                                for (String protocol : List.of("tcp", "udp")) {
+                                    safeExecute(() -> {
+                                        String target = baseServiceName + "_" + protocol;
+                                        GostDto result = GostUtil.DeleteServiceProtocol(node.getId(), baseServiceName, protocol);
+                                        if (!isDeletionConfirmed(result, "service", target)) {
+                                            log.warn("清理孤立服务 {} 尚未获节点 {} 确认: {}", target, node.getId(),
+                                                    result == null ? "无响应" : result.getMsg());
+                                        }
+                                    }, "清理孤立服务 " + baseServiceName + "_" + protocol);
+                                }
                             }
                         }
 
@@ -168,6 +185,7 @@ public class CheckGostConfigAsync {
         
 
         Map<Long, Forward> forwardsById = loadForwardsByConfigItems(gostConfig.getChains());
+        if (forwardsById == null) return;
         for (ConfigItem chain : gostConfig.getChains()) {
             if (chain == null) {
                 continue;
@@ -244,9 +262,14 @@ public class CheckGostConfigAsync {
     /**
      * 同步限流器
      */
-    private void syncLimiters(GostConfigDto gostConfig, Node node) {
+    private Set<Long> syncLimiters(GostConfigDto gostConfig, Node node) {
+        Set<Long> confirmedLimiters = new HashSet<>();
+        if (gostConfig.getLimiters() == null) {
+            log.warn("节点 {} 未上报限速器清单，跳过限速器恢复", node.getId());
+            return confirmedLimiters;
+        }
         List<Tunnel> tunnelList = getIngressTunnels(node.getId());
-        if (tunnelList == null || tunnelList.isEmpty()) return;
+        if (tunnelList == null || tunnelList.isEmpty()) return confirmedLimiters;
         safeExecute(() -> {
             List<Long> tunnelIds = new ArrayList<>();
             for (Tunnel tunnel : tunnelList) {
@@ -259,6 +282,7 @@ public class CheckGostConfigAsync {
                 Set<Long> limiterIds = new HashSet<>();
                 if (limiters != null) {
                     for (ConfigItem limiter : limiters) {
+                        if (limiter == null || limiter.getName() == null) continue;
                         try {
                             limiterIds.add(Long.valueOf(limiter.getName()));
                         } catch (NumberFormatException ignored) {
@@ -267,24 +291,34 @@ public class CheckGostConfigAsync {
                     }
                 }
                 for (SpeedLimit speedLimit : speedLimits) {
-                    if (!limiterIds.contains(speedLimit.getId())) {
+                    if (limiterIds.contains(speedLimit.getId())) {
+                        confirmedLimiters.add(speedLimit.getId());
+                    } else {
                         R result = speedLimitService.ensureLimiterOnNode(speedLimit.getId(), node.getId());
-                        if (result.getCode() != 0) {
-                            log.warn("节点 {} 恢复限速器 {} 失败: {}", node.getId(), speedLimit.getId(), result.getMsg());
+                        if (result != null && result.getCode() == 0) {
+                            confirmedLimiters.add(speedLimit.getId());
+                        } else {
+                            log.warn("节点 {} 恢复限速器 {} 失败: {}", node.getId(), speedLimit.getId(),
+                                    result == null ? "无响应" : result.getMsg());
                         }
                     }
                 }
             }
         }, "同步限流器 ");
+        return confirmedLimiters;
     }
 
     /**
      * 恢复节点重装后丢失的活动转发。
      *
-     * 只处理配置上报中完全缺失的服务，不触碰节点仍在运行的服务，也不修改
+     * 只创建完整配置上报中缺失的协议，不触碰节点仍在运行的服务，也不修改
      * 数据库中的转发状态。这样既能恢复重装节点，又不会中断正常转发。
      */
-    private void syncMissingForwards(GostConfigDto gostConfig, Node node) {
+    private void syncMissingForwards(GostConfigDto gostConfig, Node node, Set<Long> confirmedLimiters) {
+        if (gostConfig.getServices() == null) {
+            log.warn("节点 {} 未上报服务清单，跳过缺失转发恢复", node.getId());
+            return;
+        }
         Set<String> serviceNames = getConfigNames(gostConfig.getServices());
         Set<String> chainNames = getConfigNames(gostConfig.getChains());
         List<Tunnel> ingressTunnels = getIngressTunnels(node.getId());
@@ -327,6 +361,7 @@ public class CheckGostConfigAsync {
         long now = System.currentTimeMillis();
 
         for (Forward forward : activeForwards) {
+            if (!Objects.equals(forward.getStatus(), 1)) continue;
             Tunnel tunnel = relevantTunnels.get(forward.getTunnelId().longValue());
             if (tunnel == null || !Objects.equals(tunnel.getStatus(), 1)) continue;
 
@@ -340,17 +375,31 @@ public class CheckGostConfigAsync {
             int userTunnelId = userTunnel == null ? 0 : userTunnel.getId();
             String serviceName = forward.getId() + "_" + forward.getUserId() + "_" + userTunnelId;
 
-            boolean mainServiceMissing = isInNode
-                    && !serviceNames.contains(serviceName + "_tcp")
-                    && !serviceNames.contains(serviceName + "_udp");
-            boolean chainMissing = isInNode && Objects.equals(tunnel.getType(), 2)
+            // A relay ingress depends on its chain. An omitted chains field is
+            // not evidence that a chain exists or that it is safe to create it.
+            boolean canRestoreIngress = isInNode
+                    && (!Objects.equals(tunnel.getType(), 2) || gostConfig.getChains() != null);
+            boolean limiterReady = userTunnel == null || userTunnel.getSpeedId() == null
+                    || confirmedLimiters.contains(userTunnel.getSpeedId().longValue());
+            boolean tcpMissing = canRestoreIngress && limiterReady && !serviceNames.contains(serviceName + "_tcp");
+            boolean udpMissing = canRestoreIngress && limiterReady && !serviceNames.contains(serviceName + "_udp");
+            if (canRestoreIngress && !limiterReady && (!serviceNames.contains(serviceName + "_tcp")
+                    || !serviceNames.contains(serviceName + "_udp")
+                    || (Objects.equals(tunnel.getType(), 2) && !chainNames.contains(serviceName + "_chains")))) {
+                log.warn("节点 {} 的转发 {} 暂缓恢复：限速器 {} 尚未获节点确认",
+                        node.getId(), forward.getId(), userTunnel.getSpeedId());
+            }
+            // Legacy ingress aliases may still be carrying live traffic. Do
+            // not clean them for a chain-only repair if their capped successor
+            // cannot be created yet; defer the entire ingress recovery.
+            boolean chainMissing = canRestoreIngress && limiterReady && Objects.equals(tunnel.getType(), 2)
                     && !chainNames.contains(serviceName + "_chains");
             boolean remoteServiceMissing = isOutNode && Objects.equals(tunnel.getType(), 2)
                     && !serviceNames.contains(serviceName + "_tls");
 
-            if (mainServiceMissing || chainMissing || remoteServiceMissing) {
+            if (tcpMissing || udpMissing || chainMissing || remoteServiceMissing) {
                 safeExecute(() -> restoreMissingForward(node, forward, tunnel, userTunnel, serviceName,
-                        mainServiceMissing, chainMissing, remoteServiceMissing), "恢复缺失转发 " + serviceName);
+                        tcpMissing, udpMissing, chainMissing, remoteServiceMissing), "恢复缺失转发 " + serviceName);
             }
         }
     }
@@ -379,11 +428,22 @@ public class CheckGostConfigAsync {
         }
         Map<Long, Forward> forwardsById = new LinkedHashMap<>();
         if (!forwardIds.isEmpty()) {
-            for (Forward forward : forwardService.listByIds(forwardIds)) {
+            List<Forward> records = forwardService.listByIds(forwardIds);
+            if (records == null || records.stream().anyMatch(forward -> forward == null || forward.getId() == null)) {
+                log.warn("转发引用查询未返回完整结果，跳过孤立配置清理");
+                return null;
+            }
+            for (Forward forward : records) {
                 forwardsById.put(forward.getId(), forward);
             }
         }
         return forwardsById;
+    }
+
+    private boolean isDeletionConfirmed(GostDto result, String kind, String target) {
+        if (result == null || result.getMsg() == null) return false;
+        String message = result.getMsg().trim();
+        return "OK".equalsIgnoreCase(message) || (kind + " " + target + " not found").equals(message);
     }
 
     private Long parseForwardId(String value) {
@@ -448,9 +508,9 @@ public class CheckGostConfigAsync {
     }
 
     private void restoreMissingForward(Node node, Forward forward, Tunnel tunnel, UserTunnel userTunnel,
-                                       String serviceName, boolean mainServiceMissing, boolean chainMissing,
+                                       String serviceName, boolean tcpMissing, boolean udpMissing, boolean chainMissing,
                                        boolean remoteServiceMissing) {
-        boolean ingress = mainServiceMissing || chainMissing;
+        boolean ingress = tcpMissing || udpMissing || chainMissing;
         String cleanupError = userTunnelAliasService.removeLegacyOnNode(node.getId(), forward, tunnel, userTunnel, ingress);
         if (cleanupError == null && ingress && remoteServiceMissing) {
             cleanupError = userTunnelAliasService.removeLegacyOnNode(node.getId(), forward, tunnel, userTunnel, false);
@@ -461,23 +521,24 @@ public class CheckGostConfigAsync {
         }
         Integer limiter = userTunnel == null ? null : userTunnel.getSpeedId();
 
+        if (remoteServiceMissing) {
+            GostDto result = GostUtil.AddRemoteService(node.getId(), serviceName, forward.getOutPort(),
+                    forward.getRemoteAddr(), tunnel.getProtocol(), forward.getStrategy(), tunnel.getInterfaceName());
+            if (!logRestoreResult("远端服务", serviceName, node.getId(), result)) return;
+        }
+
         if (chainMissing) {
             String remoteAddress = formatAddress(tunnel.getOutIp(), forward.getOutPort());
             GostDto result = GostUtil.AddChains(node.getId(), serviceName, remoteAddress,
                     tunnel.getProtocol(), tunnel.getInterfaceName());
-            logRestoreResult("链", serviceName, node.getId(), result);
+            if (!logRestoreResult("链", serviceName, node.getId(), result)) return;
         }
 
-        if (remoteServiceMissing) {
-            GostDto result = GostUtil.AddRemoteService(node.getId(), serviceName, forward.getOutPort(),
-                    forward.getRemoteAddr(), tunnel.getProtocol(), forward.getStrategy(), tunnel.getInterfaceName());
-            logRestoreResult("远端服务", serviceName, node.getId(), result);
-        }
-
-        if (mainServiceMissing) {
+        if (tcpMissing || udpMissing) {
             String interfaceName = Objects.equals(tunnel.getType(), 2) ? null : forward.getInterfaceName();
-            GostDto result = GostUtil.AddService(node.getId(), serviceName, forward.getInPort(), limiter,
-                    forward.getRemoteAddr(), tunnel.getType(), tunnel, forward.getStrategy(), interfaceName);
+            GostDto result = GostUtil.AddMissingService(node.getId(), serviceName, forward.getInPort(), limiter,
+                    forward.getRemoteAddr(), tunnel.getType(), tunnel, forward.getStrategy(), interfaceName,
+                    userProtocolPolicyService.forForward(forward), tcpMissing, udpMissing);
             logRestoreResult("主服务", serviceName, node.getId(), result);
         }
     }
@@ -486,12 +547,14 @@ public class CheckGostConfigAsync {
         return GostUtil.formatAddress(host, port);
     }
 
-    private void logRestoreResult(String configType, String serviceName, Long nodeId, GostDto result) {
+    private boolean logRestoreResult(String configType, String serviceName, Long nodeId, GostDto result) {
         if (result == null || !Objects.equals(result.getMsg(), "OK")) {
             log.warn("恢复{}失败: {} (节点: {}): {}", configType, serviceName, nodeId,
                     result == null ? "无响应" : result.getMsg());
+            return false;
         } else {
             log.info("已恢复{}: {} (节点: {})", configType, serviceName, nodeId);
+            return true;
         }
     }
 
@@ -526,7 +589,10 @@ public class CheckGostConfigAsync {
     }
 
     private String configSignature(List<ConfigItem> items) {
-        if (items == null || items.isEmpty()) return "";
+        // An omitted inventory must not suppress a subsequent complete empty
+        // inventory: only the latter can safely trigger missing-item recovery.
+        if (items == null) return null;
+        if (items.isEmpty()) return "";
         List<String> names = new ArrayList<>();
         for (ConfigItem item : items) {
             if (item != null && item.getName() != null) names.add(item.getName());

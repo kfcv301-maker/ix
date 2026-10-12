@@ -49,6 +49,7 @@ import java.util.UUID;
 @Slf4j
 @Service
 public class ForwardSyncTaskService {
+    @Resource private com.admin.common.service.UserProtocolPolicyService userProtocolPolicyService;
     @Resource
     private com.admin.common.service.UserTunnelAliasService userTunnelAliasService;
 
@@ -498,6 +499,13 @@ public class ForwardSyncTaskService {
             return null;
         }
 
+        com.alibaba.fastjson2.JSONObject policy = userProtocolPolicyService.forForward(forward);
+        result = GostUtil.SetUserProtocolPolicy(task.getNodeId(), List.of(task.getServiceName() + "_tcp",
+                task.getServiceName() + "_udp"), policy);
+        if (!isSuccess(result) && !isNotFound(result)
+                && com.admin.common.service.UserProtocolPolicyService.restricted(policy)) {
+            return endpointError("同步用户协议限制", result);
+        }
         result = GostUtil.ResumeService(task.getNodeId(), task.getServiceName());
         if (isSuccess(result)) return null;
         if (!isNotFound(result)) return endpointError("恢复入口服务", result);
@@ -538,7 +546,8 @@ public class ForwardSyncTaskService {
         String interfaceName = Objects.equals(tunnel.getType(), TUNNEL_TYPE_TUNNEL_FORWARD)
                 ? null : forward.getInterfaceName();
         GostDto serviceResult = GostUtil.AddService(task.getNodeId(), task.getServiceName(), forward.getInPort(),
-                limiter, forward.getRemoteAddr(), tunnel.getType(), tunnel, forward.getStrategy(), interfaceName);
+                limiter, forward.getRemoteAddr(), tunnel.getType(), tunnel, forward.getStrategy(), interfaceName,
+                userProtocolPolicyService.forForward(forward));
         return isSuccess(serviceResult) ? null : endpointError("重建入口服务", serviceResult);
     }
 

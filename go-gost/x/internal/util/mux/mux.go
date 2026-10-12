@@ -75,25 +75,45 @@ type Session struct {
 }
 
 func ClientSession(conn net.Conn, cfg *Config) (*Session, error) {
-	s, err := smux.Client(conn, convertConfig(cfg))
+	if !metricsEnabled {
+		s, err := smux.Client(conn, convertConfig(cfg))
+		if err != nil {
+			return nil, err
+		}
+		return &Session{conn: conn, session: s}, nil
+	}
+	tracked, transport := newSessionConn(conn)
+	s, err := smux.Client(transport, convertConfig(cfg))
 	if err != nil {
 		return nil, err
 	}
-	return &Session{
+	session := &Session{
 		conn:    conn,
 		session: s,
-	}, nil
+	}
+	tracked.attach(session)
+	return session, nil
 }
 
 func ServerSession(conn net.Conn, cfg *Config) (*Session, error) {
-	s, err := smux.Server(conn, convertConfig(cfg))
+	if !metricsEnabled {
+		s, err := smux.Server(conn, convertConfig(cfg))
+		if err != nil {
+			return nil, err
+		}
+		return &Session{conn: conn, session: s}, nil
+	}
+	tracked, transport := newSessionConn(conn)
+	s, err := smux.Server(transport, convertConfig(cfg))
 	if err != nil {
 		return nil, err
 	}
-	return &Session{
+	session := &Session{
 		conn:    conn,
 		session: s,
-	}, nil
+	}
+	tracked.attach(session)
+	return session, nil
 }
 
 func (session *Session) GetConn() (net.Conn, error) {
@@ -145,4 +165,18 @@ func (c *streamConn) Write(b []byte) (n int, err error) {
 
 func (c *streamConn) Close() error {
 	return c.stream.Close()
+}
+
+// Deadlines belong to the logical stream. Applying them to the shared physical
+// connection can time out unrelated streams in the same session.
+func (c *streamConn) SetDeadline(t time.Time) error {
+	return c.stream.SetDeadline(t)
+}
+
+func (c *streamConn) SetReadDeadline(t time.Time) error {
+	return c.stream.SetReadDeadline(t)
+}
+
+func (c *streamConn) SetWriteDeadline(t time.Time) error {
+	return c.stream.SetWriteDeadline(t)
 }

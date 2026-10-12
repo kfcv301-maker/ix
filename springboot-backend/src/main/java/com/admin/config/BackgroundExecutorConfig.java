@@ -26,6 +26,11 @@ public class BackgroundExecutorConfig {
         return executor("node-config-", 1, 2, 32);
     }
 
+    @Bean("protocolPolicyExecutor")
+    public TaskExecutor protocolPolicyExecutor() {
+        return executor("protocol-policy-", 2, 4, 64);
+    }
+
     /** Coordinates short-lived tunnel diagnostics without holding HTTP threads. */
     @Bean("tunnelDiagnosisCoordinatorExecutor")
     public TaskExecutor tunnelDiagnosisCoordinatorExecutor() {

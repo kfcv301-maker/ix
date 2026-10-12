@@ -4,17 +4,17 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 
 	"github.com/go-gost/core/service"
 	"github.com/go-gost/x/config"
 	parser "github.com/go-gost/x/config/parsing/service"
+	"github.com/go-gost/x/internal/servicecontrol"
 	"github.com/go-gost/x/registry"
 )
 
 // Serialize commands that replace registry entries and configuration together.
 // This lock is never taken by packet forwarding or traffic accounting.
-var serviceMutationMu sync.Mutex
+var serviceMutationMu = &servicecontrol.MutationMu
 
 func createServices(req createServicesRequest) error {
 	serviceMutationMu.Lock()
@@ -123,6 +123,9 @@ func updateServices(req updateServicesRequest) (resultErr error) {
 		if previous[i] == nil {
 			return fmt.Errorf("service %s configuration not found", name)
 		}
+		if err := preserveServicePolicy(serviceConfig, previous[i]); err != nil {
+			return err
+		}
 		if previous[i].Metadata != nil && previous[i].Metadata["paused"] == true {
 			md := make(map[string]any, len(serviceConfig.Metadata)+1)
 			for k, v := range serviceConfig.Metadata {
@@ -219,6 +222,10 @@ func updateServices(req updateServicesRequest) (resultErr error) {
 	return nil
 }
 
+func preserveServicePolicy(incoming, current *config.ServiceConfig) error {
+	return servicecontrol.PreservePolicy(incoming, current)
+}
+
 func deleteServices(req deleteServicesRequest) error {
 	serviceMutationMu.Lock()
 	defer serviceMutationMu.Unlock()
@@ -227,55 +234,38 @@ func deleteServices(req deleteServicesRequest) error {
 		return errors.New("services list cannot be empty")
 	}
 
-	// 第一阶段：验证所有服务是否存在
-	var servicesToDelete []struct {
-		name    string
-		service service.Service
-	}
-
+	// Validate the full request first. Missing members are already deleted;
+	// a lost ACK or partially restored TCP/UDP pair must be safe to retry.
+	names := make(map[string]bool, len(req.Services))
 	for _, serviceName := range req.Services {
 		name := strings.TrimSpace(serviceName)
 		if name == "" {
 			return errors.New("service name is required")
 		}
+		names[name] = true
+	}
 
-		svc := registry.ServiceRegistry().Get(name)
-		if svc == nil {
-			return errors.New("service " + name + " not found")
+	var closeErr error
+	for name := range names {
+		if svc := registry.ServiceRegistry().Get(name); svc != nil {
+			registry.ServiceRegistry().Unregister(name)
+			closeErr = errors.Join(closeErr, svc.Close())
 		}
-
-		servicesToDelete = append(servicesToDelete, struct {
-			name    string
-			service service.Service
-		}{name, svc})
 	}
 
-	// 第二阶段：删除所有服务
-	for _, std := range servicesToDelete {
-		registry.ServiceRegistry().Unregister(std.name)
-		std.service.Close()
-	}
-
-	// 第三阶段：更新配置
-	config.OnUpdate(func(c *config.Config) error {
+	// Remove stale configuration too, even when its listener was absent.
+	updateErr := config.OnUpdate(func(c *config.Config) error {
 		services := c.Services
 		c.Services = nil
 		for _, s := range services {
-			shouldDelete := false
-			for _, std := range servicesToDelete {
-				if s.Name == std.name {
-					shouldDelete = true
-					break
-				}
-			}
-			if !shouldDelete {
+			if s == nil || !names[s.Name] {
 				c.Services = append(c.Services, s)
 			}
 		}
 		return nil
 	})
 
-	return nil
+	return errors.Join(closeErr, updateErr)
 }
 
 func pauseServices(req pauseServicesRequest) error {

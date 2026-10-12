@@ -19,6 +19,7 @@ import (
 	"github.com/go-gost/x/config"
 	"github.com/go-gost/x/internal/net/udp"
 	"github.com/go-gost/x/internal/util/crypto"
+	"github.com/go-gost/x/internal/util/mux"
 	"github.com/go-gost/x/service"
 	"github.com/gorilla/websocket"
 	"github.com/shirou/gopsutil/v3/cpu"
@@ -32,36 +33,41 @@ import (
 
 // SystemInfo 系统信息结构体
 type SystemInfo struct {
-	MetricsLevel      string   `json:"metrics_level,omitempty"` // summary: 轻量心跳，detail: 完整采样
-	Uptime            uint64   `json:"uptime"`                  // 开机时间	（秒）
-	BytesReceived     uint64   `json:"bytes_received"`          // 接收字节数
-	BytesTransmitted  uint64   `json:"bytes_transmitted"`       // 发送字节数
-	CPUUsage          float64  `json:"cpu_usage"`               // CPU使用率（百分比）
-	MemoryUsage       float64  `json:"memory_usage"`            // 内存使用率（百分比）
-	CPUCores          int      `json:"cpu_cores,omitempty"`     // CPU逻辑核心数
-	MemoryTotal       uint64   `json:"memory_total,omitempty"`  // 内存总量（字节）
-	DiskTotal         uint64   `json:"disk_total,omitempty"`    // 根分区总量（字节）
-	MemoryUsed        *uint64  `json:"memory_used,omitempty"`
-	MemoryAvailable   *uint64  `json:"memory_available,omitempty"`
-	MemoryCached      *uint64  `json:"memory_cached,omitempty"`
-	SwapUsed          *uint64  `json:"swap_used,omitempty"`
-	SwapTotal         *uint64  `json:"swap_total,omitempty"`
-	AgentRSS          *uint64  `json:"agent_rss,omitempty"`
-	AgentHeapAlloc    *uint64  `json:"agent_heap_alloc,omitempty"`
-	Goroutines        *uint64  `json:"goroutines,omitempty"`
-	DiskUsed          *uint64  `json:"disk_used,omitempty"`
-	DiskUsedPercent   *float64 `json:"disk_used_percent,omitempty"`
-	Load1             *float64 `json:"load_1,omitempty"`
-	TCPConnections    *uint64  `json:"tcp_connections,omitempty"`
-	UDPConnections    *uint64  `json:"udp_connections,omitempty"`
-	UDPQueuedBytes    *uint64  `json:"udp_queued_bytes,omitempty"`
-	UDPQueueByteLimit *uint64  `json:"udp_queue_byte_limit,omitempty"`
-	UDPQueueDrops     *uint64  `json:"udp_queue_drops,omitempty"`
-	TCPTuningMode     *string  `json:"tcp_tuning_mode,omitempty"`
-	TCPTuningMinimum  *string  `json:"tcp_tuning_minimum,omitempty"`
-	TCPTuningMaximum  *string  `json:"tcp_tuning_maximum,omitempty"`
-	TCPTuningCurrent  *string  `json:"tcp_tuning_current,omitempty"`
-	TCPTuningReason   *string  `json:"tcp_tuning_reason,omitempty"`
+	MetricsLevel       string   `json:"metrics_level,omitempty"` // summary: 轻量心跳，detail: 完整采样
+	Uptime             uint64   `json:"uptime"`                  // 开机时间	（秒）
+	BytesReceived      uint64   `json:"bytes_received"`          // 接收字节数
+	BytesTransmitted   uint64   `json:"bytes_transmitted"`       // 发送字节数
+	CPUUsage           float64  `json:"cpu_usage"`               // CPU使用率（百分比）
+	MemoryUsage        float64  `json:"memory_usage"`            // 内存使用率（百分比）
+	CPUCores           int      `json:"cpu_cores,omitempty"`     // CPU逻辑核心数
+	MemoryTotal        uint64   `json:"memory_total,omitempty"`  // 内存总量（字节）
+	DiskTotal          uint64   `json:"disk_total,omitempty"`    // 根分区总量（字节）
+	MemoryUsed         *uint64  `json:"memory_used,omitempty"`
+	MemoryAvailable    *uint64  `json:"memory_available,omitempty"`
+	MemoryCached       *uint64  `json:"memory_cached,omitempty"`
+	SwapUsed           *uint64  `json:"swap_used,omitempty"`
+	SwapTotal          *uint64  `json:"swap_total,omitempty"`
+	AgentRSS           *uint64  `json:"agent_rss,omitempty"`
+	AgentHeapAlloc     *uint64  `json:"agent_heap_alloc,omitempty"`
+	Goroutines         *uint64  `json:"goroutines,omitempty"`
+	DiskUsed           *uint64  `json:"disk_used,omitempty"`
+	DiskUsedPercent    *float64 `json:"disk_used_percent,omitempty"`
+	Load1              *float64 `json:"load_1,omitempty"`
+	TCPConnections     *uint64  `json:"tcp_connections,omitempty"`
+	UDPConnections     *uint64  `json:"udp_connections,omitempty"`
+	UDPQueuedBytes     *uint64  `json:"udp_queued_bytes,omitempty"`
+	UDPQueueByteLimit  *uint64  `json:"udp_queue_byte_limit,omitempty"`
+	UDPQueueDrops      *uint64  `json:"udp_queue_drops,omitempty"`
+	MuxMetricsEnabled  *bool    `json:"mux_metrics_enabled,omitempty"`
+	MuxSessionsCurrent *uint64  `json:"mux_sessions_current,omitempty"`
+	MuxStreamsCurrent  *uint64  `json:"mux_streams_current,omitempty"`
+	MuxSessionsCreated *uint64  `json:"mux_sessions_created,omitempty"`
+	MuxSessionsClosed  *uint64  `json:"mux_sessions_closed,omitempty"`
+	TCPTuningMode      *string  `json:"tcp_tuning_mode,omitempty"`
+	TCPTuningMinimum   *string  `json:"tcp_tuning_minimum,omitempty"`
+	TCPTuningMaximum   *string  `json:"tcp_tuning_maximum,omitempty"`
+	TCPTuningCurrent   *string  `json:"tcp_tuning_current,omitempty"`
+	TCPTuningReason    *string  `json:"tcp_tuning_reason,omitempty"`
 }
 
 // NetworkStats 网络统计信息
@@ -84,30 +90,35 @@ type MemoryInfo struct {
 // CPU and traffic counters. It is cached for a short period so a busy node is
 // not forced to rescan sockets and process data on every heartbeat.
 type ExtendedSystemInfo struct {
-	MemoryTotal       uint64
-	MemoryUsed        *uint64
-	MemoryAvailable   *uint64
-	MemoryCached      *uint64
-	SwapUsed          *uint64
-	SwapTotal         *uint64
-	CPUCores          int
-	DiskTotal         uint64
-	DiskUsed          *uint64
-	DiskUsedPercent   *float64
-	Load1             *float64
-	AgentRSS          *uint64
-	AgentHeapAlloc    *uint64
-	Goroutines        *uint64
-	TCPConnections    *uint64
-	UDPConnections    *uint64
-	UDPQueuedBytes    *uint64
-	UDPQueueByteLimit *uint64
-	UDPQueueDrops     *uint64
-	TCPTuningMode     *string
-	TCPTuningMinimum  *string
-	TCPTuningMaximum  *string
-	TCPTuningCurrent  *string
-	TCPTuningReason   *string
+	MemoryTotal        uint64
+	MemoryUsed         *uint64
+	MemoryAvailable    *uint64
+	MemoryCached       *uint64
+	SwapUsed           *uint64
+	SwapTotal          *uint64
+	CPUCores           int
+	DiskTotal          uint64
+	DiskUsed           *uint64
+	DiskUsedPercent    *float64
+	Load1              *float64
+	AgentRSS           *uint64
+	AgentHeapAlloc     *uint64
+	Goroutines         *uint64
+	TCPConnections     *uint64
+	UDPConnections     *uint64
+	UDPQueuedBytes     *uint64
+	UDPQueueByteLimit  *uint64
+	UDPQueueDrops      *uint64
+	MuxMetricsEnabled  *bool
+	MuxSessionsCurrent *uint64
+	MuxStreamsCurrent  *uint64
+	MuxSessionsCreated *uint64
+	MuxSessionsClosed  *uint64
+	TCPTuningMode      *string
+	TCPTuningMinimum   *string
+	TCPTuningMaximum   *string
+	TCPTuningCurrent   *string
+	TCPTuningReason    *string
 }
 
 var extendedSystemInfoCache struct {
@@ -487,6 +498,11 @@ func (w *WebSocketReporter) collectSystemInfo(detailed bool) SystemInfo {
 	info.UDPQueuedBytes = extendedInfo.UDPQueuedBytes
 	info.UDPQueueByteLimit = extendedInfo.UDPQueueByteLimit
 	info.UDPQueueDrops = extendedInfo.UDPQueueDrops
+	info.MuxMetricsEnabled = extendedInfo.MuxMetricsEnabled
+	info.MuxSessionsCurrent = extendedInfo.MuxSessionsCurrent
+	info.MuxStreamsCurrent = extendedInfo.MuxStreamsCurrent
+	info.MuxSessionsCreated = extendedInfo.MuxSessionsCreated
+	info.MuxSessionsClosed = extendedInfo.MuxSessionsClosed
 	info.TCPTuningMode = extendedInfo.TCPTuningMode
 	info.TCPTuningMinimum = extendedInfo.TCPTuningMinimum
 	info.TCPTuningMaximum = extendedInfo.TCPTuningMaximum
@@ -738,6 +754,12 @@ func (w *WebSocketReporter) routeCommand(cmd CommandMessage) {
 	case "SetProtocol":
 		err = w.handleSetProtocol(cmd.Data)
 		response.Type = "SetProtocolResponse"
+	case "UserProtocolPolicyCapabilities":
+		response.Type = "UserProtocolPolicyCapabilitiesResponse"
+		response.Data = map[string]any{"userProtocolPolicy": 1}
+	case "SetUserProtocolPolicy":
+		err = w.handleSetUserProtocolPolicy(cmd.Data)
+		response.Type = "SetUserProtocolPolicyResponse"
 
 	default:
 		err = fmt.Errorf("未知命令类型: %s", cmd.Type)
@@ -745,12 +767,13 @@ func (w *WebSocketReporter) routeCommand(cmd CommandMessage) {
 	}
 
 	// 发送响应
+	if err == nil && cmd.Type != "UserProtocolPolicyCapabilities" {
+		err = saveConfig()
+	}
 	if err != nil {
-		saveConfig()
 		response.Success = false
 		response.Message = err.Error()
 	} else {
-		saveConfig()
 		response.Success = true
 		response.Message = "OK"
 	}
@@ -1274,6 +1297,15 @@ func getExtendedSystemInfo() ExtendedSystemInfo {
 	info.UDPQueuedBytes = uint64Ptr(queued)
 	info.UDPQueueByteLimit = uint64Ptr(limit)
 	info.UDPQueueDrops = uint64Ptr(dropped)
+	// Sample only during cached detailed metrics, never on packet forwarding.
+	muxStats := mux.StatsSnapshot()
+	info.MuxMetricsEnabled = &muxStats.Enabled
+	if muxStats.Enabled {
+		info.MuxSessionsCurrent = uint64Ptr(muxStats.SessionsCurrent)
+		info.MuxStreamsCurrent = uint64Ptr(muxStats.StreamsCurrent)
+		info.MuxSessionsCreated = uint64Ptr(muxStats.SessionsCreated)
+		info.MuxSessionsClosed = uint64Ptr(muxStats.SessionsClosed)
+	}
 	info.TCPTuningMode, info.TCPTuningMinimum, info.TCPTuningMaximum, info.TCPTuningCurrent, info.TCPTuningReason = getTCPTuningStatus()
 
 	extendedSystemInfoCache.value = info

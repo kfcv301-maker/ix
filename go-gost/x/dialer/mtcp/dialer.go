@@ -89,18 +89,17 @@ func (d *mtcpDialer) Handshake(ctx context.Context, conn net.Conn, options ...di
 	d.sessionMutex.Lock()
 	defer d.sessionMutex.Unlock()
 
-	if d.md.handshakeTimeout > 0 {
-		conn.SetDeadline(time.Now().Add(d.md.handshakeTimeout))
-		defer conn.SetDeadline(time.Time{})
-	}
-
 	session, ok := d.sessions[opts.Addr]
 	if session != nil && session.conn != conn {
 		conn.Close()
-		return nil, errors.New("mtls: unrecognized connection")
+		return nil, errors.New("mtcp: unrecognized connection")
 	}
 
 	if !ok || session.session == nil {
+		if d.md.handshakeTimeout > 0 {
+			conn.SetDeadline(time.Now().Add(d.md.handshakeTimeout))
+			defer conn.SetDeadline(time.Time{})
+		}
 		s, err := d.initSession(ctx, conn)
 		if err != nil {
 			d.logger.Error(err)

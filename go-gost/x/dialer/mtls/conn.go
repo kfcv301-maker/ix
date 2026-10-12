@@ -28,7 +28,8 @@ func (session *muxSession) Close() error {
 
 func (session *muxSession) IsClosed() bool {
 	if session.session == nil {
-		return true
+		// A physical connection awaiting Handshake is pending, not dead.
+		return session.conn == nil
 	}
 	return session.session.IsClosed()
 }

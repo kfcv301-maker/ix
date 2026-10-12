@@ -6,6 +6,9 @@ import jakarta.validation.constraints.Min;
 
 @Data
 public class UserTunnelUpdateDto {
+    /** Null retains the existing policy for older API clients. */
+    private String tlsPolicy;
+    private Boolean allowUdp;
     
     @NotNull(message = "用户隧道权限ID不能为空")
     private Integer id;

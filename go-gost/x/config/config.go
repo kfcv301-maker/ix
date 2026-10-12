@@ -598,8 +598,7 @@ func (c *Config) Write(w io.Writer, format string) error {
 	case "json":
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
-		enc.Encode(c)
-		return nil
+		return enc.Encode(c)
 	case "yaml":
 		fallthrough
 	default:

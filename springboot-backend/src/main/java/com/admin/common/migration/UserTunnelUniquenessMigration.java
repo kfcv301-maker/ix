@@ -16,7 +16,7 @@ import jakarta.annotation.Resource;
 /** Repairs historic duplicate grants, then enforces one entitlement per user/tunnel. */
 @Slf4j
 @Component
-@DependsOn("tunnelEntryDomainMigration")
+@DependsOn({"tunnelEntryDomainMigration", "userProtocolPolicyMigration"})
 public class UserTunnelUniquenessMigration {
 
     @Resource

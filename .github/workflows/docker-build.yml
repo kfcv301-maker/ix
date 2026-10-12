@@ -119,9 +119,19 @@ jobs:
         working-directory: ./go-gost/x
         run: go test ./...
 
-      - name: Check Agent resource lifecycle races
+      - name: Check Agent resource and user policy races
         working-directory: ./go-gost/x
-        run: go test -race -count=5 -timeout=180s ./internal/net/udp ./service ./socket ./api
+        run: go test -race -count=5 -timeout=180s ./internal/net/udp ./internal/util/mux ./dialer ./service ./socket ./api
+
+      - name: Record optional mux diagnostics cost
+        working-directory: ./go-gost/x
+        shell: bash
+        run: go test -run '^$' -bench BenchmarkMuxTransfer -benchtime=1s -count=5 -benchmem ./internal/util/mux | tee "$RUNNER_TEMP/mux-diagnostics-benchmark.txt"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mux-diagnostics-benchmark
+          path: ${{ runner.temp }}/mux-diagnostics-benchmark.txt
 
       - name: Build GOST binary (AMD64)
         working-directory: ./go-gost
@@ -268,6 +278,10 @@ jobs:
         working-directory: ./vite-frontend
         # This lockfile needs npm's current resolver for its nested legacy dependencies.
         run: npm install --no-audit --no-fund
+
+      - name: Test selective forward updates
+        working-directory: ./vite-frontend
+        run: node --test tests/forward-bulk.test.mjs
 
       - name: Build frontend
         working-directory: ./vite-frontend

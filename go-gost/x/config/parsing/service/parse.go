@@ -41,6 +41,10 @@ import (
 )
 
 func ParseService(cfg *config.ServiceConfig) (service.Service, error) {
+	userPolicy, err := xservice.ParseUserProtocolPolicy(cfg.Metadata)
+	if err != nil {
+		return nil, err
+	}
 	if cfg.Listener == nil {
 		cfg.Listener = &config.ListenerConfig{}
 	}
@@ -370,6 +374,7 @@ func ParseService(cfg *config.ServiceConfig) (service.Service, error) {
 	}
 
 	s := xservice.NewService(cfg.Name, ln, h,
+		xservice.UserProtocolPolicyOption(userPolicy),
 		xservice.AdmissionOption(xadmission.AdmissionGroup(admissions...)),
 		xservice.PreUpOption(preUp),
 		xservice.PreDownOption(preDown),

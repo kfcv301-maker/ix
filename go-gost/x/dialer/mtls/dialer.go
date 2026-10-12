@@ -90,11 +90,6 @@ func (d *mtlsDialer) Handshake(ctx context.Context, conn net.Conn, options ...di
 	d.sessionMutex.Lock()
 	defer d.sessionMutex.Unlock()
 
-	if d.md.handshakeTimeout > 0 {
-		conn.SetDeadline(time.Now().Add(d.md.handshakeTimeout))
-		defer conn.SetDeadline(time.Time{})
-	}
-
 	session, ok := d.sessions[opts.Addr]
 	if session != nil && session.conn != conn {
 		conn.Close()
@@ -102,6 +97,10 @@ func (d *mtlsDialer) Handshake(ctx context.Context, conn net.Conn, options ...di
 	}
 
 	if !ok || session.session == nil {
+		if d.md.handshakeTimeout > 0 {
+			conn.SetDeadline(time.Now().Add(d.md.handshakeTimeout))
+			defer conn.SetDeadline(time.Time{})
+		}
 		s, err := d.initSession(ctx, conn)
 		if err != nil {
 			d.logger.Error(err)
@@ -127,12 +126,12 @@ func (d *mtlsDialer) initSession(ctx context.Context, conn net.Conn) (*muxSessio
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
 		return nil, err
 	}
-	conn = tlsConn
-
 	// stream multiplex
-	session, err := mux.ClientSession(conn, d.md.muxCfg)
+	session, err := mux.ClientSession(tlsConn, d.md.muxCfg)
 	if err != nil {
 		return nil, err
 	}
+	// Keep the original identity for callers that Dialed before the first TLS
+	// handshake completed. The mux session owns the established TLS transport.
 	return &muxSession{conn: conn, session: session}, nil
 }
