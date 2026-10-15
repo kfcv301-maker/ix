@@ -23,6 +23,7 @@ import {
   getNodeInstallCommand
 } from "@/api";
 import { getRealtimeSocketUrl } from "@/utils/realtime-socket";
+import { acceptRealtimeMetric, createRealtimeConnectionGate, mergeRealtimeNodes, shouldResetRealtimeMetrics } from "@/utils/realtime-state";
 
 interface Node {
   id: number;
@@ -38,6 +39,7 @@ interface Node {
   socks?: number; // 0 关 1 开
   status: number; // 1: 在线, 0: 离线
   connectionStatus: 'online' | 'offline';
+  connectionId?: string;
   systemInfo?: NodeSystemInfo | null;
   copyLoading?: boolean;
   tcpTuningProfile?: TcpTuningProfile;
@@ -57,6 +59,7 @@ interface NodeSystemInfo {
     downloadSpeed: number;
     uptime: number;
     reportedAt: number;
+    sampledAt?: number;
     cpuCores: number;
     memoryTotal: number;
     diskTotal: number;
@@ -155,6 +158,8 @@ type TcpTuningProfile = 'tiny' | 'small' | 'balanced' | 'standard';
 export default function NodePage() {
   const [nodeList, setNodeList] = useState<Node[]>([]);
   const [loading, setLoading] = useState(false);
+  const [nodeLoadError, setNodeLoadError] = useState('');
+  const [socketStatus, setSocketStatus] = useState<'connecting' | 'connected' | 'reconnecting'>('connecting');
   const [dialogVisible, setDialogVisible] = useState(false);
   const [dialogTitle, setDialogTitle] = useState('');
   const [isEdit, setIsEdit] = useState(false);
@@ -195,6 +200,12 @@ export default function NodePage() {
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectAttemptsRef = useRef(0);
   const shouldMaintainSocketRef = useRef(true);
+  const connectionGateRef = useRef(createRealtimeConnectionGate());
+  const connectionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const metricSequenceRef = useRef(new Map<number, number>());
+  const listRequestRef = useRef(0);
+  const nodeEventVersionsRef = useRef(new Map<number, number>());
+  const localEventVersionRef = useRef(0);
 
   // 仅保留当前页面的最近 3 分钟实时样本。这样不需要新增数据库表，
   // 同时仍可在节点卡片和展开窗口中观察趋势。
@@ -221,17 +232,14 @@ export default function NodePage() {
         clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
       }
-      if (websocketRef.current) {
-        websocketRef.current.onclose = null;
-        websocketRef.current.close();
-        websocketRef.current = null;
-      }
+      closeWebSocket(false);
       initWebSocket();
     };
     document.addEventListener('visibilitychange', reconnectWhenForeground);
     
     return () => {
       shouldMaintainSocketRef.current = false;
+      listRequestRef.current++;
       document.removeEventListener('visibilitychange', reconnectWhenForeground);
       closeWebSocket(true);
     };
@@ -239,23 +247,22 @@ export default function NodePage() {
 
   // 加载节点列表
   const loadNodes = async () => {
+    const request = ++listRequestRef.current;
+    const eventVersionsAtStart = new Map(nodeEventVersionsRef.current);
     setLoading(true);
+    setNodeLoadError('');
     try {
       const res = await getNodeList();
+      if (!shouldMaintainSocketRef.current || request !== listRequestRef.current) return;
       if (res.code === 0) {
-        setNodeList(res.data.map((node: any) => ({
-          ...node,
-          connectionStatus: node.status === 1 ? 'online' : 'offline',
-          systemInfo: null,
-          copyLoading: false
-        })));
+        setNodeList(previous => mergeRealtimeNodes(res.data, previous, eventVersionsAtStart, nodeEventVersionsRef.current) as Node[]);
       } else {
-        toast.error(res.msg || '加载节点列表失败');
+        setNodeLoadError(res.msg || '加载节点列表失败');
       }
     } catch (error) {
-      toast.error('网络错误，请重试');
+      if (shouldMaintainSocketRef.current && request === listRequestRef.current) setNodeLoadError('节点列表暂时加载失败，请重试');
     } finally {
-      setLoading(false);
+      if (shouldMaintainSocketRef.current && request === listRequestRef.current) setLoading(false);
     }
   };
 
@@ -271,20 +278,37 @@ export default function NodePage() {
     if (websocketRef.current) {
       closeWebSocket(false);
     }
+
+    const attempt = connectionGateRef.current.begin();
+    if (attempt === undefined) return;
+    setSocketStatus(reconnectAttemptsRef.current > 0 ? 'reconnecting' : 'connecting');
     
     try {
       const ticketResponse = await createRealtimeTicket();
-      if (!shouldMaintainSocketRef.current || ticketResponse?.code !== 0 || !ticketResponse.data?.ticket) {
+      if (!shouldMaintainSocketRef.current || !connectionGateRef.current.settle(attempt)) return;
+      if (ticketResponse?.code !== 0 || !ticketResponse.data?.ticket) {
         attemptReconnect();
         return;
       }
-      websocketRef.current = new WebSocket(getRealtimeSocketUrl(ticketResponse.data.ticket, 'detail'));
+      const socket = new WebSocket(getRealtimeSocketUrl(ticketResponse.data.ticket, 'detail'));
+      websocketRef.current = socket;
+      metricSequenceRef.current.clear();
+      const isCurrent = () => shouldMaintainSocketRef.current && connectionGateRef.current.current(attempt)
+        && websocketRef.current === socket;
+      connectionTimeoutRef.current = setTimeout(() => {
+        if (isCurrent()) socket.close();
+      }, 12_000);
       
-      websocketRef.current.onopen = () => {
+      socket.onopen = () => {
+        if (!isCurrent()) return;
+        if (connectionTimeoutRef.current) clearTimeout(connectionTimeoutRef.current);
+        connectionTimeoutRef.current = null;
         reconnectAttemptsRef.current = 0;
+        setSocketStatus('connected');
       };
       
-      websocketRef.current.onmessage = (event) => {
+      socket.onmessage = (event) => {
+        if (!isCurrent()) return;
         try {
           const data = JSON.parse(event.data);
           handleWebSocketMessage(data);
@@ -293,15 +317,17 @@ export default function NodePage() {
         }
       };
       
-      websocketRef.current.onerror = () => {
-        // WebSocket错误时不输出错误信息
-      };
+      socket.onerror = () => { if (isCurrent()) socket.close(); };
       
-      websocketRef.current.onclose = () => {
+      socket.onclose = () => {
+        if (!isCurrent()) return;
+        if (connectionTimeoutRef.current) clearTimeout(connectionTimeoutRef.current);
+        connectionTimeoutRef.current = null;
         websocketRef.current = null;
         attemptReconnect();
       };
     } catch (error) {
+      if (!connectionGateRef.current.settle(attempt) || !shouldMaintainSocketRef.current) return;
       attemptReconnect();
     }
   };
@@ -309,6 +335,13 @@ export default function NodePage() {
   // 处理WebSocket消息
   const handleWebSocketMessage = (data: any) => {
     const { id, type, data: messageData } = data;
+
+    const nodeId = Number(id);
+    const accepted = type === 'info' || type === 'status'
+      ? acceptRealtimeMetric(data, metricSequenceRef.current.get(nodeId)) : undefined;
+    if ((type === 'info' || type === 'status') && !accepted) return;
+    if (accepted?.sequence !== undefined) metricSequenceRef.current.set(nodeId, accepted.sequence);
+    if (accepted) nodeEventVersionsRef.current.set(nodeId, ++localEventVersionRef.current);
     
     if (type === 'status') {
       setNodeList(prev => prev.map(node => {
@@ -316,7 +349,8 @@ export default function NodePage() {
           return {
             ...node,
             connectionStatus: messageData === 1 ? 'online' : 'offline',
-            systemInfo: messageData === 0 ? null : node.systemInfo
+            systemInfo: messageData === 0 || shouldResetRealtimeMetrics(node.connectionId, data.connectionId) ? null : node.systemInfo,
+            connectionId: typeof data.connectionId === 'string' ? data.connectionId : node.connectionId,
           };
         }
         return node;
@@ -353,7 +387,8 @@ export default function NodePage() {
             const currentUpload = toFiniteNumber(systemInfo.bytes_transmitted);
             const currentDownload = toFiniteNumber(systemInfo.bytes_received);
             const currentUptime = toFiniteNumber(systemInfo.uptime);
-            const previousInfo = node.systemInfo || undefined;
+            const previousInfo = shouldResetRealtimeMetrics(node.connectionId, data.connectionId)
+              ? undefined : node.systemInfo || undefined;
             // Only lightweight summaries may retain earlier mux metrics. A
             // detailed/legacy report without this capability clears stale data.
             const previousMuxInfo = systemInfo.metrics_level === 'summary' ? previousInfo : undefined;
@@ -372,19 +407,22 @@ export default function NodePage() {
             const cpuCores = Math.floor(keepPreviousNumber(systemInfo.cpu_cores, previousInfo?.cpuCores || 0));
             const memoryTotal = keepPreviousNumber(systemInfo.memory_total, previousInfo?.memoryTotal || 0);
             const diskTotal = keepPreviousNumber(systemInfo.disk_total, previousInfo?.diskTotal || 0);
-            const reportedAt = Date.now();
+            const reportedAt = accepted!.reportedAt;
+            if (data.snapshot && previousInfo?.sampledAt !== undefined && accepted!.sampledAt !== undefined
+                && accepted!.sampledAt <= previousInfo.sampledAt) return node;
             
             let uploadSpeed = 0;
             let downloadSpeed = 0;
             
-            if (node.systemInfo && node.systemInfo.reportedAt) {
+            if (previousInfo && previousInfo.reportedAt) {
               // 使用实际到达时间计算速率。旧逻辑使用秒级 uptime，遇到浏览器后台
               // 节流、网络抖动或节点重启时会把速率错误显示为 0 或尖峰。
-              const timeDiff = (reportedAt - node.systemInfo.reportedAt) / 1000;
+              const timeDiff = (accepted!.sampledAt !== undefined && previousInfo.sampledAt !== undefined
+                ? accepted!.sampledAt - previousInfo.sampledAt : reportedAt - previousInfo.reportedAt) / 1000;
               
               if (timeDiff > 0 && timeDiff <= 30) {
-                const lastUpload = node.systemInfo.uploadTraffic || 0;
-                const lastDownload = node.systemInfo.downloadTraffic || 0;
+                const lastUpload = previousInfo.uploadTraffic || 0;
+                const lastDownload = previousInfo.downloadTraffic || 0;
                 
                 const uploadDiff = currentUpload - lastUpload;
                 const downloadDiff = currentDownload - lastDownload;
@@ -411,6 +449,7 @@ export default function NodePage() {
               downloadSpeed: downloadSpeed,
               uptime: currentUptime,
               reportedAt,
+              sampledAt: accepted!.sampledAt,
               cpuCores,
               memoryTotal,
               diskTotal,
@@ -457,6 +496,7 @@ export default function NodePage() {
             return {
               ...node,
               connectionStatus: 'online',
+              connectionId: typeof data.connectionId === 'string' ? data.connectionId : node.connectionId,
               systemInfo: nextSystemInfo
             };
           } catch (error) {
@@ -471,6 +511,7 @@ export default function NodePage() {
   // 尝试重新连接
   const attemptReconnect = () => {
     if (!shouldMaintainSocketRef.current || reconnectTimerRef.current) return;
+    setSocketStatus('reconnecting');
     reconnectAttemptsRef.current++;
     // 移动浏览器后台会暂停或销毁 WebSocket；不设次数上限，并把退避控制在
     // 15 秒以内，用户回到页面后也会立即重新建立连接。
@@ -483,6 +524,9 @@ export default function NodePage() {
 
   // 关闭WebSocket连接
   const closeWebSocket = (clearMonitoringState = true) => {
+    connectionGateRef.current.invalidate();
+    if (connectionTimeoutRef.current) clearTimeout(connectionTimeoutRef.current);
+    connectionTimeoutRef.current = null;
     if (reconnectTimerRef.current) {
       clearTimeout(reconnectTimerRef.current);
       reconnectTimerRef.current = null;
@@ -511,6 +555,12 @@ export default function NodePage() {
         systemInfo: null
       })));
     }
+  };
+
+  const retryMonitoring = async () => {
+    closeWebSocket(false);
+    await loadNodes();
+    initWebSocket();
   };
 
 
@@ -757,7 +807,7 @@ export default function NodePage() {
         setInstallCommand(res.data);
         try {
           await navigator.clipboard.writeText(res.data);
-          toast.success('安装命令已生成并复制到剪贴板');
+          toast.success('安装命令已复制，10 分钟内单次有效');
         } catch (copyError) {
           toast('安装命令已生成，请手动复制');
         }
@@ -776,7 +826,7 @@ export default function NodePage() {
   const handleManualCopy = async () => {
     try {
       await navigator.clipboard.writeText(installCommand);
-      toast.success('安装命令已复制到剪贴板');
+      toast.success('安装命令已复制，10 分钟内单次有效');
       setInstallCommandModal(false);
     } catch (error) {
       toast.error('复制失败，请手动选择文本复制');
@@ -902,6 +952,22 @@ export default function NodePage() {
           </Button>
         </div>
 
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-divider bg-content1 px-3 py-2 text-xs" role="status" aria-live="polite">
+          <span className={socketStatus === 'connected' ? 'text-default-500' : 'text-warning-600'}>
+            {socketStatus === 'connecting' ? '正在连接实时监控…' : socketStatus === 'reconnecting'
+              ? '实时监控连接中断，正在自动重连；已显示数据可能不是最新。'
+              : nodeList.some(node => node.connectionStatus === 'online' && !node.systemInfo)
+                ? '实时监控已连接，部分在线节点正在等待首次上报。'
+                : '实时监控已连接'}
+          </span>
+          <Button size="sm" variant="light" isDisabled={loading} onPress={retryMonitoring}>重新获取数据</Button>
+        </div>
+        {nodeLoadError && (
+          <div role="alert" className="mb-4 rounded-xl border border-danger-200 bg-danger-50 px-3 py-2 text-sm text-danger-700">
+            {nodeLoadError}，点击“重新获取数据”重试。
+          </div>
+        )}
+
         {/* 节点列表 */}
         {loading ? (
           <div className="flex items-center justify-center h-64">
@@ -910,7 +976,7 @@ export default function NodePage() {
               <span className="text-default-600">正在加载...</span>
             </div>
           </div>
-        ) : nodeList.length === 0 ? (
+        ) : nodeList.length === 0 && !nodeLoadError ? (
           <Card className="shadow-sm border border-gray-200 dark:border-gray-700">
             <CardBody className="text-center py-16">
               <div className="flex flex-col items-center gap-4">
@@ -1597,12 +1663,13 @@ export default function NodePage() {
                 <p className="text-sm text-default-600">
                   请复制以下安装命令到服务器上执行：
                 </p>
+                <p className="text-sm text-warning-600">命令 10 分钟内单次有效；领取或下载失败后，请关闭窗口并重新获取。</p>
                 <div className="relative">
                   <Textarea
                     value={installCommand}
                     readOnly
                     variant="bordered"
-                    minRows={6}
+                    minRows={3}
                     maxRows={10}
                     className="font-mono text-sm"
                     classNames={{

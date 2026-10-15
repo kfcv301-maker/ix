@@ -8,6 +8,7 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 
 import { createRealtimeTicket, getRealtimeNodes, getSubscriptionToken, getUserPackageInfo } from "@/api";
 import { getRealtimeSocketUrl } from "@/utils/realtime-socket";
+import { acceptRealtimeMetric, createRealtimeConnectionGate } from "@/utils/realtime-state";
 
 interface UserInfo {
   user?: string;
@@ -65,6 +66,7 @@ interface RealtimeNodeTraffic {
   uploadSpeed: number;
   downloadSpeed: number;
   reportedAt: number;
+  sampledAt?: number;
 }
 
 interface RealtimeTrafficSummary {
@@ -220,7 +222,10 @@ export default function DashboardPage() {
   // 普通用户会收到自建节点及有效隧道授权节点的摘要流量。
   useEffect(() => {
     let disposed = false;
+    const connectionGate = createRealtimeConnectionGate();
+    const sequences = new Map<number, number>();
     const closeSocket = () => {
+      connectionGate.invalidate();
       if (realtimeSocketRef.current) {
         realtimeSocketRef.current.onclose = null;
         realtimeSocketRef.current.close();
@@ -262,20 +267,27 @@ export default function DashboardPage() {
     };
     const connect = async () => {
       if (disposed || realtimeSocketRef.current) return;
+      const attempt = connectionGate.begin();
+      if (attempt === undefined) return;
       let socket: WebSocket;
       try {
         const ticketResponse = await createRealtimeTicket();
-        if (disposed || ticketResponse?.code !== 0 || !ticketResponse.data?.ticket) throw new Error('实时监控票据无效');
+        if (disposed || !connectionGate.settle(attempt)) return;
+        if (ticketResponse?.code !== 0 || !ticketResponse.data?.ticket) throw new Error('实时监控票据无效');
         socket = new WebSocket(getRealtimeSocketUrl(ticketResponse.data.ticket));
       } catch {
+        if (!connectionGate.settle(attempt) || disposed) return;
         scheduleReconnect();
         return;
       }
       realtimeSocketRef.current = socket;
+      sequences.clear();
+      const isCurrent = () => !disposed && connectionGate.current(attempt) && realtimeSocketRef.current === socket;
 
       socket.onopen = () => {
+        if (!isCurrent()) return;
         void getRealtimeNodes().then((res) => {
-          if (disposed || res.code !== 0 || !Array.isArray(res.data)) return;
+          if (!isCurrent() || res.code !== 0 || !Array.isArray(res.data)) return;
           const names: Record<number, string> = {};
           res.data.forEach((node) => {
             const nodeId = Number(node.id);
@@ -290,8 +302,18 @@ export default function DashboardPage() {
       };
 
       socket.onmessage = (event) => {
+        if (!isCurrent()) return;
         try {
           const message = JSON.parse(event.data);
+          if (message.type === 'status' && Number(message.data) === 0) {
+            const nodeId = Number(message.id);
+            const accepted = acceptRealtimeMetric(message, sequences.get(nodeId));
+            if (!accepted) return;
+            if (accepted.sequence !== undefined) sequences.set(nodeId, accepted.sequence);
+            realtimeTrafficByNodeRef.current.delete(nodeId);
+            publishSummary();
+            return;
+          }
           if (message.type !== 'info') return;
           const systemInfo = typeof message.data === 'string' ? JSON.parse(message.data) : message.data;
           const uploadTraffic = Number(systemInfo?.bytes_transmitted);
@@ -302,12 +324,16 @@ export default function DashboardPage() {
             return;
           }
 
-          const now = Date.now();
+          const accepted = acceptRealtimeMetric(message, sequences.get(nodeId));
+          if (!accepted) return;
+          if (accepted.sequence !== undefined) sequences.set(nodeId, accepted.sequence);
+          const now = accepted.reportedAt;
           const previous = realtimeTrafficByNodeRef.current.get(nodeId);
           let uploadSpeed = 0;
           let downloadSpeed = 0;
           if (previous) {
-            const elapsed = (now - previous.reportedAt) / 1_000;
+            const elapsed = (accepted.sampledAt !== undefined && previous.sampledAt !== undefined
+              ? accepted.sampledAt - previous.sampledAt : now - previous.reportedAt) / 1_000;
             if (elapsed > 0 && elapsed <= 30) {
               const uploadDelta = uploadTraffic - previous.uploadTraffic;
               const downloadDelta = downloadTraffic - previous.downloadTraffic;
@@ -320,7 +346,8 @@ export default function DashboardPage() {
             downloadTraffic,
             uploadSpeed,
             downloadSpeed,
-            reportedAt: now
+            reportedAt: now,
+            sampledAt: accepted.sampledAt,
           });
           publishSummary();
         } catch {
@@ -328,6 +355,7 @@ export default function DashboardPage() {
         }
       };
       socket.onclose = () => {
+        if (!isCurrent()) return;
         if (realtimeSocketRef.current === socket) {
           realtimeSocketRef.current = null;
           realtimeTrafficByNodeRef.current.clear();
@@ -335,7 +363,7 @@ export default function DashboardPage() {
         }
         scheduleReconnect();
       };
-      socket.onerror = () => socket.close();
+      socket.onerror = () => { if (isCurrent()) socket.close(); };
     };
 
     connect();

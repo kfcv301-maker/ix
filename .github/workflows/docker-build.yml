@@ -279,9 +279,9 @@ jobs:
         # This lockfile needs npm's current resolver for its nested legacy dependencies.
         run: npm install --no-audit --no-fund
 
-      - name: Test selective forward updates
+      - name: Test frontend behavior
         working-directory: ./vite-frontend
-        run: node --test tests/forward-bulk.test.mjs
+        run: npm test
 
       - name: Build frontend
         working-directory: ./vite-frontend

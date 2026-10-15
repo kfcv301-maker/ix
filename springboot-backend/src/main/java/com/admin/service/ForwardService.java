@@ -74,10 +74,13 @@ public interface ForwardService extends IService<Forward> {
     R diagnoseForward(Long id);
 
     /**
-     * Trusted background diagnostic entry point. Authorization is checked when
-     * a tunnel task is created; workers must not depend on a request JWT.
+     * Trusted internal entry point; callers must enforce authorization.
+     * Long-running tunnel tasks use the guarded overload below.
      */
     R diagnoseForwardForSystem(Long id);
+
+    /** Revalidate the selected record and stop between node commands when a job ends. */
+    R diagnoseForwardForSystem(Forward expectedForward, java.util.function.BooleanSupplier continueDiagnosis);
 
     /**
      * 更新转发排序

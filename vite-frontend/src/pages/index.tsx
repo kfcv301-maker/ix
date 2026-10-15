@@ -1,18 +1,16 @@
 import { Button } from "@heroui/button";
 import { Input } from "@heroui/input";
-import { Card, CardBody, CardHeader } from "@heroui/card";
 import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import toast from 'react-hot-toast';
 import axios from 'axios';
 import { isWebViewFunc } from '@/utils/panel';
-import { siteConfig } from '@/config/site';
-import { title } from "@/components/primitives";
-import DefaultLayout from "@/layouts/default";
+import { siteConfig, getCachedConfig } from '@/config/site';
 import { login, LoginData, checkCaptcha } from "@/api";
 import "@/utils/tac.css";
 import "@/utils/tac.min.js";
 import bgImage from "@/images/bg.jpg";
+import "@/styles/login.css";
 
 
 interface LoginForm {
@@ -48,12 +46,27 @@ export default function IndexPage() {
     captchaId: "",
   });
   const [loading, setLoading] = useState(false);
+  const [passwordVisible, setPasswordVisible] = useState(false);
+  const [capsLock, setCapsLock] = useState(false);
+  const [appName, setAppName] = useState(siteConfig.name);
   const [errors, setErrors] = useState<Partial<LoginForm>>({});
   const [showCaptcha, setShowCaptcha] = useState(false);
   const navigate = useNavigate();
   const tacInstanceRef = useRef<any>(null);
   const captchaContainerRef = useRef<HTMLDivElement>(null);
   const [isWebView, setIsWebView] = useState(false);
+  useEffect(() => {
+    let active = true;
+    const updateBrand = async () => {
+      try {
+        const name = await getCachedConfig('app_name');
+        if (active && name) setAppName(name);
+      } catch { /* Keep the existing local brand while the server is unavailable. */ }
+    };
+    void updateBrand();
+    window.addEventListener('configUpdated', updateBrand);
+    return () => { active = false; window.removeEventListener('configUpdated', updateBrand); };
+  }, []);
   // 清理验证码实例
   useEffect(() => {
     return () => {
@@ -98,6 +111,9 @@ export default function IndexPage() {
   // 初始化验证码
   const initCaptcha = async () => {
     if (!window.TAC || !captchaContainerRef.current) {
+      toast.error('验证码未能加载，请重试');
+      setShowCaptcha(false);
+      setLoading(false);
       return;
     }
 
@@ -211,6 +227,7 @@ export default function IndexPage() {
   };
 
   const handleLogin = async () => {
+    if (loading) return;
     if (!validateForm()) return;
 
     setLoading(true);
@@ -245,29 +262,57 @@ export default function IndexPage() {
   };
 
 
-  const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !loading) {
-      handleLogin();
-    }
-  };
-
   return (
-    <DefaultLayout>
-      <section className="flex flex-col items-center justify-center gap-4 py-4 sm:py-8 md:py-10 pb-20 min-h-[calc(100dvh-120px)] sm:min-h-[calc(100dvh-200px)]">
-        <div className="w-full max-w-md px-4 sm:px-0">
-          <Card className="w-full">
-            <CardHeader className="pb-0 pt-6 px-6 flex-col items-center">
-              <h1 className={title({ size: "sm" })}>登陆</h1>
-              <p className="text-small text-default-500 mt-2">请输入您的账号信息</p>
-            </CardHeader>
-            <CardBody className="px-6 py-6">
-              <div className="flex flex-col gap-4">
+    <div className="login-page">
+      <header className="login-header">
+        <a className="login-brand" href="/" aria-label={`${appName} 首页`}>
+          <span className="login-brand-mark" aria-hidden="true">
+            <svg width="26" height="26" viewBox="0 0 32 32" fill="none"><path d="M22.8 7.3A11.8 11.8 0 1 0 24.7 24c-6.9 2.1-13.3-3.4-12-10.3a10.6 10.6 0 0 0 10.1-6.4Z" fill="currentColor"/><circle cx="25" cy="8" r="2" fill="#b8f1df"/></svg>
+          </span>
+          <span>{appName}<small>RELAY CONSOLE</small></span>
+        </a>
+        {isWebView ? (
+          <button className="login-header-link" onClick={() => navigate('/settings')}>面板设置 <span aria-hidden="true">↗</span></button>
+        ) : <span className="login-header-note">你的连接管理空间</span>}
+      </header>
+
+      <main className="login-stage">
+        <section className="login-hero" aria-labelledby="login-hero-title">
+          <div className="login-hero-glow" aria-hidden="true" />
+          <div className="login-eyebrow"><span aria-hidden="true" /> LUNARIS / RELAY</div>
+          <h1 id="login-hero-title">每一条连接，<br /><span>尽在掌握。</span></h1>
+          <p className="login-hero-description">从节点到隧道，让转发管理更清晰。<br />连接你的网络，专注每一次传输。</p>
+          <div className="login-visual" aria-hidden="true">
+            <div className="login-visual-caption"><span>转发链路示意</span><span>TCP / UDP</span></div>
+            <svg className="login-network" viewBox="0 0 480 240" fill="none">
+              <defs><linearGradient id="relay-route" x1="70" y1="0" x2="425" y2="0" gradientUnits="userSpaceOnUse"><stop stopColor="#5b8bf8"/><stop offset="1" stopColor="#b5eddb"/></linearGradient></defs>
+              <path d="M112 74H167C212 74 188 122 239 122H366M112 170H162C209 170 186 122 239 122" stroke="#29415d" strokeWidth="2" />
+              <path d="M112 74H167C212 74 188 122 239 122H366M112 170H162C209 170 186 122 239 122" stroke="url(#relay-route)" strokeWidth="2" strokeDasharray="4 10" />
+              <circle cx="201" cy="106" r="4" fill="#93b8ff"/><circle cx="306" cy="122" r="4" fill="#b5eddb"/>
+              <rect x="18" y="44" width="112" height="60" rx="14" fill="#152b43" stroke="#2d4664"/><rect x="18" y="140" width="112" height="60" rx="14" fill="#152b43" stroke="#2d4664"/>
+              <rect x="218" y="92" width="92" height="60" rx="16" fill="#253e5b" stroke="#5681b2"/>
+              <rect x="355" y="92" width="108" height="60" rx="14" fill="#193e43" stroke="#466e6b"/>
+              <circle cx="40" cy="74" r="4" fill="#8fb5ff"/><circle cx="40" cy="170" r="4" fill="#8fb5ff"/><circle cx="377" cy="122" r="4" fill="#b5eddb"/>
+              <text x="54" y="79" fill="#dce8fa" fontSize="13">接入节点 A</text><text x="54" y="175" fill="#dce8fa" fontSize="13">接入节点 B</text>
+              <text x="264" y="127" textAnchor="middle" fill="#e7f1ff" fontSize="14">隧道</text><text x="391" y="127" fill="#d8f3e9" fontSize="13">目标服务</text>
+            </svg>
+          </div>
+          <div className="login-hero-footer"><span>多节点管理</span><span>转发控制</span><span>实时监测</span></div>
+        </section>
+
+        <section className="login-form-panel" aria-labelledby="login-heading">
+          <div className="login-form-content">
+            <div className="login-form-heading"><span className="login-section-label">WELCOME BACK</span><h2 id="login-heading">欢迎回来</h2><p>登录账号，继续管理你的网络。</p></div>
+            <form className="login-form" noValidate aria-busy={loading} onSubmit={event => { event.preventDefault(); void handleLogin(); }}>
                 <Input
+                  name="username"
+                  autoComplete="username"
                   label="用户名"
                   placeholder="请输入用户名"
                   value={form.username}
                   onChange={(e) => handleInputChange('username', e.target.value)}
-                  onKeyDown={handleKeyPress}
+                  labelPlacement="outside"
+                  classNames={{ base: 'login-field', inputWrapper: 'login-input-wrap', input: 'login-input', label: 'login-label' }}
                   variant="bordered"
                   isDisabled={loading}
                   isInvalid={!!errors.username}
@@ -275,62 +320,48 @@ export default function IndexPage() {
                 />
                 
                 <Input
+                  name="password"
+                  autoComplete="current-password"
                   label="密码"
                   placeholder="请输入密码"
-                  type="password"
+                  type={passwordVisible ? 'text' : 'password'}
                   value={form.password}
                   onChange={(e) => handleInputChange('password', e.target.value)}
-                  onKeyDown={handleKeyPress}
+                  onKeyDown={event => setCapsLock(event.getModifierState('CapsLock'))}
+                  onKeyUp={event => setCapsLock(event.getModifierState('CapsLock'))}
+                  onBlur={() => setCapsLock(false)}
+                  labelPlacement="outside"
+                  classNames={{ base: 'login-field', inputWrapper: 'login-input-wrap', input: 'login-input', label: 'login-label' }}
                   variant="bordered"
                   isDisabled={loading}
                   isInvalid={!!errors.password}
+                  errorMessage={errors.password}
+                  endContent={<button className="login-password-toggle" type="button" disabled={loading} aria-label={passwordVisible ? '隐藏密码' : '显示密码'} aria-pressed={passwordVisible} onClick={() => setPasswordVisible(value => !value)}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>{passwordVisible && <path d="m3 3 18 18"/>}</svg></button>}
                 />
-
-                
+                {capsLock && <p className="login-caps-lock" role="status">大写锁定已开启</p>}
                 <Button
+                  type="submit"
                   color="primary"
                   size="lg"
-                  onClick={handleLogin}
                   isLoading={loading}
-                  disabled={loading}
-                  className="mt-2"
+                  isDisabled={loading}
+                  className="login-submit"
                 >
-                  {loading ? (showCaptcha ? "验证中..." : "登录中...") : "登录"}
+                  {loading ? (showCaptcha ? "验证中..." : "登录中...") : <>登录控制台 <span aria-hidden="true">→</span></>}
                 </Button>
-              </div>
-            </CardBody>
-          </Card>
-        </div>
-
-
-      {/* 版权信息 - 固定在底部，不占据布局空间 */}
-      
-               <div className="fixed inset-x-0 bottom-4 text-center py-4">
-               <p className="text-xs text-gray-400 dark:text-gray-500">
-                 Powered by{' '}
-                 <a 
-                   href="https://github.com/bqlpfy/flux-panel" 
-                   target="_blank" 
-                   rel="noopener noreferrer"
-                   className="text-gray-500 dark:text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
-                 >
-                   flux-panel
-                 </a>
-               </p>
-               <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
-                 v{ isWebView ? siteConfig.app_version : siteConfig.version}
-               </p>
-             </div>
-      
-   
-
+                <p className="login-form-note"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="3"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg> 使用管理员分配的账号登录</p>
+            </form>
+          </div>
+        </section>
+      </main>
+      <footer className="login-footer"><span>{appName} <span className="login-footer-version">v{isWebView ? siteConfig.app_version : siteConfig.version}</span></span><a href="https://github.com/kfcv301-maker/ix" target="_blank" rel="noopener noreferrer">基于 flux-panel · 开源项目 <span aria-hidden="true">↗</span></a></footer>
         {/* 验证码弹层 */}
         {showCaptcha && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="fixed inset-0 z-50 flex items-center justify-center" role="dialog" aria-modal="true" aria-label="登录安全验证">
             {/* 背景遮罩层 - 模糊效果，暗黑模式下更深 */}
             <div className="absolute inset-0 bg-black/60 dark:bg-black/80 backdrop-blur-sm captcha-backdrop-enter" />
            {/* 验证码容器 */}
-           <div className="mb-4">
+           <div className="relative z-10 mb-4">
                 <div 
                   id="captcha-container" 
                   ref={captchaContainerRef}
@@ -345,7 +376,6 @@ export default function IndexPage() {
               </div>
           </div>
         )}
-      </section>
-    </DefaultLayout>
+    </div>
   );
 }

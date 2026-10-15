@@ -64,7 +64,6 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
     
     /** 节点状态常量 */
     private static final int NODE_STATUS_ONLINE = 1;        // 节点在线状态
-    private static final int MAX_BATCH_FORWARD_DIAGNOSIS = 20;
     
     /** 用户角色常量 */
     private static final int ADMIN_ROLE_ID = 0;             // 管理员角色ID
@@ -1031,10 +1030,6 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
         }
 
         List<Forward> forwards = forwardService.list(forwardQuery);
-        if (forwards.size() > MAX_BATCH_FORWARD_DIAGNOSIS) {
-            return R.err("一次最多检测 " + MAX_BATCH_FORWARD_DIAGNOSIS + " 条转发，请使用单条诊断或稍后分批处理");
-        }
-
         return tunnelForwardDiagnosisTaskService.start(tunnel, currentUser.getUserId(), forwards);
     }
 

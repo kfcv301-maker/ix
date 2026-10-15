@@ -19,13 +19,14 @@ import {
   deleteTunnel,
   getNodeList,
   diagnoseTunnel,
-  diagnoseTunnelForwards,
   getTunnelEntryDomains,
   createTunnelEntryDomain,
   setDefaultTunnelEntryDomain,
   deleteTunnelEntryDomain
 } from "@/api";
 import type { TunnelEntryDomain } from "@/types";
+import { useTunnelDiagnosis } from '@/hooks/use-tunnel-diagnosis';
+import { diagnosisProgressText } from '@/utils/tunnel-diagnosis';
 
 interface Tunnel {
   id: number;
@@ -91,25 +92,6 @@ interface DiagnosisResult {
   }>;
 }
 
-interface ForwardPingResult {
-  forwardId: number;
-  forwardName: string;
-  remoteAddress?: string;
-  success: boolean;
-  message?: string;
-  results: DiagnosisResult['results'];
-}
-
-interface TunnelForwardDiagnosisResult {
-  tunnelId: number;
-  tunnelName: string;
-  timestamp: number;
-  totalForwards: number;
-  successfulForwards: number;
-  failedForwards: number;
-  forwards: ForwardPingResult[];
-}
-
 export default function TunnelPage() {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
@@ -125,12 +107,12 @@ export default function TunnelPage() {
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [diagnosisLoading, setDiagnosisLoading] = useState(false);
   const [forwardPingModalOpen, setForwardPingModalOpen] = useState(false);
-  const [forwardPingLoading, setForwardPingLoading] = useState(false);
+  const tunnelDiagnosis = useTunnelDiagnosis();
+  const { loading: forwardPingLoading, summary: forwardPingResult } = tunnelDiagnosis;
   const [tunnelToDelete, setTunnelToDelete] = useState<Tunnel | null>(null);
   const [currentDiagnosisTunnel, setCurrentDiagnosisTunnel] = useState<Tunnel | null>(null);
   const [diagnosisResult, setDiagnosisResult] = useState<DiagnosisResult | null>(null);
   const [currentPingTunnel, setCurrentPingTunnel] = useState<Tunnel | null>(null);
-  const [forwardPingResult, setForwardPingResult] = useState<TunnelForwardDiagnosisResult | null>(null);
   const [entryDomainModalOpen, setEntryDomainModalOpen] = useState(false);
   const [domainTunnel, setDomainTunnel] = useState<Tunnel | null>(null);
   const [managedDomains, setManagedDomains] = useState<TunnelEntryDomain[]>([]);
@@ -474,52 +456,12 @@ export default function TunnelPage() {
   const handleDiagnoseAllForwards = async (tunnel: Tunnel) => {
     setCurrentPingTunnel(tunnel);
     setForwardPingModalOpen(true);
-    setForwardPingLoading(true);
-    setForwardPingResult(null);
+    await tunnelDiagnosis.start({ tunnelId: tunnel.id, tunnelName: tunnel.name });
+  };
 
-    try {
-      const response = await diagnoseTunnelForwards(tunnel.id);
-      if (response.code === 0) {
-        setForwardPingResult(response.data);
-      } else {
-        toast.error(response.msg || '一键 PING 失败');
-        setForwardPingResult({
-          tunnelId: tunnel.id,
-          tunnelName: tunnel.name,
-          timestamp: Date.now(),
-          totalForwards: 0,
-          successfulForwards: 0,
-          failedForwards: 1,
-          forwards: [{
-            forwardId: 0,
-            forwardName: '批量检测失败',
-            success: false,
-            message: response.msg || '无法开始检测',
-            results: []
-          }]
-        });
-      }
-    } catch (error) {
-      console.error('一键 PING 失败:', error);
-      toast.error('网络错误，请重试');
-      setForwardPingResult({
-        tunnelId: tunnel.id,
-        tunnelName: tunnel.name,
-        timestamp: Date.now(),
-        totalForwards: 0,
-        successfulForwards: 0,
-        failedForwards: 1,
-        forwards: [{
-          forwardId: 0,
-          forwardName: '网络错误',
-          success: false,
-          message: '无法连接到服务器',
-          results: []
-        }]
-      });
-    } finally {
-      setForwardPingLoading(false);
-    }
+  const closeForwardPingModal = () => {
+    tunnelDiagnosis.close();
+    setForwardPingModalOpen(false);
   };
 
   const getEntryNodeNames = (tunnel: Tunnel): string => {
@@ -1542,7 +1484,7 @@ export default function TunnelPage() {
         {/* 隧道下全部转发的一键 PING 结果 */}
         <Modal
           isOpen={forwardPingModalOpen}
-          onOpenChange={setForwardPingModalOpen}
+          onOpenChange={(open) => open ? setForwardPingModalOpen(true) : closeForwardPingModal()}
           size="4xl"
           scrollBehavior="outside"
           backdrop="blur"
@@ -1555,20 +1497,20 @@ export default function TunnelPage() {
                   <h2 className="text-xl font-bold">一键 PING 结果</h2>
                   {currentPingTunnel && (
                     <p className="text-small text-default-500">
-                      {currentPingTunnel.name} · 逐条检测该隧道下的完整 TCP 链路（最多 20 条，30 秒冷却）
+                      {currentPingTunnel.name} · 完整 TCP 链路；每 20 条自动分批，30 秒冷却
                     </p>
                   )}
                 </ModalHeader>
                 <ModalBody>
-                  {forwardPingLoading ? (
-                    <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
-                      <Spinner size="lg" />
-                      <div>
-                        <p className="font-medium text-foreground">正在逐条 PING 转发…</p>
-                        <p className="mt-1 text-small text-default-500">多入口或多目标地址会分别检测，请勿关闭此窗口。</p>
-                      </div>
+                  {forwardPingResult && (
+                    <div className="flex items-center gap-2 rounded-lg bg-primary-50 px-3 py-2 text-small text-primary dark:bg-primary-100/10">
+                      {forwardPingLoading && <Spinner size="sm" />}
+                      <span>{diagnosisProgressText(forwardPingResult, forwardPingLoading)}{forwardPingLoading && '；关闭将请求取消剩余检测'}</span>
                     </div>
-                  ) : forwardPingResult ? (
+                  )}
+                  {tunnelDiagnosis.error && <Alert color="warning" variant="flat" title="进度提示" description={tunnelDiagnosis.error} />}
+                  {forwardPingResult?.message && <Alert color="warning" variant="flat" title="任务说明" description={forwardPingResult.message} />}
+                  {forwardPingResult ? (
                     <div className="space-y-4">
                       <div className="grid grid-cols-3 gap-3">
                         <Card className="border border-default-200 shadow-none">
@@ -1591,7 +1533,7 @@ export default function TunnelPage() {
                         </Card>
                       </div>
 
-                      {forwardPingResult.totalForwards === 0 ? (
+                      {forwardPingResult.totalForwards === 0 && !forwardPingLoading && !tunnelDiagnosis.error ? (
                         <Alert color="warning" variant="flat" title="该隧道下暂无转发，无需检测。" />
                       ) : (
                         forwardPingResult.forwards.map((forward) => (
@@ -1602,7 +1544,7 @@ export default function TunnelPage() {
                                 {forward.remoteAddress && <p className="mt-1 truncate font-mono text-tiny text-default-500">{forward.remoteAddress}</p>}
                               </div>
                               <Chip color={forward.success ? 'success' : 'danger'} variant="flat">
-                                {forward.success ? '全部通过' : '检测失败'}
+                                {forward.success ? '全部通过' : forward.outcome && forward.outcome !== 'failed' ? '未检测' : '检测失败'}
                               </Chip>
                             </CardHeader>
                             <CardBody className="space-y-2 pt-0">
@@ -1620,7 +1562,7 @@ export default function TunnelPage() {
                                   </div>
                                 </div>
                               )) : (
-                                <Alert color="danger" variant="flat" title="错误详情" description={forward.message || '未返回诊断结果'} />
+                                <Alert color={forward.outcome && forward.outcome !== 'failed' ? 'warning' : 'danger'} variant="flat" title={forward.outcome && forward.outcome !== 'failed' ? '未完成原因' : '错误详情'} description={forward.message || '未返回诊断结果'} />
                               )}
                               {!forward.success && forward.results?.length ? <Alert color="danger" variant="flat" title="检测结论" description={forward.message || '至少一个链路检测未通过'} /> : null}
                             </CardBody>
@@ -1631,9 +1573,12 @@ export default function TunnelPage() {
                   ) : null}
                 </ModalBody>
                 <ModalFooter>
-                  <Button variant="light" onPress={onClose}>关闭</Button>
+                  <Button variant="light" onPress={onClose}>{forwardPingLoading ? '取消并关闭' : '关闭'}</Button>
+                  {forwardPingLoading && forwardPingResult?.taskId && (
+                    <Button color="warning" variant="flat" isLoading={tunnelDiagnosis.cancelling} onPress={() => void tunnelDiagnosis.cancel()}>取消剩余检测</Button>
+                  )}
                   {currentPingTunnel && (
-                    <Button color="success" onPress={() => handleDiagnoseAllForwards(currentPingTunnel)} isLoading={forwardPingLoading}>
+                    <Button color="success" onPress={() => handleDiagnoseAllForwards(currentPingTunnel)} isDisabled={forwardPingLoading}>
                       重新 PING
                     </Button>
                   )}

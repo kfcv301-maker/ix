@@ -7,11 +7,13 @@ import com.admin.common.dto.NodeDto;
 import com.admin.common.dto.NodeInstallCommandDto;
 import com.admin.common.dto.NodeUpdateDto;
 import com.admin.common.lang.R;
+import com.admin.common.service.NodeInstallBootstrapService;
 import com.admin.common.utils.AESCrypto;
 import com.admin.common.utils.WebSocketServer;
 import com.admin.common.utils.JwtUtil;
 import com.admin.entity.Node;
 import com.admin.entity.Tunnel;
+import com.admin.entity.User;
 import com.admin.mapper.NodeMapper;
 import com.admin.mapper.TunnelEntryNodeMapper;
 import com.admin.mapper.UserMapper;
@@ -72,6 +74,9 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
     
     @Resource
     private UserMapper userMapper;
+
+    @Resource
+    private NodeInstallBootstrapService installBootstrapService;
 
     @Resource
     private TunnelEntryNodeMapper tunnelEntryNodeMapper;
@@ -473,8 +478,45 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
         }
         if (!canManage(node)) return R.err(403, "只能获取自己创建的节点安装命令");
 
-        // 2. 构建安装命令
-        return buildInstallCommand(node, commandDto);
+        // Validate the complete configuration before issuing a short-lived capability.
+        R installation = buildInstallCommand(node, commandDto);
+        if (installation.getCode() != 0) return installation;
+        if (StrUtil.isBlank(node.getSecret())) return R.err("该节点密钥无效，请重新创建节点");
+        User issuer = userMapper.selectById(currentUserId());
+        if (issuer == null || !Objects.equals(issuer.getStatus(), 1)) {
+            return R.err(403, "当前账号无法获取安装命令");
+        }
+        String origin = normalizePanelUrl(commandDto.getPanelUrl());
+        try {
+            String token = installBootstrapService.issue(node.getId(), issuer.getId(),
+                    issuer.getTokenVersion() == null ? 0 : issuer.getTokenVersion(), origin, node.getSecret());
+            String url = origin + "/api/v1/node/bootstrap/" + token;
+            // Download completely before execution. The subshell trap cleans up on
+            // curl/bash failure and preserves the command's nonzero exit status.
+            return R.ok("(f=$(mktemp) || exit; trap 'rm -f \"$f\"' EXIT; curl -fsS "
+                    + shellQuote(url) + " -o \"$f\" && bash \"$f\")");
+        } catch (IllegalStateException exception) {
+            return R.err("安装命令请求过多，请稍后重试");
+        }
+    }
+
+    @Override
+    public String claimInstallScript(String bootstrapToken) {
+        NodeInstallBootstrapService.PendingInstall install = installBootstrapService.claim(bootstrapToken);
+        if (install == null) return null;
+        Node node = this.getById(install.nodeId());
+        User issuer = userMapper.selectById(install.issuerId());
+        if (node == null || !install.matchesNodeSecret(node.getSecret()) || issuer == null
+                || !Objects.equals(issuer.getStatus(), 1)
+                || (issuer.getTokenVersion() == null ? 0 : issuer.getTokenVersion()) != install.tokenVersion()
+                || !(Objects.equals(issuer.getRoleId(), 0) || Objects.equals(node.getOwnerUserId(), issuer.getId()))) {
+            return null;
+        }
+        NodeInstallCommandDto request = new NodeInstallCommandDto();
+        request.setId(node.getId());
+        request.setPanelUrl(install.panelUrl());
+        R result = buildInstallCommand(node, request);
+        return result.getCode() == 0 ? "#!/usr/bin/env bash\n" + result.getData() + "\n" : null;
     }
 
     private boolean isAdministrator() {
@@ -498,7 +540,7 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
     private R buildInstallCommand(Node node, NodeInstallCommandDto commandDto) {
         String panelUrl = normalizePanelUrl(commandDto.getPanelUrl());
         if (panelUrl == null) {
-            return R.err("无法识别当前面板域名，请通过 HTTPS 域名访问面板后重试");
+            return R.err("无法识别当前面板地址，请从有效的 HTTP/HTTPS 面板页面重新获取命令");
         }
 
         StringBuilder command = new StringBuilder();

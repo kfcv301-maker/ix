@@ -43,13 +43,12 @@ import {
   pauseForwardService,
   resumeForwardService,
   diagnoseForward,
-  diagnoseTunnelForwards,
-  getTunnelForwardDiagnosisTask,
-  cancelTunnelForwardDiagnosisTask,
   updateForwardOrder,
   getVpsHosts
 } from "@/api";
 import { JwtUtil } from "@/utils/jwt";
+import { useTunnelDiagnosis } from '@/hooks/use-tunnel-diagnosis';
+import { diagnosisProgressText } from '@/utils/tunnel-diagnosis';
 import {
   bulkForwardFieldLabels, planBulkForwardUpdates, executeBulkForwardUpdates,
   type BulkForwardField, type BulkForwardPatch, type BulkForwardPlanEntry, type BulkForwardResult,
@@ -156,28 +155,6 @@ interface TunnelGroup {
   forwards: Forward[];
 }
 
-interface TunnelPingForwardReport {
-  forwardId: number;
-  forwardName: string;
-  remoteAddress: string;
-  success: boolean;
-  message?: string;
-  results: DiagnosisResult['results'];
-}
-
-interface TunnelPingSummary {
-  taskId?: string;
-  status?: 'queued' | 'running' | 'cancelling' | 'completed' | 'cancelled' | 'timed_out' | 'failed';
-  completedForwards?: number;
-  message?: string;
-  tunnelId: number;
-  tunnelName: string;
-  totalForwards: number;
-  successfulForwards: number;
-  failedForwards: number;
-  forwards: TunnelPingForwardReport[];
-}
-
 const formatVpsTargetAddress = (host: VpsHost) => {
   const address = host.host.trim();
   if (!address) return '';
@@ -244,9 +221,8 @@ export default function ForwardPage() {
   const [currentDiagnosisForward, setCurrentDiagnosisForward] = useState<Forward | null>(null);
   const [diagnosisResult, setDiagnosisResult] = useState<DiagnosisResult | null>(null);
   const [tunnelPingModalOpen, setTunnelPingModalOpen] = useState(false);
-  const [tunnelPingLoading, setTunnelPingLoading] = useState(false);
-  const [tunnelPingSummary, setTunnelPingSummary] = useState<TunnelPingSummary | null>(null);
-  const [tunnelPingTaskId, setTunnelPingTaskId] = useState<string | null>(null);
+  const tunnelDiagnosis = useTunnelDiagnosis();
+  const { loading: tunnelPingLoading, summary: tunnelPingSummary } = tunnelDiagnosis;
   const [addressModalTitle, setAddressModalTitle] = useState('');
   const [addressList, setAddressList] = useState<AddressItem[]>([]);
   
@@ -398,38 +374,6 @@ export default function ForwardPage() {
     const timer = window.setTimeout(() => loadData(false), 3000);
     return () => window.clearTimeout(timer);
   }, [forwards]);
-
-  // Tunnel diagnostics run as a bounded server-side task. Polling is short
-  // and cancellable, so a tunnel with many forwards never has to fit inside a
-  // single browser/API timeout.
-  useEffect(() => {
-    if (!tunnelPingTaskId) return;
-    let disposed = false;
-    const terminalStates = new Set(['completed', 'cancelled', 'timed_out', 'failed']);
-    const refreshTask = async () => {
-      try {
-        const response: any = await getTunnelForwardDiagnosisTask(tunnelPingTaskId);
-        if (disposed) return;
-        if (response?.code === 0 && response.data) {
-          const summary = response.data as TunnelPingSummary;
-          setTunnelPingSummary(summary);
-          if (terminalStates.has(summary.status || '')) {
-            setTunnelPingLoading(false);
-            setTunnelPingTaskId(null);
-          }
-        }
-      } catch {
-        // Keep the task running and retry on the next poll. A temporary
-        // browser/network failure must not imply that node commands stopped.
-      }
-    };
-    void refreshTask();
-    const timer = window.setInterval(() => void refreshTask(), 1200);
-    return () => {
-      disposed = true;
-      window.clearInterval(timer);
-    };
-  }, [tunnelPingTaskId]);
 
   // 切换显示模式并保存到localStorage
   const handleViewModeChange = () => {
@@ -931,74 +875,15 @@ export default function ForwardPage() {
     }
 
     setTunnelPingModalOpen(true);
-    setTunnelPingLoading(true);
-    setTunnelPingTaskId(null);
-    setTunnelPingSummary({
+    await tunnelDiagnosis.start({
       tunnelId: tunnelGroup.tunnelId,
       tunnelName: tunnelGroup.tunnelName,
       totalForwards: tunnelGroup.forwards.length,
-      successfulForwards: 0,
-      failedForwards: 0,
-      forwards: []
     });
-
-    try {
-      const response: any = await diagnoseTunnelForwards(tunnelGroup.tunnelId);
-      if (response?.code === 0 && response.data) {
-        const summary = response.data as TunnelPingSummary;
-        setTunnelPingSummary(summary);
-        if (summary.taskId) {
-          setTunnelPingTaskId(summary.taskId);
-        } else {
-          setTunnelPingLoading(false);
-        }
-      } else {
-        toast.error(response?.msg || '一键 PING 失败');
-        setTunnelPingSummary({
-          tunnelId: tunnelGroup.tunnelId,
-          tunnelName: tunnelGroup.tunnelName,
-          totalForwards: 0,
-          successfulForwards: 0,
-          failedForwards: 1,
-          forwards: [{
-            forwardId: 0,
-            forwardName: '批量检测失败',
-            remoteAddress: '',
-            success: false,
-            message: response?.msg || '无法开始检测',
-            results: []
-          }]
-        });
-        setTunnelPingLoading(false);
-      }
-    } catch {
-      toast.error('网络错误，请重试');
-      setTunnelPingSummary({
-        tunnelId: tunnelGroup.tunnelId,
-        tunnelName: tunnelGroup.tunnelName,
-        totalForwards: 0,
-        successfulForwards: 0,
-        failedForwards: 1,
-        forwards: [{
-          forwardId: 0,
-          forwardName: '网络错误',
-          remoteAddress: '',
-          success: false,
-          message: '无法连接到服务器',
-          results: []
-          }]
-        });
-      setTunnelPingLoading(false);
-    }
   };
 
   const closeTunnelPingModal = () => {
-    const activeTaskId = tunnelPingTaskId;
-    if (activeTaskId && tunnelPingLoading) {
-      void cancelTunnelForwardDiagnosisTask(activeTaskId);
-    }
-    setTunnelPingTaskId(null);
-    setTunnelPingLoading(false);
+    tunnelDiagnosis.close();
     setTunnelPingModalOpen(false);
   };
 
@@ -1933,7 +1818,7 @@ export default function ForwardPage() {
                           className="shadow-none border border-divider"
                         >
                           <div className="flex flex-col gap-2 border-b border-divider px-4 pb-3 pt-1 sm:flex-row sm:items-center sm:justify-between">
-                            <p className="text-xs text-default-500">检测此隧道下全部转发的完整 TCP 链路（最多 20 条，30 秒冷却）</p>
+                            <p className="text-xs text-default-500">检测全部转发的完整 TCP 链路；每 20 条自动分批，30 秒冷却</p>
                             <Button
                               size="sm"
                               color="primary"
@@ -2702,12 +2587,14 @@ export default function ForwardPage() {
                     </div>
                   )}
 
-                  {tunnelPingLoading && (
+                  {tunnelPingSummary && (
                     <div className="flex items-center gap-2 rounded-lg bg-primary-50 px-3 py-2 text-small text-primary dark:bg-primary-100/10">
-                      <Spinner size="sm" color="primary" />
-                      正在检测 {tunnelPingSummary?.completedForwards ?? 0}/{tunnelPingSummary?.totalForwards ?? 0} 条转发；关闭窗口会取消剩余检测
+                      {tunnelPingLoading && <Spinner size="sm" color="primary" />}
+                      <span>{diagnosisProgressText(tunnelPingSummary, tunnelPingLoading)}{tunnelPingLoading && '；关闭将请求取消剩余检测'}</span>
                     </div>
                   )}
+                  {tunnelDiagnosis.error && <Alert color="warning" variant="flat" title="进度提示" description={tunnelDiagnosis.error} />}
+                  {tunnelPingSummary?.message && <Alert color="warning" variant="flat" title="任务说明" description={tunnelPingSummary.message} />}
 
                   {tunnelPingSummary?.forwards.length ? (
                     <div className="space-y-3 pb-1">
@@ -2724,7 +2611,7 @@ export default function ForwardPage() {
                               </code>
                             </div>
                             <Chip color={forward.success ? 'success' : 'danger'} variant="flat" size="sm">
-                              {forward.success ? '通过' : '未通过'}
+                                  {forward.success ? '通过' : forward.outcome && forward.outcome !== 'failed' ? '未检测' : '未通过'}
                             </Chip>
                           </CardHeader>
                           <CardBody className="gap-2 pt-0">
@@ -2738,7 +2625,7 @@ export default function ForwardPage() {
                                 </span>
                               </div>
                             )) : (
-                              <Alert color="danger" variant="flat" title="检测失败" description={forward.message || '未返回有效检测数据'} />
+                              <Alert color={forward.outcome && forward.outcome !== 'failed' ? 'warning' : 'danger'} variant="flat" title={forward.outcome && forward.outcome !== 'failed' ? '未完成原因' : '检测失败'} description={forward.message || '未返回有效检测数据'} />
                             )}
                             {!forward.success && forward.results.length > 0 && forward.message && (
                               <p className="text-tiny text-danger">{forward.message}</p>
@@ -2752,6 +2639,9 @@ export default function ForwardPage() {
                   ) : null}
                 </ModalBody>
                 <ModalFooter>
+                  {tunnelPingLoading && tunnelPingSummary?.taskId && (
+                    <Button color="warning" variant="flat" isLoading={tunnelDiagnosis.cancelling} onPress={() => void tunnelDiagnosis.cancel()}>取消剩余检测</Button>
+                  )}
                   <Button variant="light" onPress={onClose}>
                     {tunnelPingLoading ? '取消并关闭' : '关闭'}
                   </Button>

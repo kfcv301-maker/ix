@@ -24,6 +24,7 @@ import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicLong;
 
 
 @Slf4j
@@ -37,6 +38,23 @@ public class WebSocketServer extends TextWebSocketHandler {
     
     // 存储节点ID和对应的WebSocket session映射
     private static final ConcurrentHashMap<Long, WebSocketSession> nodeSessions = new ConcurrentHashMap<>();
+    private static final Object[] nodeLifecycleLocks = new Object[64];
+    static {
+        for (int index = 0; index < nodeLifecycleLocks.length; index++) nodeLifecycleLocks[index] = new Object();
+    }
+
+    private static Object nodeLifecycleLock(Long nodeId) {
+        return nodeLifecycleLocks[Math.floorMod(nodeId.hashCode(), nodeLifecycleLocks.length)];
+    }
+
+    // One bounded snapshot per connected node. Never persist metrics or ask an
+    // Agent for another expensive sample just because a browser opens a page.
+    private static final ConcurrentHashMap<Long, NodeMetricSnapshot> latestNodeMetrics = new ConcurrentHashMap<>();
+    private static final AtomicLong metricSequence = new AtomicLong();
+    private static final long MAX_SNAPSHOT_AGE_MS = 30_000;
+
+    private record NodeMetricSnapshot(String sessionId, JSONObject summary, JSONObject detail,
+                                      long receivedAt, long sequence) { }
     
     // 为每个session提供锁对象，防止并发发送消息
     private static final ConcurrentHashMap<String, Object> sessionLocks = new ConcurrentHashMap<>();
@@ -46,6 +64,15 @@ public class WebSocketServer extends TextWebSocketHandler {
     
     // 缓存加密器实例，避免重复创建
     private static final ConcurrentHashMap<String, AESCrypto> cryptoCache = new ConcurrentHashMap<>();
+    private static final BrowserMetricOutbox browserOutbox = new BrowserMetricOutbox(
+            (session, nodeId) -> nodeId == null ? session.isOpen() && activeSessions.contains(session) : canViewNode(session, nodeId),
+            (session, message) -> {
+                // Stamp dispatch time, including time spent waiting in the
+                // bounded outbox, so browser clock skew and backlog stay visible.
+                JSONObject event = JSONObject.parseObject(message);
+                event.put("serverNow", System.currentTimeMillis());
+                sendToUser(session, event.toJSONString());
+            }, WebSocketServer::cleanupSession);
 
     /**
      * 加密消息包装器
@@ -87,12 +114,7 @@ public class WebSocketServer extends TextWebSocketHandler {
                     // legitimately contain fields with metric-like names.
                     sendToUser(session, "{\"type\":\"call\"}", nodeSecret);
 
-                    JSONObject jsonObject = new JSONObject();
-                    jsonObject.put("id", id);
-                    jsonObject.put("type", "info");
-                    jsonObject.put("data", decryptedPayload);
-                    broadcastNodeMessage(Long.valueOf(id), jsonObject.toJSONString(),
-                            isDetailedMetricReport(nodeMetric));
+                    publishNodeMetric(Long.valueOf(id), session, nodeMetric);
                 } else if (decryptedPayload.contains("requestId")) {
                     log.info("收到消息: {}", decryptedPayload);
                     // 处理命令响应消息
@@ -239,6 +261,7 @@ public class WebSocketServer extends TextWebSocketHandler {
             if (!Objects.equals(type, "1")) {
                 // 网页管理员连接
                 activeSessions.add(session);
+                replayNodeMetrics(session);
                 log.info("管理员连接建立，sessionId: {}", session.getId());
             } else {
                 // 客户端节点连接
@@ -247,8 +270,12 @@ public class WebSocketServer extends TextWebSocketHandler {
                 
                 log.info("节点 {} 尝试连接，开始处理连接逻辑", nodeId);
                 
-                // 检查是否已有该节点的连接，如果有则记录日志但直接覆盖
-                WebSocketSession existingSession = nodeSessions.get(nodeId);
+                WebSocketSession existingSession = null;
+                try {
+                synchronized (nodeLifecycleLock(nodeId)) {
+                // Serialize connection lifecycle/database status only, never
+                // ordinary metric packets or data forwarding.
+                existingSession = nodeSessions.get(nodeId);
                 if (existingSession != null && existingSession.isOpen()) {
                     log.info("节点 {} 已有连接存在: {}，新连接将覆盖旧连接", nodeId, existingSession.getId());
                     // 清理旧连接的锁对象
@@ -256,17 +283,8 @@ public class WebSocketServer extends TextWebSocketHandler {
                 }
                 
                 // 直接覆盖会话映射（不主动关闭旧连接，让它自然断开）
+                latestNodeMetrics.remove(nodeId);
                 nodeSessions.put(nodeId, session);
-                
-                // 如果有旧连接，在覆盖映射后主动关闭它
-                if (existingSession != null && existingSession.isOpen()) {
-                    try {
-                        log.info("主动关闭节点 {} 的旧连接: {}", nodeId, existingSession.getId());
-                        existingSession.close();
-                    } catch (Exception e) {
-                        log.info("关闭节点 {} 旧连接失败: {}", nodeId, e.getMessage());
-                    }
-                }
                 
                 // 更新节点状态为在线
                 Node node = nodeService.getById(nodeId);
@@ -286,6 +304,7 @@ public class WebSocketServer extends TextWebSocketHandler {
                         res.put("id", id);
                         res.put("type", "status");
                         res.put("data", 1);
+                        res.put("connectionId", session.getId());
                         broadcastNodeMessage(nodeId, res.toJSONString(), false);
 
                         // config.json 会在重装 agent 时被重新创建，协议开关会回到
@@ -298,7 +317,17 @@ public class WebSocketServer extends TextWebSocketHandler {
                 } else {
                     log.info("节点 {} 不存在，无法更新状态", nodeId);
                     // 移除无效的会话
-                    nodeSessions.remove(nodeId);
+                    nodeSessions.remove(nodeId, session);
+                    removeNodeMetric(nodeId, session);
+                }
+                }
+                } finally {
+                    // A transport close can call back into the lifecycle.
+                    // Perform that I/O after releasing the stripe lock.
+                    if (existingSession != null && existingSession != session && existingSession.isOpen()) {
+                        try { existingSession.close(); }
+                        catch (Exception failure) { log.debug("关闭节点 {} 旧连接失败", nodeId, failure); }
+                    }
                 }
             }
 
@@ -310,7 +339,10 @@ public class WebSocketServer extends TextWebSocketHandler {
                 String type = session.getAttributes().get("type").toString();
                 if (Objects.equals(type, "1")) {
                     Long nodeId = Long.valueOf(id);
-                    nodeSessions.remove(nodeId);
+                    synchronized (nodeLifecycleLock(nodeId)) {
+                        nodeSessions.remove(nodeId, session);
+                        removeNodeMetric(nodeId, session);
+                    }
                     log.info("由于异常，移除节点 {} 的会话", nodeId);
                 }
             } catch (Exception cleanupException) {
@@ -361,10 +393,12 @@ public class WebSocketServer extends TextWebSocketHandler {
             if (!Objects.equals(type, "1")) {
                 // 管理员连接关闭
                 boolean removed = activeSessions.remove(session);
+                browserOutbox.remove(session);
                 log.info("管理员连接关闭，sessionId: {}, 移除结果: {}", sessionId, removed);
             } else {
                 // 客户端节点连接关闭
                 Long nodeId = Long.valueOf(id);
+                synchronized (nodeLifecycleLock(nodeId)) {
                 
                 // 验证当前会话是否还是活跃会话（关键：这里会自动过滤掉被覆盖的旧连接）
                 WebSocketSession currentSession = nodeSessions.get(nodeId);
@@ -376,7 +410,8 @@ public class WebSocketServer extends TextWebSocketHandler {
                 
                 log.info("节点 {} 当前活跃连接关闭，开始验证并更新状态", nodeId);
                 
-                    nodeSessions.remove(nodeId);
+                    if (!nodeSessions.remove(nodeId, session)) return;
+                    removeNodeMetric(nodeId, session);
                     
                     // 更新节点状态为离线
                     Node node = nodeService.getById(nodeId);
@@ -398,6 +433,7 @@ public class WebSocketServer extends TextWebSocketHandler {
                     } else {
                         log.info("节点 {} 不存在，无法更新离线状态", nodeId);
                     }
+                }
             }
             
             // 清理session锁对象
@@ -449,6 +485,7 @@ public class WebSocketServer extends TextWebSocketHandler {
      */
     private static void cleanupSession(WebSocketSession session) {
         if (session == null) return;
+        browserOutbox.remove(session);
         
         String sessionId = session.getId();
         
@@ -460,6 +497,7 @@ public class WebSocketServer extends TextWebSocketHandler {
         if (!removedFromAdmin) {
             nodeSessions.entrySet().removeIf(entry -> {
                 if (entry.getValue() == session) {
+                    removeNodeMetric(entry.getKey(), session);
                     return true;
                 }
                 return false;
@@ -473,9 +511,15 @@ public class WebSocketServer extends TextWebSocketHandler {
      * the role and the allowed node IDs as server-side session attributes.
      */
     private static void broadcastNodeMessage(Long nodeId, String message, boolean detailedMetrics) {
+        JSONObject event = tryParseJson(message);
+        if (event != null && "status".equals(event.getString("type"))) {
+            event.put("reportedAt", System.currentTimeMillis());
+            event.put("sequence", metricSequence.incrementAndGet());
+            message = event.toJSONString();
+        }
         for (WebSocketSession session : activeSessions) {
             if (canViewNode(session, nodeId) && (!detailedMetrics || wantsDetailedMetrics(session))) {
-                sendToUser(session, message);
+                browserOutbox.offer(session, nodeId, event == null ? 0 : event.getLongValue("sequence"), message, null);
             }
         }
     }
@@ -484,8 +528,94 @@ public class WebSocketServer extends TextWebSocketHandler {
         return !"summary".equalsIgnoreCase(String.valueOf(session.getAttributes().get("monitorMetrics")));
     }
 
+    private static void publishNodeMetric(Long nodeId, WebSocketSession source, JSONObject metric) {
+        // A replaced Agent may still finish decoding an in-flight packet.
+        if (nodeSessions.get(nodeId) != source || Boolean.TRUE.equals(source.getAttributes().get("monitorRetired"))) return;
+        final long receivedAt = System.currentTimeMillis();
+        final long sequence = metricSequence.incrementAndGet();
+        JSONObject summary = new JSONObject();
+        summary.put("metrics_level", "summary");
+        for (String key : new String[]{"uptime", "bytes_received", "bytes_transmitted", "cpu_usage", "memory_usage"}) {
+            if (metric.containsKey(key)) summary.put(key, metric.get(key));
+        }
+        NodeMetricSnapshot snapshot = latestNodeMetrics.compute(nodeId, (ignored, previous) -> {
+            if (nodeSessions.get(nodeId) != source || Boolean.TRUE.equals(source.getAttributes().get("monitorRetired"))) return previous;
+            JSONObject detail = new JSONObject();
+            if (!isDetailedMetricReport(metric) && previous != null && previous.sessionId().equals(source.getId())) {
+                detail.putAll(previous.detail());
+            }
+            detail.putAll(metric);
+            return new NodeMetricSnapshot(source.getId(), summary, detail, receivedAt, sequence);
+        });
+        if (snapshot == null || !snapshot.sessionId().equals(source.getId()) || nodeSessions.get(nodeId) != source
+                || Boolean.TRUE.equals(source.getAttributes().get("monitorRetired"))) return;
+        for (WebSocketSession browser : activeSessions) {
+            if (canViewNode(browser, nodeId)) sendMetric(browser, nodeId, snapshot, metric);
+        }
+    }
+
+    private static void sendMetric(WebSocketSession browser, Long nodeId, NodeMetricSnapshot snapshot, JSONObject liveMetric) {
+        browserOutbox.offer(browser, nodeId, snapshot.sequence(), metricEvent(browser, nodeId, snapshot, liveMetric),
+                () -> metricEvent(browser, nodeId, snapshot, null));
+    }
+
+    private static String metricEvent(WebSocketSession browser, Long nodeId, NodeMetricSnapshot snapshot, JSONObject liveMetric) {
+        JSONObject event = new JSONObject();
+        event.put("id", nodeId);
+        event.put("type", "info");
+        JSONObject payload = wantsDetailedMetrics(browser)
+                ? (liveMetric == null ? snapshot.detail() : liveMetric) : snapshot.summary();
+        event.put("data", payload.toJSONString());
+        event.put("reportedAt", snapshot.receivedAt());
+        event.put("serverNow", System.currentTimeMillis());
+        event.put("sequence", snapshot.sequence());
+        event.put("connectionId", snapshot.sessionId());
+        event.put("snapshot", liveMetric == null);
+        return event.toJSONString();
+    }
+
+    private static void replayNodeMetrics(WebSocketSession browser) {
+        latestNodeMetrics.forEach((nodeId, snapshot) -> {
+            WebSocketSession source = nodeSessions.get(nodeId);
+            if (source != null && source.isOpen() && source.getId().equals(snapshot.sessionId())
+                    && !Boolean.TRUE.equals(source.getAttributes().get("monitorRetired"))
+                    && System.currentTimeMillis() - snapshot.receivedAt() <= MAX_SNAPSHOT_AGE_MS
+                    && canViewNode(browser, nodeId)) {
+                sendMetric(browser, nodeId, snapshot, null);
+            }
+        });
+        // Distinguish an established monitoring socket with no samples yet
+        // from a ticket/network failure. Older clients safely ignore this type.
+        JSONObject ready = new JSONObject();
+        ready.put("type", "ready");
+        browserOutbox.offer(browser, null, 0, ready.toJSONString(), null);
+    }
+
+    private static void removeNodeMetric(Long nodeId, WebSocketSession source) {
+        latestNodeMetrics.computeIfPresent(nodeId, (ignored, snapshot) ->
+                snapshot.sessionId().equals(source.getId()) ? null : snapshot);
+    }
+
+    /** Stop monitoring immediately while retaining this transport for cleanup command ACKs. */
+    public static void retireNodeMetrics(Long nodeId) {
+        synchronized (nodeLifecycleLock(nodeId)) {
+        WebSocketSession source = nodeSessions.get(nodeId);
+        if (source != null) source.getAttributes().put("monitorRetired", true);
+        latestNodeMetrics.remove(nodeId);
+        JSONObject offline = new JSONObject();
+        offline.put("id", nodeId);
+        offline.put("type", "status");
+        offline.put("data", 0);
+        if (source != null) offline.put("connectionId", source.getId());
+        broadcastNodeMessage(nodeId, offline.toJSONString(), false);
+        }
+        // Retirement is an attribute of the retained transport, not a global
+        // node tombstone. Normal transport disposal reclaims it automatically.
+    }
+
     /** Retired nodes lose their active session after best-effort cleanup. */
     public static void closeNodeSession(Long nodeId) {
+        latestNodeMetrics.remove(nodeId);
         WebSocketSession session = nodeSessions.remove(nodeId);
         if (session == null) return;
         cleanupSession(session);
@@ -523,7 +653,7 @@ public class WebSocketServer extends TextWebSocketHandler {
 
     @SuppressWarnings("unchecked")
     private static boolean canViewNode(WebSocketSession session, Long nodeId) {
-        if (session == null || nodeId == null || !session.isOpen()) {
+        if (session == null || nodeId == null || !session.isOpen() || !activeSessions.contains(session)) {
             return false;
         }
 
@@ -531,12 +661,7 @@ public class WebSocketServer extends TextWebSocketHandler {
         if (expiry instanceof Number && System.currentTimeMillis() >= ((Number) expiry).longValue()) {
             // A grant expired while this socket was open. Reconnect through the
             // authenticated handshake so its node list is recalculated.
-            cleanupSession(session);
-            try {
-                session.close(CloseStatus.POLICY_VIOLATION);
-            } catch (Exception exception) {
-                log.debug("关闭已过期的监控会话失败: {}", exception.getMessage());
-            }
+            browserOutbox.discard(session);
             return false;
         }
 
@@ -567,7 +692,8 @@ public class WebSocketServer extends TextWebSocketHandler {
 
         if (!nodeSession.isOpen()) {
             log.info("发送消息失败：节点 {} 连接已断开，清理会话", node_id);
-            nodeSessions.remove(node_id);
+            nodeSessions.remove(node_id, nodeSession);
+            removeNodeMetric(node_id, nodeSession);
             sessionLocks.remove(nodeSession.getId());
             GostDto result = new GostDto();
             result.setMsg("节点连接已断开");

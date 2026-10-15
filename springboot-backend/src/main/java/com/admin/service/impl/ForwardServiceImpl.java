@@ -375,7 +375,22 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
         return diagnoseForwardInternal(forward);
     }
 
+    @Override
+    public R diagnoseForwardForSystem(Forward expectedForward, java.util.function.BooleanSupplier continueDiagnosis) {
+        Forward latest = this.getById(expectedForward.getId());
+        if (latest == null || !Objects.equals(latest.getUserId(), expectedForward.getUserId())
+                || !Objects.equals(latest.getTunnelId(), expectedForward.getTunnelId())
+                || !Objects.equals(latest.getRemoteAddr(), expectedForward.getRemoteAddr())) {
+            return R.err("转发已删除或配置、归属已变化，请重新检测");
+        }
+        return diagnoseForwardInternal(latest, continueDiagnosis);
+    }
+
     private R diagnoseForwardInternal(Forward forward) {
+        return diagnoseForwardInternal(forward, () -> true);
+    }
+
+    private R diagnoseForwardInternal(Forward forward, java.util.function.BooleanSupplier continueDiagnosis) {
         // 3. 获取隧道信息
         Tunnel tunnel = validateTunnel(forward.getTunnelId());
         if (tunnel == null) {
@@ -403,6 +418,7 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
                 }
 
                 for (Node inNode : inNodes) {
+                    if (!continueDiagnosis.getAsBoolean() || Thread.currentThread().isInterrupted()) return R.err("检测已中止");
                     results.add(performTcpPingDiagnosis(inNode, targetIp, targetPort, "入口->目标"));
                 }
             }
@@ -415,6 +431,7 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
 
             // 入口TCP ping出口（使用转发的出口端口）
             for (Node inNode : inNodes) {
+                if (!continueDiagnosis.getAsBoolean() || Thread.currentThread().isInterrupted()) return R.err("检测已中止");
                 results.add(performTcpPingDiagnosis(inNode, outNode.getServerIp(), forward.getOutPort(), "入口->出口"));
             }
 
@@ -426,6 +443,7 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
                 if (targetIp == null || targetPort == -1) {
                     return R.err("无法解析目标地址: " + remoteAddress);
                 }
+                if (!continueDiagnosis.getAsBoolean() || Thread.currentThread().isInterrupted()) return R.err("检测已中止");
                 DiagnosisResult outToTargetResult = performTcpPingDiagnosis(outNode, targetIp, targetPort, "出口->目标");
                 results.add(outToTargetResult);
             }
