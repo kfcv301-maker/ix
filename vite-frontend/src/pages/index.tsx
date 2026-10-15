@@ -264,95 +264,73 @@ export default function IndexPage() {
 
   return (
     <div className="login-page">
-      <header className="login-header">
-        <a className="login-brand" href="/" aria-label={`${appName} 首页`}>
-          <span className="login-brand-mark" aria-hidden="true">
-            <svg width="26" height="26" viewBox="0 0 32 32" fill="none"><path d="M22.8 7.3A11.8 11.8 0 1 0 24.7 24c-6.9 2.1-13.3-3.4-12-10.3a10.6 10.6 0 0 0 10.1-6.4Z" fill="currentColor"/><circle cx="25" cy="8" r="2" fill="#b8f1df"/></svg>
-          </span>
-          <span>{appName}<small>RELAY CONSOLE</small></span>
-        </a>
-        {isWebView ? (
+      {isWebView && (
+        <header className="login-header">
           <button className="login-header-link" onClick={() => navigate('/settings')}>面板设置 <span aria-hidden="true">↗</span></button>
-        ) : <span className="login-header-note">你的连接管理空间</span>}
-      </header>
+        </header>
+      )}
 
       <main className="login-stage">
-        <section className="login-hero" aria-labelledby="login-hero-title">
-          <div className="login-hero-glow" aria-hidden="true" />
-          <div className="login-eyebrow"><span aria-hidden="true" /> LUNARIS / RELAY</div>
-          <h1 id="login-hero-title">每一条连接，<br /><span>尽在掌握。</span></h1>
-          <p className="login-hero-description">从节点到隧道，让转发管理更清晰。<br />连接你的网络，专注每一次传输。</p>
-          <div className="login-visual" aria-hidden="true">
-            <div className="login-visual-caption"><span>转发链路示意</span><span>TCP / UDP</span></div>
-            <svg className="login-network" viewBox="0 0 480 240" fill="none">
-              <defs><linearGradient id="relay-route" x1="70" y1="0" x2="425" y2="0" gradientUnits="userSpaceOnUse"><stop stopColor="#5b8bf8"/><stop offset="1" stopColor="#b5eddb"/></linearGradient></defs>
-              <path d="M112 74H167C212 74 188 122 239 122H366M112 170H162C209 170 186 122 239 122" stroke="#29415d" strokeWidth="2" />
-              <path d="M112 74H167C212 74 188 122 239 122H366M112 170H162C209 170 186 122 239 122" stroke="url(#relay-route)" strokeWidth="2" strokeDasharray="4 10" />
-              <circle cx="201" cy="106" r="4" fill="#93b8ff"/><circle cx="306" cy="122" r="4" fill="#b5eddb"/>
-              <rect x="18" y="44" width="112" height="60" rx="14" fill="#152b43" stroke="#2d4664"/><rect x="18" y="140" width="112" height="60" rx="14" fill="#152b43" stroke="#2d4664"/>
-              <rect x="218" y="92" width="92" height="60" rx="16" fill="#253e5b" stroke="#5681b2"/>
-              <rect x="355" y="92" width="108" height="60" rx="14" fill="#193e43" stroke="#466e6b"/>
-              <circle cx="40" cy="74" r="4" fill="#8fb5ff"/><circle cx="40" cy="170" r="4" fill="#8fb5ff"/><circle cx="377" cy="122" r="4" fill="#b5eddb"/>
-              <text x="54" y="79" fill="#dce8fa" fontSize="13">接入节点 A</text><text x="54" y="175" fill="#dce8fa" fontSize="13">接入节点 B</text>
-              <text x="264" y="127" textAnchor="middle" fill="#e7f1ff" fontSize="14">隧道</text><text x="391" y="127" fill="#d8f3e9" fontSize="13">目标服务</text>
-            </svg>
+        <div className="login-stack">
+          <div className="login-brand">
+            <h1>{appName}</h1>
+            <p>转发管理控制台</p>
           </div>
-          <div className="login-hero-footer"><span>多节点管理</span><span>转发控制</span><span>实时监测</span></div>
-        </section>
 
-        <section className="login-form-panel" aria-labelledby="login-heading">
-          <div className="login-form-content">
-            <div className="login-form-heading"><span className="login-section-label">WELCOME BACK</span><h2 id="login-heading">欢迎回来</h2><p>登录账号，继续管理你的网络。</p></div>
-            <form className="login-form" noValidate aria-busy={loading} onSubmit={event => { event.preventDefault(); void handleLogin(); }}>
-                <Input
-                  name="username"
-                  autoComplete="username"
-                  label="用户名"
-                  placeholder="请输入用户名"
-                  value={form.username}
-                  onChange={(e) => handleInputChange('username', e.target.value)}
-                  labelPlacement="outside"
-                  classNames={{ base: 'login-field', inputWrapper: 'login-input-wrap', input: 'login-input', label: 'login-label' }}
-                  variant="bordered"
-                  isDisabled={loading}
-                  isInvalid={!!errors.username}
-                  errorMessage={errors.username}
-                />
+          <section className="login-form-panel" aria-labelledby="login-heading">
+            <div className="login-form-content">
+              <div className="login-form-heading"><h2 id="login-heading">欢迎回来</h2><p>输入账号和密码以登录控制台。</p></div>
+              <form className="login-form" noValidate aria-busy={loading} onSubmit={event => { event.preventDefault(); void handleLogin(); }}>
+                  <Input
+                    name="username"
+                    autoComplete="username"
+                    label="用户名"
+                    placeholder="请输入用户名"
+                    value={form.username}
+                    onChange={(e) => handleInputChange('username', e.target.value)}
+                    labelPlacement="outside"
+                    classNames={{ base: 'login-field', inputWrapper: 'login-input-wrap', input: 'login-input', label: 'login-label' }}
+                    variant="bordered"
+                    isDisabled={loading}
+                    isInvalid={!!errors.username}
+                    errorMessage={errors.username}
+                  />
                 
-                <Input
-                  name="password"
-                  autoComplete="current-password"
-                  label="密码"
-                  placeholder="请输入密码"
-                  type={passwordVisible ? 'text' : 'password'}
-                  value={form.password}
-                  onChange={(e) => handleInputChange('password', e.target.value)}
-                  onKeyDown={event => setCapsLock(event.getModifierState('CapsLock'))}
-                  onKeyUp={event => setCapsLock(event.getModifierState('CapsLock'))}
-                  onBlur={() => setCapsLock(false)}
-                  labelPlacement="outside"
-                  classNames={{ base: 'login-field', inputWrapper: 'login-input-wrap', input: 'login-input', label: 'login-label' }}
-                  variant="bordered"
-                  isDisabled={loading}
-                  isInvalid={!!errors.password}
-                  errorMessage={errors.password}
-                  endContent={<button className="login-password-toggle" type="button" disabled={loading} aria-label={passwordVisible ? '隐藏密码' : '显示密码'} aria-pressed={passwordVisible} onClick={() => setPasswordVisible(value => !value)}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>{passwordVisible && <path d="m3 3 18 18"/>}</svg></button>}
-                />
-                {capsLock && <p className="login-caps-lock" role="status">大写锁定已开启</p>}
-                <Button
-                  type="submit"
-                  color="primary"
-                  size="lg"
-                  isLoading={loading}
-                  isDisabled={loading}
-                  className="login-submit"
-                >
-                  {loading ? (showCaptcha ? "验证中..." : "登录中...") : <>登录控制台 <span aria-hidden="true">→</span></>}
-                </Button>
-                <p className="login-form-note"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="3"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg> 使用管理员分配的账号登录</p>
-            </form>
-          </div>
-        </section>
+                  <Input
+                    name="password"
+                    autoComplete="current-password"
+                    label="密码"
+                    placeholder="请输入密码"
+                    type={passwordVisible ? 'text' : 'password'}
+                    value={form.password}
+                    onChange={(e) => handleInputChange('password', e.target.value)}
+                    onKeyDown={event => setCapsLock(event.getModifierState('CapsLock'))}
+                    onKeyUp={event => setCapsLock(event.getModifierState('CapsLock'))}
+                    onBlur={() => setCapsLock(false)}
+                    labelPlacement="outside"
+                    classNames={{ base: 'login-field', inputWrapper: 'login-input-wrap', input: 'login-input', label: 'login-label' }}
+                    variant="bordered"
+                    isDisabled={loading}
+                    isInvalid={!!errors.password}
+                    errorMessage={errors.password}
+                    endContent={<button className="login-password-toggle" type="button" disabled={loading} aria-label={passwordVisible ? '隐藏密码' : '显示密码'} aria-pressed={passwordVisible} onClick={() => setPasswordVisible(value => !value)}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>{passwordVisible && <path d="m3 3 18 18"/>}</svg></button>}
+                  />
+                  {capsLock && <p className="login-caps-lock" role="status">大写锁定已开启</p>}
+                  <Button
+                    type="submit"
+                    color="primary"
+                    size="lg"
+                    isLoading={loading}
+                    isDisabled={loading}
+                    className="login-submit"
+                  >
+                    {loading ? (showCaptcha ? "验证中..." : "登录中...") : "登录控制台"}
+                  </Button>
+                  <p className="login-form-note"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="3"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg> 使用管理员分配的账号登录</p>
+              </form>
+            </div>
+          </section>
+        </div>
       </main>
       <footer className="login-footer"><span>{appName} <span className="login-footer-version">v{isWebView ? siteConfig.app_version : siteConfig.version}</span></span><a href="https://github.com/kfcv301-maker/ix" target="_blank" rel="noopener noreferrer">基于 flux-panel · 开源项目 <span aria-hidden="true">↗</span></a></footer>
         {/* 验证码弹层 */}
