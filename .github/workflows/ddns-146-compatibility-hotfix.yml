@@ -1,0 +1,36 @@
+name: Repair pinned 1.4.6 DDNS installer
+
+on:
+  push:
+    branches: [fix/ddns-empty-records-20261015]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ddns-installer-146-compatibility-hotfix
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: github.repository == 'kfcv301-maker/ix'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Fetch reviewed commit
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          git init .
+          git remote add origin https://github.com/kfcv301-maker/ix.git
+          git fetch --depth=1 origin "$SOURCE_SHA"
+          git checkout --detach FETCH_HEAD
+      - name: Check installer and simulate installation and machine replacement
+        run: |
+          bash -n install.sh
+          bash tests/install_tuning_test.sh
+          python3 tests/ddns_install_recovery_test.py install.sh
+      - name: Repair only the two pinned installer assets with retained originals
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/hotfix_ddns_release_146.py

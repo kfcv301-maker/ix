@@ -724,7 +724,8 @@ json_string() {
 }
 
 json_record_count() {
-  grep -oE '"id"[[:space:]]*:[[:space:]]*"[^"]+"' | wc -l | tr -d '[:space:]'
+  # A zero-record result is valid: grep returns 1 when it finds no IDs.
+  { grep -oE '"id"[[:space:]]*:[[:space:]]*"[^"]+"' || [[ "$?" -eq 1 ]]; } | wc -l | tr -d '[:space:]'
 }
 
 is_valid_ipv4() {
