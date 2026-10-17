@@ -37,6 +37,7 @@ CREATE TABLE `forward` (
   `out_port` int(10) DEFAULT NULL,
   `remote_addr` longtext NOT NULL,
   `vps_host_id` bigint(20) DEFAULT NULL,
+  `proxy_protocol` int(10) NOT NULL DEFAULT '0',
   `strategy` varchar(100) NOT NULL DEFAULT 'fifo',
   `interface_name` varchar(200) DEFAULT NULL,
   `in_flow` bigint(20) NOT NULL DEFAULT '0',
@@ -293,6 +294,12 @@ CREATE TABLE `user_tunnel` (
   `status` int(10) NOT NULL,
   `entry_address_mode` varchar(16) NOT NULL DEFAULT 'NONE',
   `entry_domain_id` bigint(20) DEFAULT NULL,
+  `tls_policy` varchar(16) NOT NULL DEFAULT 'UNRESTRICTED',
+  `allow_udp` tinyint(1) NOT NULL DEFAULT 1,
+  `protocol_sync_pending` tinyint(1) NOT NULL DEFAULT 0,
+  `protocol_sync_generation` varchar(36) DEFAULT NULL,
+  `protocol_sync_error` varchar(255) DEFAULT NULL,
+  `protocol_policy_revision` bigint(20) NOT NULL DEFAULT 0,
   KEY `idx_user_tunnel_entry_domain` (`entry_domain_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 

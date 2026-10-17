@@ -23,6 +23,7 @@ import {
   getNodeInstallCommand
 } from "@/api";
 import { getRealtimeSocketUrl } from "@/utils/realtime-socket";
+import { acceptRealtimeMetric, createRealtimeConnectionGate, mergeRealtimeNodes, shouldResetRealtimeMetrics } from "@/utils/realtime-state";
 
 interface Node {
   id: number;
@@ -38,6 +39,7 @@ interface Node {
   socks?: number; // 0 关 1 开
   status: number; // 1: 在线, 0: 离线
   connectionStatus: 'online' | 'offline';
+  connectionId?: string;
   systemInfo?: NodeSystemInfo | null;
   copyLoading?: boolean;
   tcpTuningProfile?: TcpTuningProfile;
@@ -57,6 +59,7 @@ interface NodeSystemInfo {
     downloadSpeed: number;
     uptime: number;
     reportedAt: number;
+    sampledAt?: number;
     cpuCores: number;
     memoryTotal: number;
     diskTotal: number;
@@ -73,6 +76,14 @@ interface NodeSystemInfo {
     load1?: number;
     tcpConnections?: number;
     udpConnections?: number;
+    udpQueuedBytes?: number;
+    udpQueueByteLimit?: number;
+    udpQueueDrops?: number;
+    muxMetricsEnabled?: boolean;
+    muxSessionsCurrent?: number;
+    muxStreamsCurrent?: number;
+    muxSessionsCreated?: number;
+    muxSessionsClosed?: number;
     tcpTuningMode?: string;
     tcpTuningMinimum?: string;
     tcpTuningMaximum?: string;
@@ -147,6 +158,8 @@ type TcpTuningProfile = 'tiny' | 'small' | 'balanced' | 'standard';
 export default function NodePage() {
   const [nodeList, setNodeList] = useState<Node[]>([]);
   const [loading, setLoading] = useState(false);
+  const [nodeLoadError, setNodeLoadError] = useState('');
+  const [socketStatus, setSocketStatus] = useState<'connecting' | 'connected' | 'reconnecting'>('connecting');
   const [dialogVisible, setDialogVisible] = useState(false);
   const [dialogTitle, setDialogTitle] = useState('');
   const [isEdit, setIsEdit] = useState(false);
@@ -154,8 +167,6 @@ export default function NodePage() {
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [nodeToDelete, setNodeToDelete] = useState<Node | null>(null);
-  const [protocolDisabled, setProtocolDisabled] = useState(false);
-  const [protocolDisabledReason, setProtocolDisabledReason] = useState('');
   const [metricHistory, setMetricHistory] = useState<Record<number, MetricSample[]>>({});
   const metricHistoryRef = useRef<Record<number, MetricSample[]>>({});
   const [monitorNodeId, setMonitorNodeId] = useState<number | null>(null);
@@ -189,6 +200,12 @@ export default function NodePage() {
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectAttemptsRef = useRef(0);
   const shouldMaintainSocketRef = useRef(true);
+  const connectionGateRef = useRef(createRealtimeConnectionGate());
+  const connectionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const metricSequenceRef = useRef(new Map<number, number>());
+  const listRequestRef = useRef(0);
+  const nodeEventVersionsRef = useRef(new Map<number, number>());
+  const localEventVersionRef = useRef(0);
 
   // 仅保留当前页面的最近 3 分钟实时样本。这样不需要新增数据库表，
   // 同时仍可在节点卡片和展开窗口中观察趋势。
@@ -215,17 +232,14 @@ export default function NodePage() {
         clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
       }
-      if (websocketRef.current) {
-        websocketRef.current.onclose = null;
-        websocketRef.current.close();
-        websocketRef.current = null;
-      }
+      closeWebSocket(false);
       initWebSocket();
     };
     document.addEventListener('visibilitychange', reconnectWhenForeground);
     
     return () => {
       shouldMaintainSocketRef.current = false;
+      listRequestRef.current++;
       document.removeEventListener('visibilitychange', reconnectWhenForeground);
       closeWebSocket(true);
     };
@@ -233,23 +247,22 @@ export default function NodePage() {
 
   // 加载节点列表
   const loadNodes = async () => {
+    const request = ++listRequestRef.current;
+    const eventVersionsAtStart = new Map(nodeEventVersionsRef.current);
     setLoading(true);
+    setNodeLoadError('');
     try {
       const res = await getNodeList();
+      if (!shouldMaintainSocketRef.current || request !== listRequestRef.current) return;
       if (res.code === 0) {
-        setNodeList(res.data.map((node: any) => ({
-          ...node,
-          connectionStatus: node.status === 1 ? 'online' : 'offline',
-          systemInfo: null,
-          copyLoading: false
-        })));
+        setNodeList(previous => mergeRealtimeNodes(res.data, previous, eventVersionsAtStart, nodeEventVersionsRef.current) as Node[]);
       } else {
-        toast.error(res.msg || '加载节点列表失败');
+        setNodeLoadError(res.msg || '加载节点列表失败');
       }
     } catch (error) {
-      toast.error('网络错误，请重试');
+      if (shouldMaintainSocketRef.current && request === listRequestRef.current) setNodeLoadError('节点列表暂时加载失败，请重试');
     } finally {
-      setLoading(false);
+      if (shouldMaintainSocketRef.current && request === listRequestRef.current) setLoading(false);
     }
   };
 
@@ -265,20 +278,37 @@ export default function NodePage() {
     if (websocketRef.current) {
       closeWebSocket(false);
     }
+
+    const attempt = connectionGateRef.current.begin();
+    if (attempt === undefined) return;
+    setSocketStatus(reconnectAttemptsRef.current > 0 ? 'reconnecting' : 'connecting');
     
     try {
       const ticketResponse = await createRealtimeTicket();
-      if (!shouldMaintainSocketRef.current || ticketResponse?.code !== 0 || !ticketResponse.data?.ticket) {
+      if (!shouldMaintainSocketRef.current || !connectionGateRef.current.settle(attempt)) return;
+      if (ticketResponse?.code !== 0 || !ticketResponse.data?.ticket) {
         attemptReconnect();
         return;
       }
-      websocketRef.current = new WebSocket(getRealtimeSocketUrl(ticketResponse.data.ticket, 'detail'));
+      const socket = new WebSocket(getRealtimeSocketUrl(ticketResponse.data.ticket, 'detail'));
+      websocketRef.current = socket;
+      metricSequenceRef.current.clear();
+      const isCurrent = () => shouldMaintainSocketRef.current && connectionGateRef.current.current(attempt)
+        && websocketRef.current === socket;
+      connectionTimeoutRef.current = setTimeout(() => {
+        if (isCurrent()) socket.close();
+      }, 12_000);
       
-      websocketRef.current.onopen = () => {
+      socket.onopen = () => {
+        if (!isCurrent()) return;
+        if (connectionTimeoutRef.current) clearTimeout(connectionTimeoutRef.current);
+        connectionTimeoutRef.current = null;
         reconnectAttemptsRef.current = 0;
+        setSocketStatus('connected');
       };
       
-      websocketRef.current.onmessage = (event) => {
+      socket.onmessage = (event) => {
+        if (!isCurrent()) return;
         try {
           const data = JSON.parse(event.data);
           handleWebSocketMessage(data);
@@ -287,15 +317,17 @@ export default function NodePage() {
         }
       };
       
-      websocketRef.current.onerror = () => {
-        // WebSocket错误时不输出错误信息
-      };
+      socket.onerror = () => { if (isCurrent()) socket.close(); };
       
-      websocketRef.current.onclose = () => {
+      socket.onclose = () => {
+        if (!isCurrent()) return;
+        if (connectionTimeoutRef.current) clearTimeout(connectionTimeoutRef.current);
+        connectionTimeoutRef.current = null;
         websocketRef.current = null;
         attemptReconnect();
       };
     } catch (error) {
+      if (!connectionGateRef.current.settle(attempt) || !shouldMaintainSocketRef.current) return;
       attemptReconnect();
     }
   };
@@ -303,6 +335,13 @@ export default function NodePage() {
   // 处理WebSocket消息
   const handleWebSocketMessage = (data: any) => {
     const { id, type, data: messageData } = data;
+
+    const nodeId = Number(id);
+    const accepted = type === 'info' || type === 'status'
+      ? acceptRealtimeMetric(data, metricSequenceRef.current.get(nodeId)) : undefined;
+    if ((type === 'info' || type === 'status') && !accepted) return;
+    if (accepted?.sequence !== undefined) metricSequenceRef.current.set(nodeId, accepted.sequence);
+    if (accepted) nodeEventVersionsRef.current.set(nodeId, ++localEventVersionRef.current);
     
     if (type === 'status') {
       setNodeList(prev => prev.map(node => {
@@ -310,7 +349,8 @@ export default function NodePage() {
           return {
             ...node,
             connectionStatus: messageData === 1 ? 'online' : 'offline',
-            systemInfo: messageData === 0 ? null : node.systemInfo
+            systemInfo: messageData === 0 || shouldResetRealtimeMetrics(node.connectionId, data.connectionId) ? null : node.systemInfo,
+            connectionId: typeof data.connectionId === 'string' ? data.connectionId : node.connectionId,
           };
         }
         return node;
@@ -347,7 +387,11 @@ export default function NodePage() {
             const currentUpload = toFiniteNumber(systemInfo.bytes_transmitted);
             const currentDownload = toFiniteNumber(systemInfo.bytes_received);
             const currentUptime = toFiniteNumber(systemInfo.uptime);
-            const previousInfo = node.systemInfo || undefined;
+            const previousInfo = shouldResetRealtimeMetrics(node.connectionId, data.connectionId)
+              ? undefined : node.systemInfo || undefined;
+            // Only lightweight summaries may retain earlier mux metrics. A
+            // detailed/legacy report without this capability clears stale data.
+            const previousMuxInfo = systemInfo.metrics_level === 'summary' ? previousInfo : undefined;
             const keepPreviousNumber = (value: unknown, fallback = 0): number => {
               const parsed = toOptionalNumber(value);
               return parsed === undefined ? fallback : parsed;
@@ -363,19 +407,22 @@ export default function NodePage() {
             const cpuCores = Math.floor(keepPreviousNumber(systemInfo.cpu_cores, previousInfo?.cpuCores || 0));
             const memoryTotal = keepPreviousNumber(systemInfo.memory_total, previousInfo?.memoryTotal || 0);
             const diskTotal = keepPreviousNumber(systemInfo.disk_total, previousInfo?.diskTotal || 0);
-            const reportedAt = Date.now();
+            const reportedAt = accepted!.reportedAt;
+            if (data.snapshot && previousInfo?.sampledAt !== undefined && accepted!.sampledAt !== undefined
+                && accepted!.sampledAt <= previousInfo.sampledAt) return node;
             
             let uploadSpeed = 0;
             let downloadSpeed = 0;
             
-            if (node.systemInfo && node.systemInfo.reportedAt) {
+            if (previousInfo && previousInfo.reportedAt) {
               // 使用实际到达时间计算速率。旧逻辑使用秒级 uptime，遇到浏览器后台
               // 节流、网络抖动或节点重启时会把速率错误显示为 0 或尖峰。
-              const timeDiff = (reportedAt - node.systemInfo.reportedAt) / 1000;
+              const timeDiff = (accepted!.sampledAt !== undefined && previousInfo.sampledAt !== undefined
+                ? accepted!.sampledAt - previousInfo.sampledAt : reportedAt - previousInfo.reportedAt) / 1000;
               
               if (timeDiff > 0 && timeDiff <= 30) {
-                const lastUpload = node.systemInfo.uploadTraffic || 0;
-                const lastDownload = node.systemInfo.downloadTraffic || 0;
+                const lastUpload = previousInfo.uploadTraffic || 0;
+                const lastDownload = previousInfo.downloadTraffic || 0;
                 
                 const uploadDiff = currentUpload - lastUpload;
                 const downloadDiff = currentDownload - lastDownload;
@@ -402,6 +449,7 @@ export default function NodePage() {
               downloadSpeed: downloadSpeed,
               uptime: currentUptime,
               reportedAt,
+              sampledAt: accepted!.sampledAt,
               cpuCores,
               memoryTotal,
               diskTotal,
@@ -418,6 +466,14 @@ export default function NodePage() {
               load1: keepPreviousOptionalNumber(systemInfo.load_1, previousInfo?.load1),
               tcpConnections: keepPreviousOptionalNumber(systemInfo.tcp_connections, previousInfo?.tcpConnections),
               udpConnections: keepPreviousOptionalNumber(systemInfo.udp_connections, previousInfo?.udpConnections),
+              udpQueuedBytes: keepPreviousOptionalNumber(systemInfo.udp_queued_bytes, previousInfo?.udpQueuedBytes),
+              udpQueueByteLimit: keepPreviousOptionalNumber(systemInfo.udp_queue_byte_limit, previousInfo?.udpQueueByteLimit),
+              udpQueueDrops: keepPreviousOptionalNumber(systemInfo.udp_queue_drops, previousInfo?.udpQueueDrops),
+              muxMetricsEnabled: typeof systemInfo.mux_metrics_enabled === 'boolean' ? systemInfo.mux_metrics_enabled : previousMuxInfo?.muxMetricsEnabled,
+              muxSessionsCurrent: systemInfo.mux_metrics_enabled === false ? undefined : keepPreviousOptionalNumber(systemInfo.mux_sessions_current, previousMuxInfo?.muxSessionsCurrent),
+              muxStreamsCurrent: systemInfo.mux_metrics_enabled === false ? undefined : keepPreviousOptionalNumber(systemInfo.mux_streams_current, previousMuxInfo?.muxStreamsCurrent),
+              muxSessionsCreated: systemInfo.mux_metrics_enabled === false ? undefined : keepPreviousOptionalNumber(systemInfo.mux_sessions_created, previousMuxInfo?.muxSessionsCreated),
+              muxSessionsClosed: systemInfo.mux_metrics_enabled === false ? undefined : keepPreviousOptionalNumber(systemInfo.mux_sessions_closed, previousMuxInfo?.muxSessionsClosed),
               tcpTuningMode: keepPreviousOptionalString(systemInfo.tcp_tuning_mode, previousInfo?.tcpTuningMode),
               tcpTuningMinimum: keepPreviousOptionalString(systemInfo.tcp_tuning_minimum, previousInfo?.tcpTuningMinimum),
               tcpTuningMaximum: keepPreviousOptionalString(systemInfo.tcp_tuning_maximum, previousInfo?.tcpTuningMaximum),
@@ -440,6 +496,7 @@ export default function NodePage() {
             return {
               ...node,
               connectionStatus: 'online',
+              connectionId: typeof data.connectionId === 'string' ? data.connectionId : node.connectionId,
               systemInfo: nextSystemInfo
             };
           } catch (error) {
@@ -454,6 +511,7 @@ export default function NodePage() {
   // 尝试重新连接
   const attemptReconnect = () => {
     if (!shouldMaintainSocketRef.current || reconnectTimerRef.current) return;
+    setSocketStatus('reconnecting');
     reconnectAttemptsRef.current++;
     // 移动浏览器后台会暂停或销毁 WebSocket；不设次数上限，并把退避控制在
     // 15 秒以内，用户回到页面后也会立即重新建立连接。
@@ -466,6 +524,9 @@ export default function NodePage() {
 
   // 关闭WebSocket连接
   const closeWebSocket = (clearMonitoringState = true) => {
+    connectionGateRef.current.invalidate();
+    if (connectionTimeoutRef.current) clearTimeout(connectionTimeoutRef.current);
+    connectionTimeoutRef.current = null;
     if (reconnectTimerRef.current) {
       clearTimeout(reconnectTimerRef.current);
       reconnectTimerRef.current = null;
@@ -494,6 +555,12 @@ export default function NodePage() {
         systemInfo: null
       })));
     }
+  };
+
+  const retryMonitoring = async () => {
+    closeWebSocket(false);
+    await loadNodes();
+    initWebSocket();
   };
 
 
@@ -662,8 +729,6 @@ export default function NodePage() {
     setIsEdit(false);
     setDialogVisible(true);
     resetForm();
-    setProtocolDisabled(true);
-    setProtocolDisabledReason('节点未在线，等待节点上线后再设置');
   };
 
   // 编辑节点
@@ -689,9 +754,6 @@ export default function NodePage() {
       cfApiToken: '',
       cfRecordName: node.ddnsRecordName || ''
     });
-    const offline = node.connectionStatus !== 'online';
-    setProtocolDisabled(offline);
-    setProtocolDisabledReason(offline ? '节点未在线，等待节点上线后再设置' : '');
     setDialogVisible(true);
   };
 
@@ -745,7 +807,7 @@ export default function NodePage() {
         setInstallCommand(res.data);
         try {
           await navigator.clipboard.writeText(res.data);
-          toast.success('安装命令已生成并复制到剪贴板');
+          toast.success('安装命令已复制，10 分钟内单次有效');
         } catch (copyError) {
           toast('安装命令已生成，请手动复制');
         }
@@ -764,7 +826,7 @@ export default function NodePage() {
   const handleManualCopy = async () => {
     try {
       await navigator.clipboard.writeText(installCommand);
-      toast.success('安装命令已复制到剪贴板');
+      toast.success('安装命令已复制，10 分钟内单次有效');
       setInstallCommandModal(false);
     } catch (error) {
       toast.error('复制失败，请手动选择文本复制');
@@ -890,6 +952,22 @@ export default function NodePage() {
           </Button>
         </div>
 
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-divider bg-content1 px-3 py-2 text-xs" role="status" aria-live="polite">
+          <span className={socketStatus === 'connected' ? 'text-default-500' : 'text-warning-600'}>
+            {socketStatus === 'connecting' ? '正在连接实时监控…' : socketStatus === 'reconnecting'
+              ? '实时监控连接中断，正在自动重连；已显示数据可能不是最新。'
+              : nodeList.some(node => node.connectionStatus === 'online' && !node.systemInfo)
+                ? '实时监控已连接，部分在线节点正在等待首次上报。'
+                : '实时监控已连接'}
+          </span>
+          <Button size="sm" variant="light" isDisabled={loading} onPress={retryMonitoring}>重新获取数据</Button>
+        </div>
+        {nodeLoadError && (
+          <div role="alert" className="mb-4 rounded-xl border border-danger-200 bg-danger-50 px-3 py-2 text-sm text-danger-700">
+            {nodeLoadError}，点击“重新获取数据”重试。
+          </div>
+        )}
+
         {/* 节点列表 */}
         {loading ? (
           <div className="flex items-center justify-center h-64">
@@ -898,7 +976,7 @@ export default function NodePage() {
               <span className="text-default-600">正在加载...</span>
             </div>
           </div>
-        ) : nodeList.length === 0 ? (
+        ) : nodeList.length === 0 && !nodeLoadError ? (
           <Card className="shadow-sm border border-gray-200 dark:border-gray-700">
             <CardBody className="text-center py-16">
               <div className="flex flex-col items-center gap-4">
@@ -1203,6 +1281,11 @@ export default function NodePage() {
                   <div className="grid grid-cols-2 gap-3 rounded-lg border border-divider p-3 text-center text-sm md:grid-cols-4">
                     <div><div className="text-default-500">TCP 已建立</div><div className="mt-1 font-mono">{formatOptionalNumber(monitorNode.systemInfo.tcpConnections)}</div></div>
                     <div><div className="text-default-500">UDP 活动套接字</div><div className="mt-1 font-mono">{formatOptionalNumber(monitorNode.systemInfo.udpConnections)}</div></div>
+                    <div><div className="text-default-500">UDP 排队内存 / 预算</div><div className="mt-1 font-mono">{formatOptionalRatio(monitorNode.systemInfo.udpQueuedBytes, monitorNode.systemInfo.udpQueueByteLimit)}</div></div>
+                    <div><div className="text-default-500">UDP 累计丢包</div><div className="mt-1 font-mono">{formatOptionalNumber(monitorNode.systemInfo.udpQueueDrops)}</div></div>
+                    <div><div className="text-default-500">复用隧道会话</div><div className="mt-1 font-mono">{formatOptionalNumber(monitorNode.systemInfo.muxSessionsCurrent)}</div></div>
+                    <div><div className="text-default-500">复用逻辑流</div><div className="mt-1 font-mono">{formatOptionalNumber(monitorNode.systemInfo.muxStreamsCurrent)}</div></div>
+                    <div><div className="text-default-500">复用会话累计创建 / 关闭</div><div className="mt-1 font-mono">{formatOptionalNumber(monitorNode.systemInfo.muxSessionsCreated)} / {formatOptionalNumber(monitorNode.systemInfo.muxSessionsClosed)}</div></div>
                     <div><div className="text-default-500">内存可用</div><div className="mt-1 font-mono">{formatOptionalCapacity(monitorNode.systemInfo.memoryAvailable)}</div></div>
                     <div><div className="text-default-500">缓存</div><div className="mt-1 font-mono">{formatOptionalCapacity(monitorNode.systemInfo.memoryCached)}</div></div>
                     <div><div className="text-default-500">Swap 已用</div><div className="mt-1 font-mono">{formatOptionalRatio(monitorNode.systemInfo.swapUsed, monitorNode.systemInfo.swapTotal)}</div></div>
@@ -1210,6 +1293,10 @@ export default function NodePage() {
                     <div><div className="text-default-500">Go 堆</div><div className="mt-1 font-mono">{formatOptionalCapacity(monitorNode.systemInfo.agentHeapAlloc)}</div></div>
                     <div><div className="text-default-500">goroutine / 负载</div><div className="mt-1 font-mono">{formatOptionalNumber(monitorNode.systemInfo.goroutines)} / {formatOptionalNumber(monitorNode.systemInfo.load1, 2)}</div></div>
                   </div>
+                  <p className="text-xs text-default-500">
+                    复用指标统计 GOST 复用隧道的物理会话和逻辑流，不代表在线用户数，也不包含普通 TCP 或 QUIC 会话。
+                    累计创建与关闭在 Agent 重启后清零；诊断未启用或旧版 Agent 未上报时显示 --。
+                  </p>
                   {monitorNode.systemInfo.tcpTuningMode && (
                     <div className="rounded-lg border border-primary-200 bg-primary-50/50 p-3 text-sm dark:border-primary-700 dark:bg-primary-900/20">
                       <div className="font-medium text-primary-700 dark:text-primary-300">
@@ -1493,84 +1580,10 @@ export default function NodePage() {
                   )}
                 </div>
 
-                {/* 屏蔽协议 */}
-                <div className="mt-1">
-                  <div className="text-sm font-medium text-default-700">屏蔽协议</div>
-                  <div className="text-xs text-default-500 mb-2">开启开关以屏蔽对应协议</div>
-                  {protocolDisabled && (
-                    <Alert
-                      color="warning"
-                      variant="flat"
-                      description={protocolDisabledReason || '等待节点上线后再设置'}
-                      className="mb-2"
-                    />
-                  )}
-                  <div className={`grid grid-cols-1 sm:grid-cols-3 gap-3 bg-default-50 dark:bg-default-100 p-3 rounded-md border border-default-200 dark:border-default-100/30 ${protocolDisabled ? 'opacity-70' : ''}`}>
-                    {/* HTTP tile */}
-                    <div className="px-3 py-3 rounded-lg bg-white dark:bg-default-50 border border-default-200 dark:border-default-100/30 hover:border-primary-200 transition-colors">
-                      <div className="flex items-center gap-2 mb-2">
-                        <svg className="w-4 h-4 text-default-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M2 10h20"/></svg>
-                        <div className="text-sm font-medium text-default-700">HTTP</div>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <div className="text-xs text-default-500">禁用/启用</div>
-                        <Switch
-                          size="sm"
-                          isSelected={form.http === 1}
-                          isDisabled={protocolDisabled}
-                          onValueChange={(v) => setForm(prev => ({ ...prev, http: v ? 1 : 0 }))}
-                        />
-                      </div>
-                      <div className="mt-1 text-xs text-default-400">{form.http === 1 ? '已开启' : '已关闭'}</div>
-                    </div>
+                <Alert color="primary" variant="flat"
+                  description="TLS 和 UDP 限制请在用户管理 → 隧道授权中设置，可为每个用户分别配置。管理员账号不受限制。"
+                  className="mt-3" />
 
-                    {/* TLS tile */}
-                    <div className="px-3 py-3 rounded-lg bg-white dark:bg-default-50 border border-default-200 dark:border-default-100/30 hover:border-primary-200 transition-colors">
-                      <div className="flex items-center gap-2 mb-2">
-                        <svg className="w-4 h-4 text-default-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 10V7a6 6 0 1 1 12 0v3"/><rect x="4" y="10" width="16" height="10" rx="2"/></svg>
-                        <div className="text-sm font-medium text-default-700">TLS</div>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <div className="text-xs text-default-500">禁用/启用</div>
-                        <Switch
-                          size="sm"
-                          isSelected={form.tls === 1}
-                          isDisabled={protocolDisabled}
-                          onValueChange={(v) => setForm(prev => ({ ...prev, tls: v ? 1 : 0 }))}
-                        />
-                      </div>
-                      <div className="mt-1 text-xs text-default-400">{form.tls === 1 ? '已开启' : '已关闭'}</div>
-                    </div>
-
-                    {/* SOCKS tile */}
-                    <div className="px-3 py-3 rounded-lg bg-white dark:bg-default-50 border border-default-200 dark:border-default-100/30 hover:border-primary-200 transition-colors">
-                      <div className="flex items-center gap-2 mb-2">
-                        <svg className="w-4 h-4 text-default-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                        <div className="text-sm font-medium text-default-700">SOCKS</div>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <div className="text-xs text-default-500">禁用/启用</div>
-                        <Switch
-                          size="sm"
-                          isSelected={form.socks === 1}
-                          isDisabled={protocolDisabled}
-                          onValueChange={(v) => setForm(prev => ({ ...prev, socks: v ? 1 : 0 }))}
-                        />
-                      </div>
-                      <div className="mt-1 text-xs text-default-400">{form.socks === 1 ? '已开启' : '已关闭'}</div>
-                    </div>
-                  </div>
-                </div>
-
-
-
-                <Alert
-                        color="danger"
-                        variant="flat"
-                        description="请不要在出口节点执行屏蔽协议，否则可能影响转发；屏蔽协议仅需在入口节点执行。"
-                        className="mt-3"
-                      />
-                
                 <Alert
                         color="primary"
                         variant="flat"
@@ -1650,12 +1663,13 @@ export default function NodePage() {
                 <p className="text-sm text-default-600">
                   请复制以下安装命令到服务器上执行：
                 </p>
+                <p className="text-sm text-warning-600">命令 10 分钟内单次有效；领取或下载失败后，请关闭窗口并重新获取。</p>
                 <div className="relative">
                   <Textarea
                     value={installCommand}
                     readOnly
                     variant="bordered"
-                    minRows={6}
+                    minRows={3}
                     maxRows={10}
                     className="font-mono text-sm"
                     classNames={{

@@ -74,6 +74,7 @@ public class NodeDeletionService {
         if (nodeMapper.deleteById(id) != 1) throw new IllegalStateException("节点删除失败");
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override public void afterCommit() {
+                WebSocketServer.retireNodeMetrics(id);
                 affectedUsers.forEach(WebSocketServer::closeUserSessions);
                 syncTasks.closeRetiredNodeIfClean(id);
             }

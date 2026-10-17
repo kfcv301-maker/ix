@@ -43,13 +43,17 @@ import {
   pauseForwardService,
   resumeForwardService,
   diagnoseForward,
-  diagnoseTunnelForwards,
-  getTunnelForwardDiagnosisTask,
-  cancelTunnelForwardDiagnosisTask,
   updateForwardOrder,
   getVpsHosts
 } from "@/api";
 import { JwtUtil } from "@/utils/jwt";
+import { useTunnelDiagnosis } from '@/hooks/use-tunnel-diagnosis';
+import { diagnosisProgressText } from '@/utils/tunnel-diagnosis';
+import { parseProxyProtocol, proxyProtocolLabel, type ProxyProtocolVersion } from '@/utils/forward-proxy-protocol';
+import {
+  bulkForwardFieldLabels, planBulkForwardUpdates, executeBulkForwardUpdates,
+  type BulkForwardField, type BulkForwardPatch, type BulkForwardPlanEntry, type BulkForwardResult,
+} from "@/utils/forward-bulk";
 
 interface Forward {
   id: number;
@@ -61,6 +65,7 @@ interface Forward {
   remoteAddr: string;
   interfaceName?: string;
   strategy: string;
+  proxyProtocol?: number;
   status: number;
   inFlow: number;
   outFlow: number;
@@ -105,6 +110,7 @@ interface ForwardForm {
   vpsHostOrigin?: 'USER' | 'ADMIN';
   interfaceName?: string;
   strategy: string;
+  proxyProtocol: ProxyProtocolVersion;
 }
 
 interface VpsHost {
@@ -150,28 +156,6 @@ interface TunnelGroup {
   tunnelId: number;
   tunnelName: string;
   forwards: Forward[];
-}
-
-interface TunnelPingForwardReport {
-  forwardId: number;
-  forwardName: string;
-  remoteAddress: string;
-  success: boolean;
-  message?: string;
-  results: DiagnosisResult['results'];
-}
-
-interface TunnelPingSummary {
-  taskId?: string;
-  status?: 'queued' | 'running' | 'cancelling' | 'completed' | 'cancelled' | 'timed_out' | 'failed';
-  completedForwards?: number;
-  message?: string;
-  tunnelId: number;
-  tunnelName: string;
-  totalForwards: number;
-  successfulForwards: number;
-  failedForwards: number;
-  forwards: TunnelPingForwardReport[];
 }
 
 const formatVpsTargetAddress = (host: VpsHost) => {
@@ -240,9 +224,8 @@ export default function ForwardPage() {
   const [currentDiagnosisForward, setCurrentDiagnosisForward] = useState<Forward | null>(null);
   const [diagnosisResult, setDiagnosisResult] = useState<DiagnosisResult | null>(null);
   const [tunnelPingModalOpen, setTunnelPingModalOpen] = useState(false);
-  const [tunnelPingLoading, setTunnelPingLoading] = useState(false);
-  const [tunnelPingSummary, setTunnelPingSummary] = useState<TunnelPingSummary | null>(null);
-  const [tunnelPingTaskId, setTunnelPingTaskId] = useState<string | null>(null);
+  const tunnelDiagnosis = useTunnelDiagnosis();
+  const { loading: tunnelPingLoading, summary: tunnelPingSummary } = tunnelDiagnosis;
   const [addressModalTitle, setAddressModalTitle] = useState('');
   const [addressList, setAddressList] = useState<AddressItem[]>([]);
   
@@ -273,14 +256,78 @@ export default function ForwardPage() {
     vpsHostId: null,
     clearVpsHost: false,
     interfaceName: '',
-    strategy: 'fifo'
+    strategy: 'fifo',
+    proxyProtocol: 0
   });
   
   // 表单验证错误
   const [errors, setErrors] = useState<{[key: string]: string}>({});
   const [selectedTunnel, setSelectedTunnel] = useState<Tunnel | null>(null);
+  const [bulkSelectionMode, setBulkSelectionMode] = useState(false);
+  const [bulkSelectedIds, setBulkSelectedIds] = useState<Set<number>>(() => new Set());
+  const [bulkModalOpen, setBulkModalOpen] = useState(false);
+  const [bulkFields, setBulkFields] = useState<Record<BulkForwardField, boolean>>({ remoteAddr: false, interfaceName: false, strategy: false, proxyProtocol: false });
+  const [bulkValues, setBulkValues] = useState<Record<BulkForwardField, string>>({ remoteAddr: '', interfaceName: '', strategy: 'fifo', proxyProtocol: '0' });
+  const [bulkPlan, setBulkPlan] = useState<BulkForwardPlanEntry[]>([]);
+  const [bulkResults, setBulkResults] = useState<Record<number, BulkForwardResult>>({});
+  const [bulkPreviewLoading, setBulkPreviewLoading] = useState(false);
+  const [bulkApplying, setBulkApplying] = useState(false);
+  const bulkBusyRef = useRef(false);
 
   const isAdministrator = JwtUtil.getRoleIdFromToken() === 0;
+  useEffect(() => {
+    const userId = JwtUtil.getUserIdFromToken();
+    const visibleIds = new Set(forwards.filter(forward =>
+      viewMode !== 'direct' || (isAdministrator && !adminOnlyMyForwards) || forward.userId === userId,
+    ).map(forward => forward.id));
+    setBulkSelectedIds(previous => new Set([...previous].filter(id => visibleIds.has(id))));
+  }, [forwards, viewMode, adminOnlyMyForwards, isAdministrator]);
+
+  const invalidateBulkPreview = () => { setBulkPlan([]); setBulkResults({}); };
+  const setBulkField = (field: BulkForwardField, enabled: boolean) => {
+    setBulkFields(previous => ({ ...previous, [field]: enabled }));
+    invalidateBulkPreview();
+  };
+  const setBulkValue = (field: BulkForwardField, value: string) => {
+    setBulkValues(previous => ({ ...previous, [field]: value }));
+    invalidateBulkPreview();
+  };
+  const bulkAccess = () => ({ isAdministrator, currentUserId: JwtUtil.getUserIdFromToken() });
+  const readBulkForwards = async (): Promise<Forward[]> => {
+    const response = await getForwardList();
+    if (response.code !== 0 || !Array.isArray(response.data)) throw new Error(response.msg || '读取最新规则失败');
+    return response.data;
+  };
+  const previewBulkChanges = async () => {
+    if (bulkBusyRef.current) return;
+    bulkBusyRef.current = true;
+    setBulkPreviewLoading(true);
+    invalidateBulkPreview();
+    try {
+      const patch: BulkForwardPatch = {};
+      for (const field of Object.keys(bulkFields) as BulkForwardField[]) {
+        if (bulkFields[field]) patch[field] = bulkValues[field];
+      }
+      const latest = await readBulkForwards();
+      setBulkPlan(planBulkForwardUpdates(latest, bulkSelectedIds, patch, bulkAccess()));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '预览失败');
+    } finally { bulkBusyRef.current = false; setBulkPreviewLoading(false); }
+  };
+  const applyBulkChanges = async (onlyId?: number) => {
+    if (bulkBusyRef.current) return;
+    const entries = bulkPlan.filter(entry => entry.state === 'ready' &&
+      (onlyId !== undefined ? entry.id === onlyId && bulkResults[entry.id]?.state === 'failed' : !bulkResults[entry.id]));
+    if (entries.length === 0) return;
+    bulkBusyRef.current = true;
+    setBulkApplying(true);
+    try {
+      await executeBulkForwardUpdates(entries, bulkAccess(), { list: readBulkForwards, update: updateForward }, result => {
+        setBulkResults(previous => ({ ...previous, [result.id]: result }));
+      });
+      await loadData(false);
+    } finally { bulkBusyRef.current = false; setBulkApplying(false); }
+  };
   const selectedVpsHost = form.vpsHostId === null
     ? undefined
     : vpsHosts.find((host) => host.id === form.vpsHostId);
@@ -331,38 +378,6 @@ export default function ForwardPage() {
     const timer = window.setTimeout(() => loadData(false), 3000);
     return () => window.clearTimeout(timer);
   }, [forwards]);
-
-  // Tunnel diagnostics run as a bounded server-side task. Polling is short
-  // and cancellable, so a tunnel with many forwards never has to fit inside a
-  // single browser/API timeout.
-  useEffect(() => {
-    if (!tunnelPingTaskId) return;
-    let disposed = false;
-    const terminalStates = new Set(['completed', 'cancelled', 'timed_out', 'failed']);
-    const refreshTask = async () => {
-      try {
-        const response: any = await getTunnelForwardDiagnosisTask(tunnelPingTaskId);
-        if (disposed) return;
-        if (response?.code === 0 && response.data) {
-          const summary = response.data as TunnelPingSummary;
-          setTunnelPingSummary(summary);
-          if (terminalStates.has(summary.status || '')) {
-            setTunnelPingLoading(false);
-            setTunnelPingTaskId(null);
-          }
-        }
-      } catch {
-        // Keep the task running and retry on the next poll. A temporary
-        // browser/network failure must not imply that node commands stopped.
-      }
-    };
-    void refreshTask();
-    const timer = window.setInterval(() => void refreshTask(), 1200);
-    return () => {
-      disposed = true;
-      window.clearInterval(timer);
-    };
-  }, [tunnelPingTaskId]);
 
   // 切换显示模式并保存到localStorage
   const handleViewModeChange = () => {
@@ -610,7 +625,8 @@ export default function ForwardPage() {
       vpsHostName: sourceHost?.name,
       vpsHostOrigin: sourceHost?.origin,
       interfaceName: '',
-      strategy: 'fifo'
+      strategy: 'fifo',
+      proxyProtocol: 0
     });
     setSelectedTunnel(null);
     setErrors({});
@@ -639,7 +655,8 @@ export default function ForwardPage() {
       vpsHostName: forward.vpsHostName,
       vpsHostOrigin: forward.vpsHostOrigin,
       interfaceName: forward.interfaceName || '',
-      strategy: forward.strategy || 'fifo'
+      strategy: forward.strategy || 'fifo',
+      proxyProtocol: parseProxyProtocol(forward.proxyProtocol)
     });
     setSelectedTunnel(selected || null);
     setErrors({});
@@ -740,7 +757,8 @@ export default function ForwardPage() {
           vpsHostId: form.vpsHostId,
           clearVpsHost: form.clearVpsHost,
           interfaceName: form.interfaceName,
-          strategy: addressCount > 1 ? form.strategy : 'fifo'
+          strategy: addressCount > 1 ? form.strategy : 'fifo',
+          proxyProtocol: form.proxyProtocol
         };
         res = await updateForward(updateData);
       } else {
@@ -752,7 +770,8 @@ export default function ForwardPage() {
           remoteAddr: processedRemoteAddr,
           vpsHostId: form.vpsHostId,
           interfaceName: form.interfaceName,
-          strategy: addressCount > 1 ? form.strategy : 'fifo'
+          strategy: addressCount > 1 ? form.strategy : 'fifo',
+          proxyProtocol: form.proxyProtocol
         };
         res = await createForward(createData);
       }
@@ -864,74 +883,15 @@ export default function ForwardPage() {
     }
 
     setTunnelPingModalOpen(true);
-    setTunnelPingLoading(true);
-    setTunnelPingTaskId(null);
-    setTunnelPingSummary({
+    await tunnelDiagnosis.start({
       tunnelId: tunnelGroup.tunnelId,
       tunnelName: tunnelGroup.tunnelName,
       totalForwards: tunnelGroup.forwards.length,
-      successfulForwards: 0,
-      failedForwards: 0,
-      forwards: []
     });
-
-    try {
-      const response: any = await diagnoseTunnelForwards(tunnelGroup.tunnelId);
-      if (response?.code === 0 && response.data) {
-        const summary = response.data as TunnelPingSummary;
-        setTunnelPingSummary(summary);
-        if (summary.taskId) {
-          setTunnelPingTaskId(summary.taskId);
-        } else {
-          setTunnelPingLoading(false);
-        }
-      } else {
-        toast.error(response?.msg || '一键 PING 失败');
-        setTunnelPingSummary({
-          tunnelId: tunnelGroup.tunnelId,
-          tunnelName: tunnelGroup.tunnelName,
-          totalForwards: 0,
-          successfulForwards: 0,
-          failedForwards: 1,
-          forwards: [{
-            forwardId: 0,
-            forwardName: '批量检测失败',
-            remoteAddress: '',
-            success: false,
-            message: response?.msg || '无法开始检测',
-            results: []
-          }]
-        });
-        setTunnelPingLoading(false);
-      }
-    } catch {
-      toast.error('网络错误，请重试');
-      setTunnelPingSummary({
-        tunnelId: tunnelGroup.tunnelId,
-        tunnelName: tunnelGroup.tunnelName,
-        totalForwards: 0,
-        successfulForwards: 0,
-        failedForwards: 1,
-        forwards: [{
-          forwardId: 0,
-          forwardName: '网络错误',
-          remoteAddress: '',
-          success: false,
-          message: '无法连接到服务器',
-          results: []
-          }]
-        });
-      setTunnelPingLoading(false);
-    }
   };
 
   const closeTunnelPingModal = () => {
-    const activeTaskId = tunnelPingTaskId;
-    if (activeTaskId && tunnelPingLoading) {
-      void cancelTunnelForwardDiagnosisTask(activeTaskId);
-    }
-    setTunnelPingTaskId(null);
-    setTunnelPingLoading(false);
+    tunnelDiagnosis.close();
     setTunnelPingModalOpen(false);
   };
 
@@ -1122,7 +1082,8 @@ export default function ForwardPage() {
           name: forward.name,
           remoteAddr: forward.remoteAddr,
           inPort: forward.inPort ?? null,
-          strategy: forward.strategy || 'fifo'
+          strategy: forward.strategy || 'fifo',
+          proxyProtocol: parseProxyProtocol(forward.proxyProtocol)
         }))
       };
       setExportData(JSON.stringify(exportBundle, null, 2));
@@ -1169,6 +1130,7 @@ export default function ForwardPage() {
         remoteAddr?: unknown;
         inPort?: unknown;
         strategy?: unknown;
+        proxyProtocol?: unknown;
       };
       let items: ImportItem[];
       const raw = importData.trim();
@@ -1184,7 +1146,8 @@ export default function ForwardPage() {
             name: value.name,
             remoteAddr: value.remoteAddr,
             inPort: value.inPort,
-            strategy: value.strategy
+            strategy: value.strategy,
+            proxyProtocol: value.proxyProtocol
           };
         });
       } else {
@@ -1253,15 +1216,23 @@ export default function ForwardPage() {
           results.push({ line, success: false, message: '已存在相同名称和目标地址的转发，已跳过' });
           continue;
         }
-        const strategy = item.strategy === 'round' || item.strategy === 'rand' || item.strategy === 'fifo'
+        const strategy = item.strategy === 'round' || item.strategy === 'rand' || item.strategy === 'fifo' || item.strategy === 'hash'
           ? item.strategy : 'fifo';
+        let proxyProtocol: ProxyProtocolVersion;
+        try {
+          proxyProtocol = parseProxyProtocol(item.proxyProtocol);
+        } catch (error) {
+          results.push({ line, success: false, message: error instanceof Error ? error.message : 'Proxy Protocol 格式错误' });
+          continue;
+        }
         try {
           const response = await createForward({
             name,
             tunnelId: selectedTunnelForImport,
             inPort: portNumber,
             remoteAddr,
-            strategy
+            strategy,
+            proxyProtocol
           });
           if (response.code === 0) {
             duplicateKeys.add(duplicateKey);
@@ -1320,6 +1291,8 @@ export default function ForwardPage() {
         return { color: 'success', text: '轮询' };
       case 'rand':
         return { color: 'warning', text: '随机' };
+      case 'hash':
+        return { color: 'secondary', text: 'IP 哈希' };
       default:
         return { color: 'default', text: '未知' };
     }
@@ -1484,6 +1457,25 @@ export default function ForwardPage() {
         <CardHeader className="pb-2">
           <div className="flex justify-between items-start w-full">
             <div className="flex-1 min-w-0">
+              {bulkSelectionMode && (
+                <label className="flex items-center gap-2 mb-1 text-xs text-default-600">
+                  <input
+                    type="checkbox"
+                    checked={bulkSelectedIds.has(forward.id)}
+                    disabled={bulkApplying || bulkModalOpen || operatingForwardIds.has(forward.id)}
+                    aria-label={`选择规则 ${forward.name}`}
+                    onChange={event => {
+                      const checked = event.target.checked;
+                      setBulkSelectedIds(previous => {
+                        const next = new Set(previous);
+                        if (checked) next.add(forward.id); else next.delete(forward.id);
+                        return next;
+                      });
+                    }}
+                  />
+                  选择
+                </label>
+              )}
               <h3 className="font-semibold text-foreground truncate text-sm">{forward.name}</h3>
               <p className="text-xs text-default-500 truncate">{forward.tunnelName}</p>
             </div>
@@ -1508,7 +1500,7 @@ export default function ForwardPage() {
                 size="sm"
                 isSelected={forward.serviceRunning}
                 onValueChange={() => handleServiceToggle(forward)}
-                isDisabled={(forward.status !== 1 && forward.status !== 0) || operatingForwardIds.has(forward.id)}
+                isDisabled={bulkApplying || (forward.status !== 1 && forward.status !== 0) || operatingForwardIds.has(forward.id)}
               />
               <Chip 
                 color={statusDisplay.color as any} 
@@ -1587,6 +1579,11 @@ export default function ForwardPage() {
                     : `关联 VPS：${forward.vpsHostName || '已移除 VPS'}（历史记录）`
                   : '目标：手动填写'}
               </Chip>
+              {(forward.proxyProtocol === 1 || forward.proxyProtocol === 2) && (
+                <Chip variant="flat" size="sm" className="max-w-full text-xs" color="warning" title="向目标传递真实客户端 IP，仅 TCP 生效">
+                  {proxyProtocolLabel(forward.proxyProtocol)} · TCP
+                </Chip>
+              )}
             </div>
 
             {/* 统计信息 */}
@@ -1612,7 +1609,7 @@ export default function ForwardPage() {
               variant="flat"
               color="primary"
               onPress={() => handleEdit(forward)}
-              isDisabled={forward.status === 2 || forward.status === 3}
+              isDisabled={bulkApplying || forward.status === 2 || forward.status === 3}
               className="flex-1 min-h-8"
               startContent={
                 <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
@@ -1627,7 +1624,7 @@ export default function ForwardPage() {
               variant="flat"
               color="warning"
               onPress={() => handleDiagnose(forward)}
-              isDisabled={forward.status === 3}
+              isDisabled={bulkApplying || forward.status === 3}
               className="flex-1 min-h-8"
               startContent={
                 <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
@@ -1642,7 +1639,7 @@ export default function ForwardPage() {
               variant="flat"
               color="danger"
               onPress={() => handleDelete(forward)}
-              isDisabled={forward.status === 3}
+              isDisabled={bulkApplying || forward.status === 3}
               className="flex-1 min-h-8"
               startContent={
                 <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
@@ -1668,6 +1665,7 @@ export default function ForwardPage() {
             <span className="text-default-600">正在加载...</span>
           </div>
         </div>
+
       
     );
   }
@@ -1678,7 +1676,7 @@ export default function ForwardPage() {
     
       <div className="px-3 lg:px-6 py-8">
         {/* 页面头部 */}
-        <div className="flex items-center justify-between mb-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
           <div className="flex-1">
             <h1 className="text-xl font-bold text-foreground sm:text-2xl">转发管理</h1>
             <p className="mt-1 text-sm text-default-500">
@@ -1687,7 +1685,15 @@ export default function ForwardPage() {
                 : '可为自己托管或管理员分配的 VPS 创建转发，并选择管理员已授权给你的隧道。'}
             </p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center justify-end gap-3">
+            <Button
+              size="sm" variant="flat" color={bulkSelectionMode ? 'secondary' : 'default'}
+              isDisabled={bulkApplying || bulkModalOpen}
+              onPress={() => {
+                setBulkSelectionMode(previous => !previous);
+                setBulkSelectedIds(new Set());
+              }}
+            >{bulkSelectionMode ? '退出选择' : '批量修改'}</Button>
             {isAdministrator && viewMode === 'direct' && (
               <Button
                 size="sm"
@@ -1764,6 +1770,21 @@ export default function ForwardPage() {
         </div>
 
 
+        {bulkSelectionMode && (
+          <div className="flex flex-wrap items-center gap-3 mb-5 p-3 border border-divider rounded-lg bg-default-50">
+            <span className="text-sm">已选择 {bulkSelectedIds.size} 条规则</span>
+            <Button size="sm" variant="light" isDisabled={bulkModalOpen} onPress={() => setBulkSelectedIds(new Set(getSortedForwards().map(forward => forward.id)))}>选择当前可见规则</Button>
+            <Button size="sm" variant="light" isDisabled={bulkModalOpen} onPress={() => setBulkSelectedIds(new Set())}>清空选择</Button>
+            <Button size="sm" color="secondary" isDisabled={bulkSelectedIds.size === 0 || bulkModalOpen || operatingForwardIds.size > 0} onPress={() => {
+              invalidateBulkPreview();
+              setBulkFields({ remoteAddr: false, interfaceName: false, strategy: false, proxyProtocol: false });
+              setBulkValues({ remoteAddr: '', interfaceName: '', strategy: 'fifo', proxyProtocol: '0' });
+              setBulkModalOpen(true);
+            }}>设置修改字段</Button>
+            <span className="text-xs text-default-500">仅更新勾选字段；暂停、异常或同步中的规则会跳过。</span>
+          </div>
+        )}
+
         {/* 根据显示模式渲染不同内容 */}
         {viewMode === 'grouped' ? (
           /* 按用户和隧道分组的转发列表 */
@@ -1821,7 +1842,7 @@ export default function ForwardPage() {
                           className="shadow-none border border-divider"
                         >
                           <div className="flex flex-col gap-2 border-b border-divider px-4 pb-3 pt-1 sm:flex-row sm:items-center sm:justify-between">
-                            <p className="text-xs text-default-500">检测此隧道下全部转发的完整 TCP 链路（最多 20 条，30 秒冷却）</p>
+                            <p className="text-xs text-default-500">检测全部转发的完整 TCP 链路；每 20 条自动分批，30 秒冷却</p>
                             <Button
                               size="sm"
                               color="primary"
@@ -1923,6 +1944,91 @@ export default function ForwardPage() {
             </Card>
           )
         )}
+
+        <Modal isOpen={bulkModalOpen} onOpenChange={open => {
+          if (!bulkApplying && !bulkPreviewLoading) setBulkModalOpen(open);
+        }} isDismissable={!bulkApplying && !bulkPreviewLoading} isKeyboardDismissDisabled={bulkApplying || bulkPreviewLoading} hideCloseButton={bulkApplying || bulkPreviewLoading} size="5xl" scrollBehavior="inside" placement="center">
+          <ModalContent>
+            <ModalHeader className="flex flex-col gap-1">
+              <span>选择性批量修改 · {bulkSelectedIds.size} 条规则</span>
+              <span className="text-sm font-normal text-default-500">勾选要修改的字段，预览后应用；未勾选字段、隧道、端口、归属及 VPS 关联保持原值。</span>
+            </ModalHeader>
+            <ModalBody>
+              <Alert color="warning" variant="flat">
+                当前更新接口会重建所选规则的节点服务，可能中断这些规则的现有连接。检查时已暂停、异常或同步中的规则会跳过；分条执行且没有整体回滚。执行期间请避免在其他页面同时编辑或暂停这些规则。
+              </Alert>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="md:col-span-2 space-y-2">
+                  <Switch size="sm" isSelected={bulkFields.remoteAddr} isDisabled={bulkApplying || bulkPreviewLoading} onValueChange={enabled => setBulkField('remoteAddr', enabled)}>修改目标地址</Switch>
+                  <Textarea aria-label="批量目标地址" placeholder="每行一个 IP / 域名:端口，IPv6 使用 [地址]:端口" value={bulkValues.remoteAddr} isDisabled={!bulkFields.remoteAddr || bulkApplying || bulkPreviewLoading} onValueChange={value => setBulkValue('remoteAddr', value)} variant="bordered" minRows={2} />
+                </div>
+                <div className="space-y-2">
+                  <Switch size="sm" isSelected={bulkFields.interfaceName} isDisabled={bulkApplying || bulkPreviewLoading} onValueChange={enabled => setBulkField('interfaceName', enabled)}>修改出口接口 / IP</Switch>
+                  <Input aria-label="批量出口接口或 IP" placeholder="勾选后留空可清除此字段" value={bulkValues.interfaceName} isDisabled={!bulkFields.interfaceName || bulkApplying || bulkPreviewLoading} onValueChange={value => setBulkValue('interfaceName', value)} variant="bordered" />
+                </div>
+                <div className="space-y-2">
+                  <Switch size="sm" isSelected={bulkFields.strategy} isDisabled={bulkApplying || bulkPreviewLoading} onValueChange={enabled => setBulkField('strategy', enabled)}>修改负载策略</Switch>
+                  <Select aria-label="批量负载策略" selectedKeys={[bulkValues.strategy]} isDisabled={!bulkFields.strategy || bulkApplying || bulkPreviewLoading} onSelectionChange={keys => {
+                    const key = Array.from(keys)[0];
+                    if (key) setBulkValue('strategy', String(key));
+                  }} variant="bordered">
+                    <SelectItem key="fifo">主备模式</SelectItem>
+                    <SelectItem key="round">轮询模式</SelectItem>
+                    <SelectItem key="rand">随机模式</SelectItem>
+                    <SelectItem key="hash">IP 哈希模式</SelectItem>
+                  </Select>
+                </div>
+                <div className="md:col-span-2 space-y-2">
+                  <Switch size="sm" isSelected={bulkFields.proxyProtocol} isDisabled={bulkApplying || bulkPreviewLoading} onValueChange={enabled => setBulkField('proxyProtocol', enabled)}>修改发送 Proxy Protocol</Switch>
+                  <Select aria-label="批量发送 Proxy Protocol" selectedKeys={[bulkValues.proxyProtocol]} isDisabled={!bulkFields.proxyProtocol || bulkApplying || bulkPreviewLoading} disallowEmptySelection onSelectionChange={keys => {
+                    const key = Array.from(keys)[0];
+                    if (key !== undefined) setBulkValue('proxyProtocol', String(key));
+                  }} variant="bordered" description="向目标传递真实客户端 IP，仅 TCP 生效。目标服务需支持所选的 Proxy Protocol。">
+                    <SelectItem key="0">关闭</SelectItem>
+                    <SelectItem key="1">PROXY v1</SelectItem>
+                    <SelectItem key="2">PROXY v2</SelectItem>
+                  </Select>
+                </div>
+              </div>
+              {bulkPlan.length > 0 && (
+                <div className="space-y-3 mt-2" aria-live="polite">
+                  <p className="text-sm">预览：{bulkPlan.filter(entry => entry.state === 'ready').length} 条可应用，{bulkPlan.filter(entry => entry.state === 'skipped').length} 条跳过。应用前会再次检查最新配置；冲突规则需重新预览。</p>
+                  {bulkPlan.map(entry => {
+                    const result = bulkResults[entry.id];
+                    const state = result?.state || entry.state;
+                    const color = state === 'success' ? 'success' : state === 'failed' || state === 'conflict' ? 'danger' : state === 'applying' ? 'primary' : 'default';
+                    const label = { ready: '待应用', skipped: '跳过', applying: '执行中', success: '成功', failed: '失败', conflict: '冲突' }[state];
+                    const displayValue = (field: BulkForwardField, value: string) => field === 'proxyProtocol' ? proxyProtocolLabel(value) : field === 'strategy' ? (({ fifo: '主备', round: '轮询', rand: '随机', hash: 'IP 哈希' } as Record<string, string>)[value] || value) : value || '（空）';
+                    return (
+                      <div key={entry.id} className="rounded-lg border border-divider p-3 space-y-2">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="text-sm font-medium break-all">{entry.name} <span className="text-default-400">#{entry.id}</span></span>
+                          <div className="flex items-center gap-2">
+                            <Chip size="sm" variant="flat" color={color}>{label}</Chip>
+                            {state === 'failed' && <Button size="sm" color="warning" variant="flat" isDisabled={bulkApplying || bulkPreviewLoading} onPress={() => void applyBulkChanges(entry.id)}>重试此条</Button>}
+                          </div>
+                        </div>
+                        {entry.changes.map(change => (
+                          <div key={change.field} className="grid grid-cols-1 sm:grid-cols-[7rem_1fr_1fr] gap-2 text-xs">
+                            <span className="text-default-500">{bulkForwardFieldLabels[change.field]}</span>
+                            <div className="break-all whitespace-pre-wrap"><span className="text-default-500">原值：</span>{displayValue(change.field, change.before)}</div>
+                            <div className="break-all whitespace-pre-wrap text-primary"><span className="text-default-500">新值：</span>{displayValue(change.field, change.after)}</div>
+                          </div>
+                        ))}
+                        <p className={`text-xs break-all ${state === 'failed' || state === 'conflict' ? 'text-danger' : 'text-default-500'}`}>{result?.message || entry.message}</p>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </ModalBody>
+            <ModalFooter>
+              <Button variant="light" isDisabled={bulkApplying || bulkPreviewLoading} onPress={() => setBulkModalOpen(false)}>关闭</Button>
+              <Button variant="flat" color="secondary" isLoading={bulkPreviewLoading} isDisabled={bulkApplying || !Object.values(bulkFields).some(Boolean)} onPress={() => void previewBulkChanges()}>预览修改</Button>
+              <Button color="primary" isLoading={bulkApplying} isDisabled={bulkPreviewLoading || !bulkPlan.some(entry => entry.state === 'ready' && !bulkResults[entry.id])} onPress={() => void applyBulkChanges()}>应用预览中的修改</Button>
+            </ModalFooter>
+          </ModalContent>
+        </Modal>
 
         {/* 新增/编辑模态框 */}
         <Modal 
@@ -2081,6 +2187,32 @@ export default function ForwardPage() {
                       maxRows={6}
                     />
                     
+                    <div className="rounded-lg border border-divider p-3 space-y-3">
+                      <Switch
+                        isSelected={form.proxyProtocol !== 0}
+                        onValueChange={enabled => setForm(previous => ({ ...previous, proxyProtocol: enabled ? 1 : 0 }))}
+                        isDisabled={submitLoading}
+                        size="sm"
+                      >发送 Proxy Protocol</Switch>
+                      <p className="text-xs text-default-500">向目标传递真实客户端 IP，仅 TCP 生效。目标服务需支持所选的 Proxy Protocol。</p>
+                      {form.proxyProtocol !== 0 && (
+                        <Select
+                          label="Proxy Protocol 版本"
+                          selectedKeys={[String(form.proxyProtocol)]}
+                          disallowEmptySelection
+                          isDisabled={submitLoading}
+                          onSelectionChange={keys => {
+                            const key = Array.from(keys)[0];
+                            if (key === '1' || key === '2') setForm(previous => ({ ...previous, proxyProtocol: parseProxyProtocol(key) }));
+                          }}
+                          variant="bordered"
+                        >
+                          <SelectItem key="1">PROXY v1 · 文本格式</SelectItem>
+                          <SelectItem key="2">PROXY v2 · 二进制格式</SelectItem>
+                        </Select>
+                      )}
+                    </div>
+
                     <Input
                       label="出口网卡名或IP"
                       placeholder="请输入出口网卡名或IP"
@@ -2343,7 +2475,7 @@ export default function ForwardPage() {
                 推荐使用本面板导出的 v2 JSON 文件；仍兼容旧格式：目标地址|转发名称|入口端口，每行一个
               </p>
               <p className="text-small text-default-400">
-                v2 会保留负载策略；旧格式的第 4 列仍会忽略。目标地址支持域名/IPv4:端口及 [IPv6]:端口，多个地址可用逗号分隔；重复记录会被安全跳过。
+                v2 会保留负载策略和 Proxy Protocol；缺少 Proxy Protocol 的旧记录默认关闭。旧格式的第 4 列仍会忽略。目标地址支持域名/IPv4:端口及 [IPv6]:端口，多个地址可用逗号分隔；重复记录会被安全跳过。
               </p>
             </ModalHeader>
             <ModalBody className="pb-6">
@@ -2516,12 +2648,14 @@ export default function ForwardPage() {
                     </div>
                   )}
 
-                  {tunnelPingLoading && (
+                  {tunnelPingSummary && (
                     <div className="flex items-center gap-2 rounded-lg bg-primary-50 px-3 py-2 text-small text-primary dark:bg-primary-100/10">
-                      <Spinner size="sm" color="primary" />
-                      正在检测 {tunnelPingSummary?.completedForwards ?? 0}/{tunnelPingSummary?.totalForwards ?? 0} 条转发；关闭窗口会取消剩余检测
+                      {tunnelPingLoading && <Spinner size="sm" color="primary" />}
+                      <span>{diagnosisProgressText(tunnelPingSummary, tunnelPingLoading)}{tunnelPingLoading && '；关闭将请求取消剩余检测'}</span>
                     </div>
                   )}
+                  {tunnelDiagnosis.error && <Alert color="warning" variant="flat" title="进度提示" description={tunnelDiagnosis.error} />}
+                  {tunnelPingSummary?.message && <Alert color="warning" variant="flat" title="任务说明" description={tunnelPingSummary.message} />}
 
                   {tunnelPingSummary?.forwards.length ? (
                     <div className="space-y-3 pb-1">
@@ -2538,7 +2672,7 @@ export default function ForwardPage() {
                               </code>
                             </div>
                             <Chip color={forward.success ? 'success' : 'danger'} variant="flat" size="sm">
-                              {forward.success ? '通过' : '未通过'}
+                                  {forward.success ? '通过' : forward.outcome && forward.outcome !== 'failed' ? '未检测' : '未通过'}
                             </Chip>
                           </CardHeader>
                           <CardBody className="gap-2 pt-0">
@@ -2552,7 +2686,7 @@ export default function ForwardPage() {
                                 </span>
                               </div>
                             )) : (
-                              <Alert color="danger" variant="flat" title="检测失败" description={forward.message || '未返回有效检测数据'} />
+                              <Alert color={forward.outcome && forward.outcome !== 'failed' ? 'warning' : 'danger'} variant="flat" title={forward.outcome && forward.outcome !== 'failed' ? '未完成原因' : '检测失败'} description={forward.message || '未返回有效检测数据'} />
                             )}
                             {!forward.success && forward.results.length > 0 && forward.message && (
                               <p className="text-tiny text-danger">{forward.message}</p>
@@ -2566,6 +2700,9 @@ export default function ForwardPage() {
                   ) : null}
                 </ModalBody>
                 <ModalFooter>
+                  {tunnelPingLoading && tunnelPingSummary?.taskId && (
+                    <Button color="warning" variant="flat" isLoading={tunnelDiagnosis.cancelling} onPress={() => void tunnelDiagnosis.cancel()}>取消剩余检测</Button>
+                  )}
                   <Button variant="light" onPress={onClose}>
                     {tunnelPingLoading ? '取消并关闭' : '关闭'}
                   </Button>

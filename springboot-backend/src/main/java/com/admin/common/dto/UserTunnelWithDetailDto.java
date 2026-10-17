@@ -12,6 +12,10 @@ import lombok.Data;
  */
 @Data
 public class UserTunnelWithDetailDto {
+    private String tlsPolicy;
+    private Boolean allowUdp;
+    private Boolean protocolSyncPending;
+    private String protocolSyncError;
     
     /**
      * 用户隧道权限记录ID

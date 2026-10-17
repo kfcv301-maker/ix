@@ -2,6 +2,7 @@ package com.admin.common.service;
 
 import com.admin.common.task.ForwardSyncTaskService;
 import com.admin.common.utils.JwtUtil;
+import com.admin.common.utils.WebSocketServer;
 import com.admin.entity.*;
 import com.admin.mapper.*;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
@@ -84,6 +85,17 @@ class NodeDeletionServiceTest {
         assertEquals(0, service.deleteNode(5L).getCode());
         verifyNoInteractions(forwardMapper, tunnelMapper);
         verify(nodeMapper).deleteById(5L);
+    }
+
+    @Test void monitoringRetiresOnlyAfterCommitWhileCleanupCanKeepTheAgentConnection() {
+        try (var monitoring = mockStatic(WebSocketServer.class)) {
+            assertEquals(0, service.deleteNode(5L).getCode());
+            monitoring.verify(() -> WebSocketServer.retireNodeMetrics(5L), never());
+            verify(syncTasks, never()).closeRetiredNodeIfClean(5L);
+            TransactionSynchronizationManager.getSynchronizations().forEach(sync -> sync.afterCommit());
+            monitoring.verify(() -> WebSocketServer.retireNodeMetrics(5L));
+            verify(syncTasks).closeRetiredNodeIfClean(5L);
+        }
     }
 
     @Test void anotherUsersNodeCannotBeDeleted() {

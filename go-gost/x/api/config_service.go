@@ -12,6 +12,7 @@ import (
 	"github.com/go-gost/core/service"
 	"github.com/go-gost/x/config"
 	parser "github.com/go-gost/x/config/parsing/service"
+	"github.com/go-gost/x/internal/servicecontrol"
 	"github.com/go-gost/x/registry"
 )
 
@@ -51,7 +52,12 @@ func createService(ctx *gin.Context) {
 	//       200: createServiceResponse
 
 	var req createServiceRequest
-	ctx.ShouldBindJSON(&req.Data)
+	if err := ctx.ShouldBindJSON(&req.Data); err != nil {
+		writeError(ctx, NewError(http.StatusBadRequest, ErrCodeInvalid, err.Error()))
+		return
+	}
+	servicecontrol.MutationMu.Lock()
+	defer servicecontrol.MutationMu.Unlock()
 
 	name := strings.TrimSpace(req.Data.Name)
 	if name == "" {
@@ -101,35 +107,54 @@ func createServices(ctx *gin.Context) {
 	//       200: createServicesResponse
 
 	var req createServicesRequest
-	ctx.ShouldBindJSON(&req.Data)
+	if err := ctx.ShouldBindJSON(&req.Data); err != nil {
+		writeError(ctx, NewError(http.StatusBadRequest, ErrCodeInvalid, err.Error()))
+		return
+	}
+	servicecontrol.MutationMu.Lock()
+	defer servicecontrol.MutationMu.Unlock()
 
 	if len(req.Data) == 0 {
 		writeError(ctx, NewError(http.StatusBadRequest, ErrCodeInvalid, "services list cannot be empty"))
 		return
 	}
 
-	// 第一阶段：验证所有服务配置
-	var parsedServices []struct {
-		config  config.ServiceConfig
-		service service.Service
-	}
-
-	for _, serviceConfig := range req.Data {
-		name := strings.TrimSpace(serviceConfig.Name)
+	// Preflight the whole request before any listener binds a socket.
+	names := make(map[string]bool, len(req.Data))
+	for i := range req.Data {
+		name := strings.TrimSpace(req.Data[i].Name)
 		if name == "" {
 			writeError(ctx, NewError(http.StatusBadRequest, ErrCodeInvalid, "service name is required"))
 			return
 		}
-		serviceConfig.Name = name
-
-		if registry.ServiceRegistry().IsRegistered(name) {
+		if names[name] || registry.ServiceRegistry().IsRegistered(name) {
 			writeError(ctx, NewError(http.StatusBadRequest, ErrCodeDup, fmt.Sprintf("service %s already exists", name)))
 			return
 		}
+		names[name] = true
+		req.Data[i].Name = name
+	}
 
+	var parsedServices []struct {
+		config  config.ServiceConfig
+		service service.Service
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			for _, ps := range parsedServices {
+				if registry.ServiceRegistry().Get(ps.config.Name) == ps.service {
+					registry.ServiceRegistry().Unregister(ps.config.Name)
+				}
+				ps.service.Close()
+			}
+		}
+	}()
+
+	for _, serviceConfig := range req.Data {
 		svc, err := parser.ParseService(&serviceConfig)
 		if err != nil {
-			writeError(ctx, NewError(http.StatusInternalServerError, ErrCodeFailed, fmt.Sprintf("create service %s failed: %s", name, err.Error())))
+			writeError(ctx, NewError(http.StatusInternalServerError, ErrCodeFailed, fmt.Sprintf("create service %s failed: %s", serviceConfig.Name, err.Error())))
 			return
 		}
 
@@ -140,36 +165,26 @@ func createServices(ctx *gin.Context) {
 	}
 
 	// 第二阶段：注册所有服务
-	var registeredServices []string
 	for _, ps := range parsedServices {
 		if err := registry.ServiceRegistry().Register(ps.config.Name, ps.service); err != nil {
-			// 如果注册失败，回滚已注册的服务
-			for _, regName := range registeredServices {
-				if svc := registry.ServiceRegistry().Get(regName); svc != nil {
-					registry.ServiceRegistry().Unregister(regName)
-					svc.Close()
-				}
-			}
 			writeError(ctx, NewError(http.StatusBadRequest, ErrCodeDup, fmt.Sprintf("service %s already exists", ps.config.Name)))
 			return
 		}
-		registeredServices = append(registeredServices, ps.config.Name)
 	}
 
-	// 第三阶段：启动所有服务
-	for _, ps := range parsedServices {
-		if svc := registry.ServiceRegistry().Get(ps.config.Name); svc != nil {
-			go svc.Serve()
-		}
-	}
-
-	// 第四阶段：更新配置
-	config.OnUpdate(func(c *config.Config) error {
-		for _, ps := range parsedServices {
-			c.Services = append(c.Services, &ps.config)
+	if err := config.OnUpdate(func(c *config.Config) error {
+		for i := range parsedServices {
+			c.Services = append(c.Services, &parsedServices[i].config)
 		}
 		return nil
-	})
+	}); err != nil {
+		writeError(ctx, NewError(http.StatusInternalServerError, ErrCodeFailed, err.Error()))
+		return
+	}
+	committed = true
+	for _, ps := range parsedServices {
+		go ps.service.Serve()
+	}
 
 	ctx.JSON(http.StatusOK, Response{
 		Msg: "OK",
@@ -215,10 +230,23 @@ func updateService(ctx *gin.Context) {
 	//       200: updateServiceResponse
 
 	var req updateServiceRequest
-	ctx.ShouldBindUri(&req)
-	ctx.ShouldBindJSON(&req.Data)
+	if err := ctx.ShouldBindUri(&req); err != nil {
+		writeError(ctx, NewError(http.StatusBadRequest, ErrCodeInvalid, err.Error()))
+		return
+	}
+	if err := ctx.ShouldBindJSON(&req.Data); err != nil {
+		writeError(ctx, NewError(http.StatusBadRequest, ErrCodeInvalid, err.Error()))
+		return
+	}
+	servicecontrol.MutationMu.Lock()
+	defer servicecontrol.MutationMu.Unlock()
 
 	name := strings.TrimSpace(req.Service)
+	req.Data.Name = name
+	if err := preflightServiceUpdates([]*config.ServiceConfig{&req.Data}); err != nil {
+		writeError(ctx, NewError(http.StatusBadRequest, ErrCodeInvalid, err.Error()))
+		return
+	}
 
 	old := registry.ServiceRegistry().Get(name)
 	if old == nil {
@@ -274,27 +302,26 @@ func updateServices(ctx *gin.Context) {
 	//       200: updateServicesResponse
 
 	var req updateServicesRequest
-	ctx.ShouldBindJSON(&req.Data)
+	if err := ctx.ShouldBindJSON(&req.Data); err != nil {
+		writeError(ctx, NewError(http.StatusBadRequest, ErrCodeInvalid, err.Error()))
+		return
+	}
+	servicecontrol.MutationMu.Lock()
+	defer servicecontrol.MutationMu.Unlock()
 
 	if len(req.Data) == 0 {
 		writeError(ctx, NewError(http.StatusBadRequest, ErrCodeInvalid, "services list cannot be empty"))
 		return
 	}
 
-	// 第一阶段：验证所有服务存在
-	for _, serviceConfig := range req.Data {
-		name := strings.TrimSpace(serviceConfig.Name)
-		if name == "" {
-			writeError(ctx, NewError(http.StatusBadRequest, ErrCodeInvalid, "service name is required"))
-			return
-		}
-		serviceConfig.Name = name
-
-		old := registry.ServiceRegistry().Get(name)
-		if old == nil {
-			writeError(ctx, NewError(http.StatusBadRequest, ErrCodeNotFound, fmt.Sprintf("service %s not found", name)))
-			return
-		}
+	// Validate every policy before closing any member of this batch.
+	updates := make([]*config.ServiceConfig, len(req.Data))
+	for i := range req.Data {
+		updates[i] = &req.Data[i]
+	}
+	if err := preflightServiceUpdates(updates); err != nil {
+		writeError(ctx, NewError(http.StatusBadRequest, ErrCodeInvalid, err.Error()))
+		return
 	}
 
 	// 第二阶段：按照原来的updateService逻辑，逐个更新服务
@@ -384,7 +411,12 @@ func deleteService(ctx *gin.Context) {
 	//       200: deleteServiceResponse
 
 	var req deleteServiceRequest
-	ctx.ShouldBindUri(&req)
+	if err := ctx.ShouldBindUri(&req); err != nil {
+		writeError(ctx, NewError(http.StatusBadRequest, ErrCodeInvalid, err.Error()))
+		return
+	}
+	servicecontrol.MutationMu.Lock()
+	defer servicecontrol.MutationMu.Unlock()
 
 	name := strings.TrimSpace(req.Service)
 
@@ -426,7 +458,12 @@ func deleteServices(ctx *gin.Context) {
 	//       200: deleteServicesResponse
 
 	var req deleteServicesRequest
-	ctx.ShouldBindJSON(&req)
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		writeError(ctx, NewError(http.StatusBadRequest, ErrCodeInvalid, err.Error()))
+		return
+	}
+	servicecontrol.MutationMu.Lock()
+	defer servicecontrol.MutationMu.Unlock()
 
 	if len(req.Services) == 0 {
 		writeError(ctx, NewError(http.StatusBadRequest, ErrCodeInvalid, "services list cannot be empty"))
@@ -526,7 +563,12 @@ func pauseService(ctx *gin.Context) {
 	//       200: pauseServiceResponse
 
 	var req pauseServiceRequest
-	ctx.ShouldBindUri(&req)
+	if err := ctx.ShouldBindUri(&req); err != nil {
+		writeError(ctx, NewError(http.StatusBadRequest, ErrCodeInvalid, err.Error()))
+		return
+	}
+	servicecontrol.MutationMu.Lock()
+	defer servicecontrol.MutationMu.Unlock()
 
 	name := strings.TrimSpace(req.Service)
 
@@ -589,7 +631,12 @@ func resumeService(ctx *gin.Context) {
 	//       200: resumeServiceResponse
 
 	var req resumeServiceRequest
-	ctx.ShouldBindUri(&req)
+	if err := ctx.ShouldBindUri(&req); err != nil {
+		writeError(ctx, NewError(http.StatusBadRequest, ErrCodeInvalid, err.Error()))
+		return
+	}
+	servicecontrol.MutationMu.Lock()
+	defer servicecontrol.MutationMu.Unlock()
 
 	name := strings.TrimSpace(req.Service)
 
@@ -739,6 +786,40 @@ func getServiceStatus(ctx *gin.Context) {
 }
 
 // 回滚已暂停的服务 - 重新启动它们
+// The caller holds servicecontrol.MutationMu throughout preflight and commit.
+func preflightServiceUpdates(updates []*config.ServiceConfig) error {
+	current := config.Global()
+	previous := make(map[string]*config.ServiceConfig, len(current.Services))
+	for _, cfg := range current.Services {
+		if cfg != nil {
+			previous[cfg.Name] = cfg
+		}
+	}
+	names := make(map[string]bool, len(updates))
+	for _, incoming := range updates {
+		name := strings.TrimSpace(incoming.Name)
+		if name == "" {
+			return fmt.Errorf("service name is required")
+		}
+		if names[name] {
+			return fmt.Errorf("duplicate service %s", name)
+		}
+		names[name] = true
+		incoming.Name = name
+		if registry.ServiceRegistry().Get(name) == nil {
+			return fmt.Errorf("service %s not found", name)
+		}
+		old := previous[name]
+		if old == nil {
+			return fmt.Errorf("service %s configuration not found", name)
+		}
+		if err := servicecontrol.PreservePolicy(incoming, old); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func rollbackPausedServices(pausedServices []struct {
 	name          string
 	service       service.Service
@@ -841,7 +922,12 @@ func pauseServices(ctx *gin.Context) {
 	//       200: pauseServicesResponse
 
 	var req pauseServicesRequest
-	ctx.ShouldBindJSON(&req)
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		writeError(ctx, NewError(http.StatusBadRequest, ErrCodeInvalid, err.Error()))
+		return
+	}
+	servicecontrol.MutationMu.Lock()
+	defer servicecontrol.MutationMu.Unlock()
 
 	if len(req.Services) == 0 {
 		writeError(ctx, NewError(http.StatusBadRequest, ErrCodeInvalid, "services list cannot be empty"))
@@ -959,7 +1045,12 @@ func resumeServices(ctx *gin.Context) {
 	//       200: resumeServicesResponse
 
 	var req resumeServicesRequest
-	ctx.ShouldBindJSON(&req)
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		writeError(ctx, NewError(http.StatusBadRequest, ErrCodeInvalid, err.Error()))
+		return
+	}
+	servicecontrol.MutationMu.Lock()
+	defer servicecontrol.MutationMu.Unlock()
 
 	if len(req.Services) == 0 {
 		writeError(ctx, NewError(http.StatusBadRequest, ErrCodeInvalid, "services list cannot be empty"))

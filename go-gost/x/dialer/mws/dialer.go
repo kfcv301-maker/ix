@@ -192,7 +192,9 @@ func (d *mwsDialer) initSession(ctx context.Context, host string, conn net.Conn,
 		log.Error(err)
 		return nil, err
 	}
-	return &muxSession{conn: cc, session: session}, nil
+	// Preserve the raw physical connection identity across WebSocket upgrade so
+	// concurrent callers can safely complete Handshake on the same session.
+	return &muxSession{conn: conn, session: session}, nil
 }
 
 func (d *mwsDialer) keepAlive(conn ws_util.WebsocketConn) {

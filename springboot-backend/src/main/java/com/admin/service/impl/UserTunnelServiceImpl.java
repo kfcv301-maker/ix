@@ -34,6 +34,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Locale;
 import java.util.Set;
+import java.util.Objects;
+import java.util.UUID;
 
 /**
  * <p>
@@ -47,6 +49,8 @@ import java.util.Set;
  */
 @Service
 public class UserTunnelServiceImpl extends ServiceImpl<UserTunnelMapper, UserTunnel> implements UserTunnelService {
+    @Resource private com.admin.common.service.UserProtocolPolicyService userProtocolPolicyService;
+    @Resource @Lazy private com.admin.common.task.UserProtocolPolicySyncService userProtocolPolicySyncService;
     @Resource
     private com.admin.common.service.UserTunnelAliasService userTunnelAliasService;
 
@@ -111,9 +115,13 @@ public class UserTunnelServiceImpl extends ServiceImpl<UserTunnelMapper, UserTun
         }
         
         // 2. 创建用户隧道权限实体并验证其可见入口地址。
-        // This only changes panel display/authorization data; forwarding and
-        // node-side configuration are deliberately not touched.
         UserTunnel userTunnel = buildUserTunnelEntity(userTunnelDto);
+        try {
+            userProtocolPolicyService.apply(userTunnel, userTunnelDto.getTlsPolicy(), userTunnelDto.getAllowUdp(), false);
+        } catch (IllegalArgumentException exception) { return R.err(exception.getMessage()); }
+        userTunnel.setProtocolSyncGeneration(UUID.randomUUID().toString());
+        userTunnel.setProtocolSyncPending(true);
+        userTunnel.setProtocolPolicyRevision(1L);
         R entryAddressResult = applyEntryAddressAssignment(
                 userTunnel,
                 userTunnelDto.getTunnelId(),
@@ -133,6 +141,7 @@ public class UserTunnelServiceImpl extends ServiceImpl<UserTunnelMapper, UserTun
 
         if (success) {
             WebSocketServer.closeUserSessions(userTunnel.getUserId().longValue());
+            dispatchProtocolSync(userTunnel.getId());
             return R.ok(SUCCESS_ASSIGN_MSG);
         }
         
@@ -199,6 +208,17 @@ public class UserTunnelServiceImpl extends ServiceImpl<UserTunnelMapper, UserTun
         if (existingUserTunnel == null) {
             return R.err(ERROR_USER_TUNNEL_NOT_EXISTS);
         }
+        String oldTls = com.admin.common.service.UserProtocolPolicyService.normalize(existingUserTunnel.getTlsPolicy());
+        boolean oldUdp = !Boolean.FALSE.equals(existingUserTunnel.getAllowUdp());
+        try {
+            userProtocolPolicyService.apply(existingUserTunnel, updateDto.getTlsPolicy(), updateDto.getAllowUdp(), true);
+        } catch (IllegalArgumentException exception) { return R.err(exception.getMessage()); }
+        boolean policyChanged = !Objects.equals(oldTls, existingUserTunnel.getTlsPolicy())
+                || oldUdp != existingUserTunnel.getAllowUdp();
+        if (policyChanged) {
+            existingUserTunnel.setProtocolSyncGeneration(UUID.randomUUID().toString());
+            existingUserTunnel.setProtocolSyncPending(true);
+        }
 
         // Older API clients may omit these two fields; in that case retain
         // their existing entry selection instead of silently changing it.
@@ -224,6 +244,7 @@ public class UserTunnelServiceImpl extends ServiceImpl<UserTunnelMapper, UserTun
         // atomically incremented.
         UpdateWrapper<UserTunnel> update = new UpdateWrapper<>();
         update.eq("id", existingUserTunnel.getId())
+                .eq("protocol_policy_revision", existingUserTunnel.getProtocolPolicyRevision() == null ? 0L : existingUserTunnel.getProtocolPolicyRevision())
                 .set("flow", existingUserTunnel.getFlow())
                 .set("num", existingUserTunnel.getNum())
                 .set("flow_reset_time", existingUserTunnel.getFlowResetTime())
@@ -232,6 +253,10 @@ public class UserTunnelServiceImpl extends ServiceImpl<UserTunnelMapper, UserTun
                 .set("speed_id", existingUserTunnel.getSpeedId())
                 .set("entry_address_mode", existingUserTunnel.getEntryAddressMode())
                 .set("entry_domain_id", existingUserTunnel.getEntryDomainId());
+        update.set("tls_policy", existingUserTunnel.getTlsPolicy()).set("allow_udp", existingUserTunnel.getAllowUdp());
+        if (policyChanged) update.set("protocol_sync_generation", existingUserTunnel.getProtocolSyncGeneration())
+                .set("protocol_sync_pending", true).set("protocol_sync_error", null)
+                .setSql("protocol_policy_revision = protocol_policy_revision + 1");
         boolean success = this.update(null, update);
         
         if (success) {
@@ -242,6 +267,9 @@ public class UserTunnelServiceImpl extends ServiceImpl<UserTunnelMapper, UserTun
             if (speedChanged) {
                 updateUserTunnelForwardsSpeed(existingUserTunnel.getUserId(), existingUserTunnel.getTunnelId(), updateDto.getSpeedId());
             }
+            if (policyChanged || Boolean.TRUE.equals(existingUserTunnel.getProtocolSyncPending())) {
+                dispatchProtocolSync(existingUserTunnel.getId());
+            }
             
             return R.ok(SUCCESS_UPDATE_MSG);
         }
@@ -250,6 +278,13 @@ public class UserTunnelServiceImpl extends ServiceImpl<UserTunnelMapper, UserTun
     }
 
     // ========== 私有辅助方法 ==========
+
+    private void dispatchProtocolSync(Integer id) {
+        try { userProtocolPolicySyncService.syncGrant(id); }
+        catch (org.springframework.core.task.TaskRejectedException ignored) {
+            // The persisted pending flag is picked up by the scheduled worker.
+        }
+    }
 
     /**
      * 检查用户隧道权限是否已存在
@@ -453,7 +488,8 @@ public class UserTunnelServiceImpl extends ServiceImpl<UserTunnelMapper, UserTun
             for (Long nodeId : ingressNodeIds) {
                 for (String name : serviceNames) {
                     GostUtil.UpdateService(nodeId, name, forward.getInPort(), speedId,
-                            forward.getRemoteAddr(), tunnel.getType(), tunnel, forward.getStrategy(), interfaceName);
+                            forward.getRemoteAddr(), tunnel.getType(), tunnel, forward.getStrategy(), interfaceName,
+                            userProtocolPolicyService.forForward(forward), forward.getProxyProtocol());
                 }
             }
         }

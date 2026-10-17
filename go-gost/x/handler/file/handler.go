@@ -76,6 +76,9 @@ func (h *fileHandler) Handle(ctx context.Context, conn net.Conn, opts ...handler
 }
 
 func (h *fileHandler) Close() error {
+	if h.server == nil {
+		return nil
+	}
 	return h.server.Close()
 }
 

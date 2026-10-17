@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"io"
 	"runtime"
 	"strings"
 	"time"
@@ -40,6 +41,10 @@ import (
 )
 
 func ParseService(cfg *config.ServiceConfig) (service.Service, error) {
+	userPolicy, err := xservice.ParseUserProtocolPolicy(cfg.Metadata)
+	if err != nil {
+		return nil, err
+	}
 	if cfg.Listener == nil {
 		cfg.Listener = &config.ListenerConfig{}
 	}
@@ -246,6 +251,18 @@ func ParseService(cfg *config.ServiceConfig) (service.Service, error) {
 		listenerLogger.Error("init: ", err)
 		return nil, err
 	}
+	// Listener initialization binds sockets. Until NewService takes ownership,
+	// every later failure must release the listener and any handler resources.
+	var h handler.Handler
+	owned := false
+	defer func() {
+		if !owned {
+			ln.Close()
+			if closer, ok := h.(io.Closer); ok {
+				closer.Close()
+			}
+		}
+	}()
 
 	handlerLogger := serviceLogger.WithFields(map[string]any{
 		"kind": "handler",
@@ -310,7 +327,6 @@ func ParseService(cfg *config.ServiceConfig) (service.Service, error) {
 		)
 	}
 
-	var h handler.Handler
 	if rf := registry.HandlerRegistry().Get(cfg.Handler.Type); rf != nil {
 		h = rf(
 			handler.RouterOption(xchain.NewRouter(routerOpts...)),
@@ -358,6 +374,7 @@ func ParseService(cfg *config.ServiceConfig) (service.Service, error) {
 	}
 
 	s := xservice.NewService(cfg.Name, ln, h,
+		xservice.UserProtocolPolicyOption(userPolicy),
 		xservice.AdmissionOption(xadmission.AdmissionGroup(admissions...)),
 		xservice.PreUpOption(preUp),
 		xservice.PreDownOption(preDown),
@@ -371,6 +388,7 @@ func ParseService(cfg *config.ServiceConfig) (service.Service, error) {
 	)
 
 	serviceLogger.Infof("listening on %s/%s", s.Addr().String(), s.Addr().Network())
+	owned = true
 	return s, nil
 }
 

@@ -42,6 +42,7 @@ import java.util.stream.Collectors;
 @Slf4j
 @Service
 public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> implements ForwardService {
+    @Resource private com.admin.common.service.UserProtocolPolicyService userProtocolPolicyService;
     @Resource
     private com.admin.common.service.UserTunnelAliasService userTunnelAliasService;
 
@@ -91,6 +92,8 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
 
     @Override
     public R createForward(ForwardDto forwardDto) {
+        try { GostUtil.normalizeProxyProtocol(forwardDto.getProxyProtocol()); }
+        catch (IllegalArgumentException exception) { return R.err(exception.getMessage()); }
         // 1. 获取当前用户信息
         UserInfo currentUser = getCurrentUserInfo();
 
@@ -194,6 +197,8 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
 
     @Override
     public R updateForward(ForwardUpdateDto forwardUpdateDto) {
+        try { GostUtil.normalizeProxyProtocol(forwardUpdateDto.getProxyProtocol()); }
+        catch (IllegalArgumentException exception) { return R.err(exception.getMessage()); }
         // 1. 获取当前用户信息
         UserInfo currentUser = getCurrentUserInfo();
         if (currentUser.getRoleId() != ADMIN_ROLE_ID) {
@@ -374,7 +379,22 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
         return diagnoseForwardInternal(forward);
     }
 
+    @Override
+    public R diagnoseForwardForSystem(Forward expectedForward, java.util.function.BooleanSupplier continueDiagnosis) {
+        Forward latest = this.getById(expectedForward.getId());
+        if (latest == null || !Objects.equals(latest.getUserId(), expectedForward.getUserId())
+                || !Objects.equals(latest.getTunnelId(), expectedForward.getTunnelId())
+                || !Objects.equals(latest.getRemoteAddr(), expectedForward.getRemoteAddr())) {
+            return R.err("转发已删除或配置、归属已变化，请重新检测");
+        }
+        return diagnoseForwardInternal(latest, continueDiagnosis);
+    }
+
     private R diagnoseForwardInternal(Forward forward) {
+        return diagnoseForwardInternal(forward, () -> true);
+    }
+
+    private R diagnoseForwardInternal(Forward forward, java.util.function.BooleanSupplier continueDiagnosis) {
         // 3. 获取隧道信息
         Tunnel tunnel = validateTunnel(forward.getTunnelId());
         if (tunnel == null) {
@@ -402,6 +422,7 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
                 }
 
                 for (Node inNode : inNodes) {
+                    if (!continueDiagnosis.getAsBoolean() || Thread.currentThread().isInterrupted()) return R.err("检测已中止");
                     results.add(performTcpPingDiagnosis(inNode, targetIp, targetPort, "入口->目标"));
                 }
             }
@@ -414,6 +435,7 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
 
             // 入口TCP ping出口（使用转发的出口端口）
             for (Node inNode : inNodes) {
+                if (!continueDiagnosis.getAsBoolean() || Thread.currentThread().isInterrupted()) return R.err("检测已中止");
                 results.add(performTcpPingDiagnosis(inNode, outNode.getServerIp(), forward.getOutPort(), "入口->出口"));
             }
 
@@ -425,6 +447,7 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
                 if (targetIp == null || targetPort == -1) {
                     return R.err("无法解析目标地址: " + remoteAddress);
                 }
+                if (!continueDiagnosis.getAsBoolean() || Thread.currentThread().isInterrupted()) return R.err("检测已中止");
                 DiagnosisResult outToTargetResult = performTcpPingDiagnosis(outNode, targetIp, targetPort, "出口->目标");
                 results.add(outToTargetResult);
             }
@@ -931,6 +954,7 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
         Forward forward = new Forward();
         // 先复制DTO的属性，再设置其他属性，避免被覆盖
         BeanUtils.copyProperties(forwardDto, forward);
+        forward.setProxyProtocol(GostUtil.normalizeProxyProtocol(forwardDto.getProxyProtocol()));
         forward.setStatus(FORWARD_STATUS_ACTIVE);
         forward.setInPort(portAllocation.getInPort());
         forward.setOutPort(portAllocation.getOutPort());
@@ -947,6 +971,8 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
     private Forward updateForwardEntity(ForwardUpdateDto forwardUpdateDto, Forward existForward, Tunnel tunnel) {
         Forward forward = new Forward();
         BeanUtils.copyProperties(forwardUpdateDto, forward);
+        forward.setProxyProtocol(GostUtil.normalizeProxyProtocol(forwardUpdateDto.getProxyProtocol() == null
+                ? existForward.getProxyProtocol() : forwardUpdateDto.getProxyProtocol()));
 
         // The owner is established when the forward is created. An
         // administrator may operate another user's rule, but an edit must not
@@ -1040,6 +1066,8 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
      * 创建Gost服务
      */
     private R createGostServices(Forward forward, Tunnel tunnel, Integer limiter, NodeInfo nodeInfo, UserTunnel userTunnel) {
+        R proxySupport = validateProxyProtocolNodes(forward, nodeInfo);
+        if (proxySupport.getCode() != 0) return proxySupport;
         R legacyCleanup = cleanLegacyServices(forward, tunnel, nodeInfo, userTunnel);
         if (legacyCleanup.getCode() != 0) return legacyCleanup;
         String serviceName = buildServiceName(forward.getId(), forward.getUserId(), userTunnel);
@@ -1092,6 +1120,8 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
      * 更新Gost服务
      */
     private R updateGostServices(Forward forward, Tunnel tunnel, Integer limiter, NodeInfo nodeInfo, UserTunnel userTunnel) {
+        R proxySupport = validateProxyProtocolNodes(forward, nodeInfo);
+        if (proxySupport.getCode() != 0) return proxySupport;
         R legacyCleanup = cleanLegacyServices(forward, tunnel, nodeInfo, userTunnel);
         if (legacyCleanup.getCode() != 0) return legacyCleanup;
         String serviceName = buildServiceName(forward.getId(), forward.getUserId(), userTunnel);
@@ -1133,6 +1163,8 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
      * 隧道变化时更新Gost服务：先删除原配置，再创建新配置
      */
     private R updateGostServicesWithTunnelChange(Forward existForward, Forward updatedForward, Tunnel newTunnel, Integer limiter, NodeInfo nodeInfo, UserTunnel userTunnel) {
+        R proxySupport = validateProxyProtocolNodes(updatedForward, nodeInfo);
+        if (proxySupport.getCode() != 0) return proxySupport;
         // 1. 获取原隧道信息
         Tunnel oldTunnel = tunnelService.getById(existForward.getTunnelId());
         if (oldTunnel == null) {
@@ -1271,7 +1303,8 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
      * 创建主服务
      */
     private R createMainService(Node inNode, String serviceName, Forward forward, Integer limiter, Integer tunnelType, Tunnel tunnel, String strategy, String interfaceName) {
-        GostDto result = GostUtil.AddService(inNode.getId(), serviceName, forward.getInPort(), limiter, forward.getRemoteAddr(), tunnelType, tunnel, strategy, interfaceName);
+        GostDto result = GostUtil.AddService(inNode.getId(), serviceName, forward.getInPort(), limiter, forward.getRemoteAddr(), tunnelType, tunnel, strategy, interfaceName,
+                userProtocolPolicyService.forForward(forward), forward.getProxyProtocol());
         return isGostOperationSuccess(result) ? R.ok() : R.err(result.getMsg());
     }
 
@@ -1304,13 +1337,25 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
      * 更新主服务
      */
     private R updateMainService(Node inNode, String serviceName, Forward forward, Integer limiter, Integer tunnelType, Tunnel tunnel, String strategy, String interfaceName) {
-        GostDto result = GostUtil.UpdateService(inNode.getId(), serviceName, forward.getInPort(), limiter, forward.getRemoteAddr(), tunnelType, tunnel, strategy, interfaceName);
+        GostDto result = GostUtil.UpdateService(inNode.getId(), serviceName, forward.getInPort(), limiter, forward.getRemoteAddr(), tunnelType, tunnel, strategy, interfaceName,
+                userProtocolPolicyService.forForward(forward), forward.getProxyProtocol());
 
         if (result.getMsg().contains(GOST_NOT_FOUND_MSG)) {
-            result = GostUtil.AddService(inNode.getId(), serviceName, forward.getInPort(), limiter, forward.getRemoteAddr(), tunnelType, tunnel, strategy, interfaceName);
+            result = GostUtil.AddService(inNode.getId(), serviceName, forward.getInPort(), limiter, forward.getRemoteAddr(), tunnelType, tunnel, strategy, interfaceName,
+                    userProtocolPolicyService.forForward(forward), forward.getProxyProtocol());
         }
 
         return isGostOperationSuccess(result) ? R.ok() : R.err(result.getMsg());
+    }
+
+    /** Check every ingress before any old service or chain can be changed. */
+    private R validateProxyProtocolNodes(Forward forward, NodeInfo nodeInfo) {
+        if (GostUtil.normalizeProxyProtocol(forward.getProxyProtocol()) == 0) return R.ok();
+        for (Node node : nodeInfo.getInNodes()) {
+            GostDto denied = GostUtil.CheckForwardProxyProtocolSupport(node.getId(), forward.getProxyProtocol());
+            if (denied != null) return R.err("入口节点 " + node.getName() + "：" + denied.getMsg());
+        }
+        return R.ok();
     }
 
     /**

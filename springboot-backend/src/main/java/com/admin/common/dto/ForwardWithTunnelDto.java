@@ -99,6 +99,8 @@ public class ForwardWithTunnelDto {
 
     private String strategy;
 
+    private Integer proxyProtocol;
+
     private Integer inx;
 
     private String interfaceName;

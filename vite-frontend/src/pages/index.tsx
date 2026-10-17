@@ -1,18 +1,16 @@
 import { Button } from "@heroui/button";
 import { Input } from "@heroui/input";
-import { Card, CardBody, CardHeader } from "@heroui/card";
 import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import toast from 'react-hot-toast';
 import axios from 'axios';
 import { isWebViewFunc } from '@/utils/panel';
-import { siteConfig } from '@/config/site';
-import { title } from "@/components/primitives";
-import DefaultLayout from "@/layouts/default";
+import { siteConfig, getCachedConfig } from '@/config/site';
 import { login, LoginData, checkCaptcha } from "@/api";
 import "@/utils/tac.css";
 import "@/utils/tac.min.js";
 import bgImage from "@/images/bg.jpg";
+import "@/styles/login.css";
 
 
 interface LoginForm {
@@ -48,12 +46,27 @@ export default function IndexPage() {
     captchaId: "",
   });
   const [loading, setLoading] = useState(false);
+  const [passwordVisible, setPasswordVisible] = useState(false);
+  const [capsLock, setCapsLock] = useState(false);
+  const [appName, setAppName] = useState(siteConfig.name);
   const [errors, setErrors] = useState<Partial<LoginForm>>({});
   const [showCaptcha, setShowCaptcha] = useState(false);
   const navigate = useNavigate();
   const tacInstanceRef = useRef<any>(null);
   const captchaContainerRef = useRef<HTMLDivElement>(null);
   const [isWebView, setIsWebView] = useState(false);
+  useEffect(() => {
+    let active = true;
+    const updateBrand = async () => {
+      try {
+        const name = await getCachedConfig('app_name');
+        if (active && name) setAppName(name);
+      } catch { /* Keep the existing local brand while the server is unavailable. */ }
+    };
+    void updateBrand();
+    window.addEventListener('configUpdated', updateBrand);
+    return () => { active = false; window.removeEventListener('configUpdated', updateBrand); };
+  }, []);
   // 清理验证码实例
   useEffect(() => {
     return () => {
@@ -98,6 +111,9 @@ export default function IndexPage() {
   // 初始化验证码
   const initCaptcha = async () => {
     if (!window.TAC || !captchaContainerRef.current) {
+      toast.error('验证码未能加载，请重试');
+      setShowCaptcha(false);
+      setLoading(false);
       return;
     }
 
@@ -211,6 +227,7 @@ export default function IndexPage() {
   };
 
   const handleLogin = async () => {
+    if (loading) return;
     if (!validateForm()) return;
 
     setLoading(true);
@@ -245,92 +262,84 @@ export default function IndexPage() {
   };
 
 
-  const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !loading) {
-      handleLogin();
-    }
-  };
-
   return (
-    <DefaultLayout>
-      <section className="flex flex-col items-center justify-center gap-4 py-4 sm:py-8 md:py-10 pb-20 min-h-[calc(100dvh-120px)] sm:min-h-[calc(100dvh-200px)]">
-        <div className="w-full max-w-md px-4 sm:px-0">
-          <Card className="w-full">
-            <CardHeader className="pb-0 pt-6 px-6 flex-col items-center">
-              <h1 className={title({ size: "sm" })}>登陆</h1>
-              <p className="text-small text-default-500 mt-2">请输入您的账号信息</p>
-            </CardHeader>
-            <CardBody className="px-6 py-6">
-              <div className="flex flex-col gap-4">
-                <Input
-                  label="用户名"
-                  placeholder="请输入用户名"
-                  value={form.username}
-                  onChange={(e) => handleInputChange('username', e.target.value)}
-                  onKeyDown={handleKeyPress}
-                  variant="bordered"
-                  isDisabled={loading}
-                  isInvalid={!!errors.username}
-                  errorMessage={errors.username}
-                />
-                
-                <Input
-                  label="密码"
-                  placeholder="请输入密码"
-                  type="password"
-                  value={form.password}
-                  onChange={(e) => handleInputChange('password', e.target.value)}
-                  onKeyDown={handleKeyPress}
-                  variant="bordered"
-                  isDisabled={loading}
-                  isInvalid={!!errors.password}
-                />
+    <div className="login-page">
+      {isWebView && (
+        <header className="login-header">
+          <button className="login-header-link" onClick={() => navigate('/settings')}>面板设置 <span aria-hidden="true">↗</span></button>
+        </header>
+      )}
 
+      <main className="login-stage">
+        <div className="login-stack">
+          <div className="login-brand">
+            <h1>{appName}</h1>
+            <p>转发管理控制台</p>
+          </div>
+
+          <section className="login-form-panel" aria-labelledby="login-heading">
+            <div className="login-form-content">
+              <div className="login-form-heading"><h2 id="login-heading">欢迎回来</h2><p>输入账号和密码以登录控制台。</p></div>
+              <form className="login-form" noValidate aria-busy={loading} onSubmit={event => { event.preventDefault(); void handleLogin(); }}>
+                  <Input
+                    name="username"
+                    autoComplete="username"
+                    label="用户名"
+                    placeholder="请输入用户名"
+                    value={form.username}
+                    onChange={(e) => handleInputChange('username', e.target.value)}
+                    labelPlacement="outside"
+                    classNames={{ base: 'login-field', inputWrapper: 'login-input-wrap', input: 'login-input', label: 'login-label' }}
+                    variant="bordered"
+                    isDisabled={loading}
+                    isInvalid={!!errors.username}
+                    errorMessage={errors.username}
+                  />
                 
-                <Button
-                  color="primary"
-                  size="lg"
-                  onClick={handleLogin}
-                  isLoading={loading}
-                  disabled={loading}
-                  className="mt-2"
-                >
-                  {loading ? (showCaptcha ? "验证中..." : "登录中...") : "登录"}
-                </Button>
-              </div>
-            </CardBody>
-          </Card>
+                  <Input
+                    name="password"
+                    autoComplete="current-password"
+                    label="密码"
+                    placeholder="请输入密码"
+                    type={passwordVisible ? 'text' : 'password'}
+                    value={form.password}
+                    onChange={(e) => handleInputChange('password', e.target.value)}
+                    onKeyDown={event => setCapsLock(event.getModifierState('CapsLock'))}
+                    onKeyUp={event => setCapsLock(event.getModifierState('CapsLock'))}
+                    onBlur={() => setCapsLock(false)}
+                    labelPlacement="outside"
+                    classNames={{ base: 'login-field', inputWrapper: 'login-input-wrap', input: 'login-input', label: 'login-label' }}
+                    variant="bordered"
+                    isDisabled={loading}
+                    isInvalid={!!errors.password}
+                    errorMessage={errors.password}
+                    endContent={<button className="login-password-toggle" type="button" disabled={loading} aria-label={passwordVisible ? '隐藏密码' : '显示密码'} aria-pressed={passwordVisible} onClick={() => setPasswordVisible(value => !value)}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>{passwordVisible && <path d="m3 3 18 18"/>}</svg></button>}
+                  />
+                  {capsLock && <p className="login-caps-lock" role="status">大写锁定已开启</p>}
+                  <Button
+                    type="submit"
+                    color="primary"
+                    size="lg"
+                    isLoading={loading}
+                    isDisabled={loading}
+                    className="login-submit"
+                  >
+                    {loading ? (showCaptcha ? "验证中..." : "登录中...") : "登录控制台"}
+                  </Button>
+                  <p className="login-form-note"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="3"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg> 使用管理员分配的账号登录</p>
+              </form>
+            </div>
+          </section>
         </div>
-
-
-      {/* 版权信息 - 固定在底部，不占据布局空间 */}
-      
-               <div className="fixed inset-x-0 bottom-4 text-center py-4">
-               <p className="text-xs text-gray-400 dark:text-gray-500">
-                 Powered by{' '}
-                 <a 
-                   href="https://github.com/bqlpfy/flux-panel" 
-                   target="_blank" 
-                   rel="noopener noreferrer"
-                   className="text-gray-500 dark:text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
-                 >
-                   flux-panel
-                 </a>
-               </p>
-               <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
-                 v{ isWebView ? siteConfig.app_version : siteConfig.version}
-               </p>
-             </div>
-      
-   
-
+      </main>
+      <footer className="login-footer"><span>{appName} <span className="login-footer-version">v{isWebView ? siteConfig.app_version : siteConfig.version}</span></span><a href="https://github.com/kfcv301-maker/ix" target="_blank" rel="noopener noreferrer">基于 flux-panel · 开源项目 <span aria-hidden="true">↗</span></a></footer>
         {/* 验证码弹层 */}
         {showCaptcha && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="fixed inset-0 z-50 flex items-center justify-center" role="dialog" aria-modal="true" aria-label="登录安全验证">
             {/* 背景遮罩层 - 模糊效果，暗黑模式下更深 */}
             <div className="absolute inset-0 bg-black/60 dark:bg-black/80 backdrop-blur-sm captcha-backdrop-enter" />
            {/* 验证码容器 */}
-           <div className="mb-4">
+           <div className="relative z-10 mb-4">
                 <div 
                   id="captcha-container" 
                   ref={captchaContainerRef}
@@ -345,7 +354,6 @@ export default function IndexPage() {
               </div>
           </div>
         )}
-      </section>
-    </DefaultLayout>
+    </div>
   );
 }

@@ -49,6 +49,7 @@ import java.util.UUID;
 @Slf4j
 @Service
 public class ForwardSyncTaskService {
+    @Resource private com.admin.common.service.UserProtocolPolicyService userProtocolPolicyService;
     @Resource
     private com.admin.common.service.UserTunnelAliasService userTunnelAliasService;
 
@@ -178,19 +179,16 @@ public class ForwardSyncTaskService {
     }
 
     private void executeCleanup(ForwardSyncTask task, long now) {
-        GostDto result = ENDPOINT_EGRESS.equals(task.getEndpoint())
-                ? GostUtil.DeleteRemoteService(task.getNodeId(), task.getServiceName())
-                : GostUtil.DeleteService(task.getNodeId(), task.getServiceName());
-        if (successOrAlreadyAbsent(result) && ENDPOINT_INGRESS.equals(task.getEndpoint())) {
-            result = GostUtil.DeleteChains(task.getNodeId(), task.getServiceName());
-        }
+        String failure = ENDPOINT_EGRESS.equals(task.getEndpoint())
+                ? deleteEgress(task.getNodeId(), task.getServiceName())
+                : deleteIngress(task.getNodeId(), task.getServiceName(), true);
         // A retired node cannot authenticate again. Existing nodes must ACK even if offline now.
-        if (successOrAlreadyAbsent(result) || nodeMapper.selectById(task.getNodeId()) == null) {
+        if (failure == null || nodeMapper.selectById(task.getNodeId()) == null) {
             forwardSyncTaskMapper.markSucceeded(task.getId(), now);
             self.releaseCleanupReservations(task.getForwardId());
             closeRetiredNodeIfClean(task.getNodeId());
         } else {
-            forwardSyncTaskMapper.markRetry(task.getId(), endpointError("清理已删除转发", result),
+            forwardSyncTaskMapper.markRetry(task.getId(), failure,
                     nextRetryTime(task, now), now);
         }
     }
@@ -459,6 +457,10 @@ public class ForwardSyncTaskService {
     }
 
     private String executeWithLegacyNames(ForwardSyncTask task, Forward forward, Tunnel tunnel, boolean ingress) {
+        if (ingress && OPERATION_RESUME.equals(task.getOperation())) {
+            GostDto denied = GostUtil.CheckForwardProxyProtocolSupport(task.getNodeId(), forward.getProxyProtocol());
+            if (denied != null) return endpointError("恢复入口 Proxy Protocol", denied);
+        }
         UserTunnel grant = findUserTunnel(forward);
         if (OPERATION_RESUME.equals(task.getOperation())) {
             String error = userTunnelAliasService.removeLegacyOnNode(task.getNodeId(), forward, tunnel, grant, ingress);
@@ -489,15 +491,17 @@ public class ForwardSyncTaskService {
             return successOrAlreadyAbsent(result) ? null : endpointError("暂停入口服务", result);
         }
         if (OPERATION_DELETE.equals(task.getOperation())) {
-            result = GostUtil.DeleteService(task.getNodeId(), task.getServiceName());
-            if (!successOrAlreadyAbsent(result)) return endpointError("删除入口服务", result);
-            if (Objects.equals(tunnel.getType(), TUNNEL_TYPE_TUNNEL_FORWARD)) {
-                result = GostUtil.DeleteChains(task.getNodeId(), task.getServiceName());
-                if (!successOrAlreadyAbsent(result)) return endpointError("删除入口链", result);
-            }
-            return null;
+            return deleteIngress(task.getNodeId(), task.getServiceName(),
+                    Objects.equals(tunnel.getType(), TUNNEL_TYPE_TUNNEL_FORWARD));
         }
 
+        com.alibaba.fastjson2.JSONObject policy = userProtocolPolicyService.forForward(forward);
+        result = GostUtil.SetUserProtocolPolicy(task.getNodeId(), List.of(task.getServiceName() + "_tcp",
+                task.getServiceName() + "_udp"), policy);
+        if (!isSuccess(result) && !isNotFound(result)
+                && com.admin.common.service.UserProtocolPolicyService.restricted(policy)) {
+            return endpointError("同步用户协议限制", result);
+        }
         result = GostUtil.ResumeService(task.getNodeId(), task.getServiceName());
         if (isSuccess(result)) return null;
         if (!isNotFound(result)) return endpointError("恢复入口服务", result);
@@ -511,8 +515,7 @@ public class ForwardSyncTaskService {
             return successOrAlreadyAbsent(result) ? null : endpointError("暂停出口服务", result);
         }
         if (OPERATION_DELETE.equals(task.getOperation())) {
-            result = GostUtil.DeleteRemoteService(task.getNodeId(), task.getServiceName());
-            return successOrAlreadyAbsent(result) ? null : endpointError("删除出口服务", result);
+            return deleteEgress(task.getNodeId(), task.getServiceName());
         }
         result = GostUtil.ResumeRemoteService(task.getNodeId(), task.getServiceName());
         if (isSuccess(result)) return null;
@@ -520,6 +523,37 @@ public class ForwardSyncTaskService {
         result = GostUtil.AddRemoteService(task.getNodeId(), task.getServiceName(), forward.getOutPort(),
                 forward.getRemoteAddr(), tunnel.getProtocol(), forward.getStrategy(), tunnel.getInterfaceName());
         return isSuccess(result) ? null : endpointError("重建出口服务", result);
+    }
+
+    private String deleteIngress(Long nodeId, String name, boolean deleteChain) {
+        // Older Agents preflight a delete batch and abort the whole batch if
+        // either protocol is absent. Singleton batches let the remaining side
+        // be removed and make retry after a lost ACK safe.
+        for (String protocol : List.of("tcp", "udp")) {
+            GostDto result = GostUtil.DeleteServiceProtocol(nodeId, name, protocol);
+            if (!deletedOrPreciselyAbsent(result, "service", name + "_" + protocol)) {
+                return endpointError("删除入口 " + protocol.toUpperCase() + " 服务", result);
+            }
+        }
+        if (deleteChain) {
+            GostDto result = GostUtil.DeleteChains(nodeId, name);
+            if (!deletedOrPreciselyAbsent(result, "chain", name + "_chains")) {
+                return endpointError("删除入口链", result);
+            }
+        }
+        return null;
+    }
+
+    private String deleteEgress(Long nodeId, String name) {
+        GostDto result = GostUtil.DeleteRemoteService(nodeId, name);
+        return deletedOrPreciselyAbsent(result, "service", name + "_tls")
+                ? null : endpointError("删除出口服务", result);
+    }
+
+    private boolean deletedOrPreciselyAbsent(GostDto result, String kind, String target) {
+        if (result == null || result.getMsg() == null) return false;
+        String message = result.getMsg().trim();
+        return "OK".equalsIgnoreCase(message) || (kind + " " + target + " not found").equals(message);
     }
 
     private String recreateIngress(ForwardSyncTask task, Forward forward, Tunnel tunnel) {
@@ -538,7 +572,8 @@ public class ForwardSyncTaskService {
         String interfaceName = Objects.equals(tunnel.getType(), TUNNEL_TYPE_TUNNEL_FORWARD)
                 ? null : forward.getInterfaceName();
         GostDto serviceResult = GostUtil.AddService(task.getNodeId(), task.getServiceName(), forward.getInPort(),
-                limiter, forward.getRemoteAddr(), tunnel.getType(), tunnel, forward.getStrategy(), interfaceName);
+                limiter, forward.getRemoteAddr(), tunnel.getType(), tunnel, forward.getStrategy(), interfaceName,
+                userProtocolPolicyService.forForward(forward), forward.getProxyProtocol());
         return isSuccess(serviceResult) ? null : endpointError("重建入口服务", serviceResult);
     }
 

@@ -9,6 +9,9 @@ import lombok.Data;
  */
 @Data
 public class SystemInfoDto {
+
+    @JsonProperty("metrics_level")
+    private String metricsLevel;
     
     /**
      * 主机IP地址
@@ -102,6 +105,32 @@ public class SystemInfoDto {
 
     @JsonProperty("udp_connections")
     private Long udpConnections;
+
+    /** UDP 排队缓冲内存、全节点预算（字节）和本次 Agent 运行累计丢包数。 */
+    @JsonProperty("udp_queued_bytes")
+    private Long udpQueuedBytes;
+
+    @JsonProperty("udp_queue_byte_limit")
+    private Long udpQueueByteLimit;
+
+    @JsonProperty("udp_queue_drops")
+    private Long udpQueueDrops;
+
+    /** GOST mux sessions and streams; cumulative counts reset on Agent restart. */
+    @JsonProperty("mux_metrics_enabled")
+    private Boolean muxMetricsEnabled;
+
+    @JsonProperty("mux_sessions_current")
+    private Long muxSessionsCurrent;
+
+    @JsonProperty("mux_streams_current")
+    private Long muxStreamsCurrent;
+
+    @JsonProperty("mux_sessions_created")
+    private Long muxSessionsCreated;
+
+    @JsonProperty("mux_sessions_closed")
+    private Long muxSessionsClosed;
 
     /** Optional status reported by the node-local adaptive TCP memory guard. */
     @JsonProperty("tcp_tuning_mode")

@@ -26,6 +26,10 @@ public class ForwardDto {
     private Long vpsHostId;
 
     private String strategy;
+
+    @Min(value = 0, message = "Proxy Protocol 仅支持关闭、v1 或 v2")
+    @Max(value = 2, message = "Proxy Protocol 仅支持关闭、v1 或 v2")
+    private Integer proxyProtocol;
     
     /**
      * 入口端口（可选，为空时自动分配）

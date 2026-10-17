@@ -21,6 +21,7 @@ import {
 import { Chip } from "@heroui/chip";
 import { Select, SelectItem } from "@heroui/select";
 import { RadioGroup, Radio } from "@heroui/radio";
+import { Switch } from "@heroui/switch";
 import { DatePicker } from "@heroui/date-picker";
 import { Spinner } from "@heroui/spinner";
 import { Progress } from "@heroui/progress";
@@ -105,6 +106,28 @@ const calculateTunnelUsedFlow = (tunnel: UserTunnel): number => {
   return inFlow + outFlow;
 };
 
+function ProtocolPolicyFields({ tls, udp, admin, onTls, onUdp }: {
+  tls: UserTunnelForm['tlsPolicy']; udp: boolean; admin: boolean;
+  onTls: (value: UserTunnelForm['tlsPolicy']) => void; onUdp: (value: boolean) => void;
+}) {
+  return <div className="rounded-lg border border-divider bg-default-50/60 p-3 space-y-3">
+    <p className="text-sm font-medium">该用户的协议限制</p>
+    <p className="text-xs text-default-500">
+      {admin ? '管理员账号不受 TLS 和 UDP 限制。' : '仅对该用户在本隧道下的转发生效。收紧限制时，该用户的已有连接会重新连接。'}
+    </p>
+    <RadioGroup label="TCP 协议" value={admin ? 'UNRESTRICTED' : tls}
+      onValueChange={value => onTls(value as UserTunnelForm['tlsPolicy'])} isDisabled={admin} orientation="horizontal">
+      <Radio value="UNRESTRICTED">不限制</Radio>
+      <Radio value="TLS_ONLY">只允许 TLS</Radio>
+      <Radio value="TLS_DENY">禁止 TLS</Radio>
+    </RadioGroup>
+    <Switch isSelected={admin || udp} onValueChange={onUdp} isDisabled={admin}>允许 UDP</Switch>
+    {!admin && <p className="text-xs text-default-500">
+      只允许 TLS 可用于 AnyTLS、REALITY 等使用 TLS 握手的连接。禁止 UDP 控制原生 UDP，不阻止 TLS 连接内部承载的 UDP。
+    </p>}
+  </div>;
+}
+
 export default function UserPage() {
   // 状态管理
   const [users, setUsers] = useState<User[]>([]);
@@ -139,6 +162,8 @@ export default function UserPage() {
   
   // 分配新隧道权限相关状态
   const [tunnelForm, setTunnelForm] = useState<UserTunnelForm>({
+    tlsPolicy: 'UNRESTRICTED',
+    allowUdp: true,
     tunnelId: null,
     flow: 100,
     num: 10,
@@ -148,6 +173,12 @@ export default function UserPage() {
     entryAddressMode: 'NONE',
     entryDomainId: null
   });
+  useEffect(() => {
+    if (!isTunnelModalOpen || !currentUser || !userTunnels.some(grant => grant.protocolSyncPending)) return;
+    const timer = window.setTimeout(() => { loadUserTunnels(currentUser.id); }, 5000);
+    return () => window.clearTimeout(timer);
+  }, [isTunnelModalOpen, currentUser?.id, userTunnels]);
+
   const [assignLoading, setAssignLoading] = useState(false);
   const [assignEntryDomains, setAssignEntryDomains] = useState<TunnelEntryDomain[]>([]);
   const [assignEntryDomainsLoading, setAssignEntryDomainsLoading] = useState(false);
@@ -404,6 +435,8 @@ export default function UserPage() {
   const handleManageTunnels = (user: User) => {
     setCurrentUser(user);
     setTunnelForm({
+      tlsPolicy: 'UNRESTRICTED',
+      allowUdp: true,
       tunnelId: null,
       flow: 100,
       num: 10,
@@ -428,6 +461,8 @@ export default function UserPage() {
     try {
       const response = await assignUserTunnel({
         userId: currentUser.id,
+        tlsPolicy: tunnelForm.tlsPolicy,
+        allowUdp: tunnelForm.allowUdp,
         tunnelId: tunnelForm.tunnelId,
         flow: tunnelForm.flow,
         num: tunnelForm.num,
@@ -439,8 +474,10 @@ export default function UserPage() {
       });
 
       if (response.code === 0) {
-        toast.success('分配成功');
+        toast.success('分配成功，协议限制等待节点确认');
         setTunnelForm({
+          tlsPolicy: 'UNRESTRICTED',
+          allowUdp: true,
           tunnelId: null,
           flow: 100,
           num: 10,
@@ -465,6 +502,8 @@ export default function UserPage() {
   const handleEditTunnel = (userTunnel: UserTunnel) => {
     setEditTunnelForm({
       ...userTunnel,
+      tlsPolicy: userTunnel.tlsPolicy || 'UNRESTRICTED',
+      allowUdp: userTunnel.allowUdp !== false,
       expTime: userTunnel.expTime,
       entryAddressMode: userTunnel.entryAddressMode || 'NONE',
       entryDomainId: userTunnel.entryDomainId ?? null
@@ -481,6 +520,8 @@ export default function UserPage() {
     try {
       const response = await updateUserTunnel({
         id: editTunnelForm.id,
+        tlsPolicy: editTunnelForm.tlsPolicy || 'UNRESTRICTED',
+        allowUdp: editTunnelForm.allowUdp !== false,
         flow: editTunnelForm.flow,
         num: editTunnelForm.num,
         expTime: editTunnelForm.expTime,
@@ -492,7 +533,7 @@ export default function UserPage() {
       });
 
       if (response.code === 0) {
-        toast.success('更新成功');
+        toast.success('已保存；协议限制以节点同步状态为准');
         onEditTunnelModalClose();
         if (currentUser) {
           loadUserTunnels(currentUser.id);
@@ -1090,6 +1131,10 @@ export default function UserPage() {
                     />
                   </div>
 
+                  <ProtocolPolicyFields tls={tunnelForm.tlsPolicy} udp={tunnelForm.allowUdp}
+                    admin={currentUser?.roleId === 0}
+                    onTls={tlsPolicy => setTunnelForm(prev => ({ ...prev, tlsPolicy }))}
+                    onUdp={allowUdp => setTunnelForm(prev => ({ ...prev, allowUdp }))} />
                   <div className="rounded-lg border border-divider bg-default-50/60 p-3 space-y-3">
                     <div>
                       <p className="text-sm font-medium">用户可见入口地址</p>
@@ -1186,6 +1231,11 @@ export default function UserPage() {
                           >
                             {getEntryAddressLabel(userTunnel)}
                           </Chip>
+                          <div className="text-xs text-default-500 mt-1">
+                            {currentUser?.roleId === 0 ? '管理员不限制' : `${userTunnel.tlsPolicy === 'TLS_ONLY' ? '只允许 TLS' : userTunnel.tlsPolicy === 'TLS_DENY' ? '禁止 TLS' : 'TLS 不限制'} · UDP ${userTunnel.allowUdp === false ? '禁止' : '允许'}`}
+                          </div>
+                          {userTunnel.protocolSyncPending && <div className="text-xs text-warning mt-1"
+                            title={userTunnel.protocolSyncError || '等待节点确认'}>协议限制待同步{userTunnel.protocolSyncError ? `：${userTunnel.protocolSyncError}` : ''}</div>}
                         </TableCell>
                         <TableCell>
                           <div className="flex flex-col gap-1">
@@ -1368,6 +1418,10 @@ export default function UserPage() {
                   />
                 </div>
 
+                <ProtocolPolicyFields tls={editTunnelForm.tlsPolicy || 'UNRESTRICTED'} udp={editTunnelForm.allowUdp !== false}
+                  admin={currentUser?.roleId === 0}
+                  onTls={tlsPolicy => setEditTunnelForm(prev => prev ? ({ ...prev, tlsPolicy }) : null)}
+                  onUdp={allowUdp => setEditTunnelForm(prev => prev ? ({ ...prev, allowUdp }) : null)} />
                 <div className="rounded-lg border border-divider bg-default-50/60 p-3 space-y-3 mt-4">
                   <div>
                     <p className="text-sm font-medium">用户可见入口地址</p>

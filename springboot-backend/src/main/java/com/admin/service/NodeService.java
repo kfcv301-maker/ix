@@ -29,4 +29,6 @@ public interface NodeService extends IService<Node> {
 
     R getInstallCommand(NodeInstallCommandDto commandDto);
 
+    String claimInstallScript(String bootstrapToken);
+
 }
