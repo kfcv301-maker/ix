@@ -171,6 +171,7 @@ func (h *forwardHandler) Handle(ctx context.Context, conn net.Conn, opts ...hand
 				forwarder.WithBypass(h.options.Bypass),
 				forwarder.WithHTTPKeepalive(h.md.httpKeepalive),
 				forwarder.WithRecorderObject(ro),
+				forwarder.WithLog(h.options.Logger),
 			)
 		case sniffing.ProtoTLS:
 			return sniffer.HandleTLS(ctx, conn,
@@ -178,6 +179,7 @@ func (h *forwardHandler) Handle(ctx context.Context, conn net.Conn, opts ...hand
 				forwarder.WithHop(h.hop),
 				forwarder.WithBypass(h.options.Bypass),
 				forwarder.WithRecorderObject(ro),
+				forwarder.WithLog(h.options.Logger),
 			)
 		}
 	}
