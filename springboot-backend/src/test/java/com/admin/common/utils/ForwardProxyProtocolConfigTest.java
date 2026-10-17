@@ -35,7 +35,7 @@ class ForwardProxyProtocolConfigTest {
     void createAndUpdatePreserveProxyVersionForOrdinaryAndTunnelForwarding(int version) {
         try (MockedStatic<WebSocketServer> socket = mockStatic(WebSocketServer.class)) {
             socket.when(() -> WebSocketServer.send_msg(eq(1L), any(), eq("ForwardProxyProtocolCapabilities")))
-                    .thenReturn(reply(JSONObject.of("forwardProxyProtocol", 1, "proxyProtocolVersions", JSONArray.of(1, 2))));
+                    .thenReturn(reply(JSONObject.of("forwardProxyProtocol", 2, "proxyProtocolVersions", JSONArray.of(1, 2))));
             for (int type : new int[]{1, 2}) {
                 socket.when(() -> WebSocketServer.send_msg(eq(1L), any(JSONArray.class), anyString()))
                         .thenAnswer(call -> { assertSendingOnlyOnIngressTcp(call.getArgument(1), version, type); return reply(null); });
@@ -48,8 +48,9 @@ class ForwardProxyProtocolConfigTest {
     }
 
     @Test void oldAgentAndUnconfirmedVersionsCannotSilentlyEnableSending() {
-        Object[] responses = {null, JSONObject.of("forwardProxyProtocol", 1),
-                JSONObject.of("forwardProxyProtocol", 1, "proxyProtocolVersions", JSONArray.of(1)),
+        Object[] responses = {null, JSONObject.of("forwardProxyProtocol", 2),
+                JSONObject.of("forwardProxyProtocol", 2, "proxyProtocolVersions", JSONArray.of(1)),
+                JSONObject.of("forwardProxyProtocol", 1, "proxyProtocolVersions", JSONArray.of(1, 2)),
                 JSONObject.of("forwardProxyProtocol", 0, "proxyProtocolVersions", JSONArray.of(1, 2)),
                 JSONObject.of("forwardProxyProtocol", "bad", "proxyProtocolVersions", "bad")};
         for (Object response : responses) {
@@ -60,6 +61,22 @@ class ForwardProxyProtocolConfigTest {
                         new Tunnel(), "fifo", null, null, 2).getMsg().contains("升级节点后端"));
                 socket.verify(() -> WebSocketServer.send_msg(eq(1L), any(), eq("UpdateService")), never());
             }
+        }
+    }
+
+    @ParameterizedTest @ValueSource(ints = {1, 2})
+    void revisionOneAgentCannotCreateUpdateOrRestoreTcpEvenWhenItAdvertisesBothVersions(int version) {
+        try (MockedStatic<WebSocketServer> socket = mockStatic(WebSocketServer.class)) {
+            socket.when(() -> WebSocketServer.send_msg(eq(1L), any(), eq("ForwardProxyProtocolCapabilities")))
+                    .thenReturn(reply(JSONObject.of("forwardProxyProtocol", 1, "proxyProtocolVersions", JSONArray.of(1, 2))));
+            assertTrue(GostUtil.AddService(1L, "rule", 18100, null, "127.0.0.1:8443", 1,
+                    new Tunnel(), "fifo", null, null, version).getMsg().contains("升级节点后端"));
+            assertTrue(GostUtil.UpdateService(1L, "rule", 18100, null, "127.0.0.1:8443", 1,
+                    new Tunnel(), "fifo", null, null, version).getMsg().contains("升级节点后端"));
+            assertTrue(GostUtil.AddMissingService(1L, "rule", 18100, null, "127.0.0.1:8443", 1,
+                    new Tunnel(), "fifo", null, null, true, false, version).getMsg().contains("升级节点后端"));
+            socket.verify(() -> WebSocketServer.send_msg(anyLong(), any(),
+                    argThat(command -> !"ForwardProxyProtocolCapabilities".equals(command))), never());
         }
     }
 

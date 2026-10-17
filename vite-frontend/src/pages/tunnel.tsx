@@ -26,7 +26,8 @@ import {
 } from "@/api";
 import type { TunnelEntryDomain } from "@/types";
 import { useTunnelDiagnosis } from '@/hooks/use-tunnel-diagnosis';
-import { diagnosisProgressText } from '@/utils/tunnel-diagnosis';
+import { diagnosisProgressText, TCP_DIAGNOSIS_NOTICE } from '@/utils/tunnel-diagnosis';
+import { proxyProtocolDiagnosisNotice } from '@/utils/forward-proxy-protocol';
 
 interface Tunnel {
   id: number;
@@ -452,7 +453,7 @@ export default function TunnelPage() {
     return node ? node.name : `节点${nodeId}`;
   };
 
-  // 逐条检测当前隧道下的转发。后端会依次复用单条转发的完整 TCP 链路诊断。
+  // 逐条检测当前隧道下的转发。后端会依次复用单条转发的分段 TCP 连通性诊断。
   const handleDiagnoseAllForwards = async (tunnel: Tunnel) => {
     setCurrentPingTunnel(tunnel);
     setForwardPingModalOpen(true);
@@ -781,7 +782,7 @@ export default function TunnelPage() {
                         color="success"
                         onPress={() => handleDiagnoseAllForwards(tunnel)}
                         className="flex-1 min-h-8"
-                        title="最多 20 条转发，每个隧道 30 秒内只能执行一次"
+                        title="分段 TCP 连通性检测，每 20 条自动分批，每个隧道 30 秒内只能执行一次"
                         startContent={
                           <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
                             <path strokeLinecap="round" strokeLinejoin="round" d="M4 12h2l2-6 4 12 2-6h6" />
@@ -1371,6 +1372,7 @@ export default function TunnelPage() {
                   )}
                 </ModalHeader>
                 <ModalBody>
+                  <Alert color="primary" variant="flat" title="检测范围" description={TCP_DIAGNOSIS_NOTICE} />
                   {diagnosisLoading ? (
                     <div className="flex items-center justify-center py-16">
                       <div className="flex items-center gap-3">
@@ -1402,7 +1404,7 @@ export default function TunnelPage() {
                                   color={result.success ? 'success' : 'danger'} 
                                   variant="flat"
                                 >
-                                  {result.success ? '成功' : '失败'}
+                                  {result.success ? 'TCP 连通' : 'TCP 未连通'}
                                 </Chip>
                               </div>
                             </CardHeader>
@@ -1416,7 +1418,7 @@ export default function TunnelPage() {
                                     </div>
                                     <div className="text-center">
                                       <div className="text-2xl font-bold text-warning">{result.packetLoss?.toFixed(1)}</div>
-                                      <div className="text-small text-default-500">丢包率(%)</div>
+                                      <div className="text-small text-default-500">连接失败率(%)</div>
                                     </div>
                                     <div className="text-center">
                                       {quality && (
@@ -1497,11 +1499,12 @@ export default function TunnelPage() {
                   <h2 className="text-xl font-bold">一键 PING 结果</h2>
                   {currentPingTunnel && (
                     <p className="text-small text-default-500">
-                      {currentPingTunnel.name} · 完整 TCP 链路；每 20 条自动分批，30 秒冷却
+                      {currentPingTunnel.name} · 分段 TCP 连通性；每 20 条自动分批，30 秒冷却
                     </p>
                   )}
                 </ModalHeader>
                 <ModalBody>
+                  <Alert color="primary" variant="flat" title="检测范围" description={TCP_DIAGNOSIS_NOTICE} />
                   {forwardPingResult && (
                     <div className="flex items-center gap-2 rounded-lg bg-primary-50 px-3 py-2 text-small text-primary dark:bg-primary-100/10">
                       {forwardPingLoading && <Spinner size="sm" />}
@@ -1522,7 +1525,7 @@ export default function TunnelPage() {
                         <Card className="border border-success-200 shadow-none">
                           <CardBody className="p-3 text-center">
                             <div className="text-2xl font-bold text-success">{forwardPingResult.successfulForwards}</div>
-                            <div className="text-small text-default-500">全部链路通过</div>
+                            <div className="text-small text-default-500">TCP 连通</div>
                           </CardBody>
                         </Card>
                         <Card className={`border shadow-none ${forwardPingResult.failedForwards ? 'border-danger-200' : 'border-default-200'}`}>
@@ -1544,10 +1547,13 @@ export default function TunnelPage() {
                                 {forward.remoteAddress && <p className="mt-1 truncate font-mono text-tiny text-default-500">{forward.remoteAddress}</p>}
                               </div>
                               <Chip color={forward.success ? 'success' : 'danger'} variant="flat">
-                                {forward.success ? '全部通过' : forward.outcome && forward.outcome !== 'failed' ? '未检测' : '检测失败'}
+                                {forward.success ? 'TCP 连通' : forward.outcome && forward.outcome !== 'failed' ? '未检测' : 'TCP 未连通'}
                               </Chip>
                             </CardHeader>
                             <CardBody className="space-y-2 pt-0">
+                              {proxyProtocolDiagnosisNotice(forward.proxyProtocol) && (
+                                <p className="text-small text-warning">{proxyProtocolDiagnosisNotice(forward.proxyProtocol)}</p>
+                              )}
                               {forward.results?.length ? forward.results.map((result, index) => (
                                 <div key={index} className="grid grid-cols-[auto_1fr_auto] items-center gap-3 rounded-lg border border-default-200 px-3 py-2 text-small">
                                   <span className={`flex h-6 w-6 items-center justify-center rounded-full text-white ${result.success ? 'bg-success' : 'bg-danger'}`}>
@@ -1558,7 +1564,7 @@ export default function TunnelPage() {
                                     <p className="truncate font-mono text-tiny text-default-500">{result.targetIp}{result.targetPort ? `:${result.targetPort}` : ''}</p>
                                   </div>
                                   <div className="text-right text-tiny text-default-500">
-                                    {result.success ? <><p>{result.averageTime?.toFixed(0) ?? '-'} ms</p><p>丢包 {result.packetLoss?.toFixed(1) ?? '-'}%</p></> : <span className="text-danger">{result.message || '连接失败'}</span>}
+                                    {result.success ? <><p>{result.averageTime?.toFixed(0) ?? '-'} ms</p><p>连接失败率 {result.packetLoss?.toFixed(1) ?? '-'}%</p></> : <span className="text-danger">{result.message || '连接失败'}</span>}
                                   </div>
                                 </div>
                               )) : (

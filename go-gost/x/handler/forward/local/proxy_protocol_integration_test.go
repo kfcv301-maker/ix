@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -58,6 +59,15 @@ func startProxyService(t *testing.T, cfg *config.ServiceConfig) service.Service 
 	t.Helper()
 	cfg.Name = fmt.Sprintf("%s-%d", cfg.Name, proxyFixtureID.Add(1))
 	cfg.Metadata = map[string]any{"enableStats": false}
+	encoded, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded config.ServiceConfig
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	cfg = &decoded
 	s, err := serviceparser.ParseService(cfg)
 	if err != nil {
 		t.Fatal(err)

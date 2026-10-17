@@ -4,7 +4,6 @@ import (
 	"crypto"
 	"crypto/tls"
 	"crypto/x509"
-	"fmt"
 	"time"
 
 	"github.com/go-gost/core/bypass"
@@ -30,9 +29,9 @@ type metadata struct {
 }
 
 func (h *forwardHandler) parseMetadata(md mdata.Metadata) (err error) {
-	h.md.proxyProtocol = mdutil.GetInt(md, "proxyProtocol")
-	if h.md.proxyProtocol < 0 || h.md.proxyProtocol > 2 {
-		return fmt.Errorf("invalid proxyProtocol version %d: expected 0, 1 or 2", h.md.proxyProtocol)
+	h.md.proxyProtocol, err = parseForwardProxyProtocol(md)
+	if err != nil {
+		return err
 	}
 	h.md.readTimeout = mdutil.GetDuration(md, "readTimeout")
 	if h.md.readTimeout <= 0 {

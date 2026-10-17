@@ -18,7 +18,7 @@ public class GostUtil {
         return version;
     }
 
-    /** A legacy Agent may silently ignore handler metadata; fail before mutating it. */
+    /** Revision 2 confirms JSON numeric metadata is applied; older Agents can silently ignore it. */
     public static GostDto CheckForwardProxyProtocolSupport(Long nodeId, Integer version) {
         int selected = normalizeProxyProtocol(version);
         if (selected == 0) return null;
@@ -27,7 +27,7 @@ public class GostUtil {
             try {
                 JSONObject capabilities = JSONObject.parseObject(JSONObject.toJSONString(result.getData()));
                 JSONArray versions = capabilities.getJSONArray("proxyProtocolVersions");
-                if (capabilities.getIntValue("forwardProxyProtocol") >= 1 && versions != null
+                if (capabilities.getIntValue("forwardProxyProtocol") >= 2 && versions != null
                         && versions.toJavaList(Integer.class).contains(selected)) return null;
             } catch (RuntimeException malformedCapabilities) {
                 // A bad/legacy response is not evidence that sending is supported.

@@ -1,3 +1,5 @@
+export const TCP_DIAGNOSIS_NOTICE = '仅验证 TCP 端口连通，未验证转发业务、目标解析 Proxy Protocol 或真实 IP 识别。';
+
 export type DiagnosisStatus = 'queued' | 'running' | 'cancelling' | 'completed' | 'cancelled' | 'timed_out' | 'failed';
 export interface PingCheck {
   success: boolean;
@@ -14,6 +16,7 @@ export interface TunnelPingForwardReport {
   forwardId: number;
   forwardName: string;
   remoteAddress?: string;
+  proxyProtocol?: number;
   success: boolean;
   outcome?: 'passed' | 'failed' | 'cancelled' | 'timed_out' | 'not_run';
   message?: string;
