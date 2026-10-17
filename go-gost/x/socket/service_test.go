@@ -3,6 +3,7 @@ package socket
 import (
 	"io"
 	"net"
+	"strings"
 	"testing"
 
 	corelogger "github.com/go-gost/core/logger"
@@ -56,19 +57,45 @@ func unusedTCPAddress(t *testing.T) string {
 	return addr
 }
 
+// UDP's ephemeral allocator does not account for TCP listeners or TIME_WAIT
+// sockets. Reserve TCP first so the failed batch genuinely creates its TCP
+// member before reaching the deliberately occupied UDP member.
+func blockUDPOnFreeTCPPort(t *testing.T) net.PacketConn {
+	t.Helper()
+	for attempt := 0; attempt < 50; attempt++ {
+		tcp, err := net.Listen("tcp4", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		udp, udpErr := net.ListenPacket("udp4", tcp.Addr().String())
+		closeErr := tcp.Close()
+		if closeErr != nil {
+			if udp != nil {
+				udp.Close()
+			}
+			t.Fatal(closeErr)
+		}
+		if udpErr == nil {
+			t.Cleanup(func() { udp.Close() })
+			assertTCPPortFree(t, udp.LocalAddr().String())
+			return udp
+		}
+	}
+	t.Fatal("could not reserve UDP on an available TCP port")
+	return nil
+}
+
 func TestCreateReleasesTCPWhenSecondUDPBindFails(t *testing.T) {
 	isolatedServiceConfig(t)
-	blocker, err := net.ListenPacket("udp4", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer blocker.Close()
+	blocker := blockUDPOnFreeTCPPort(t)
 	addr := blocker.LocalAddr().String()
 	assertTCPPortFree(t, addr)
 	req := createServicesRequest{Data: []config.ServiceConfig{serviceTestConfig("cleanup_tcp", addr, "tcp"), serviceTestConfig("cleanup_udp", addr, "udp")}}
 	for i := 0; i < 5; i++ {
 		if err := createServices(req); err == nil {
 			t.Fatal("expected UDP bind failure")
+		} else if !strings.Contains(err.Error(), "cleanup_udp") {
+			t.Fatalf("batch did not reach its blocked UDP member: %v", err)
 		}
 		assertTCPPortFree(t, addr)
 		if registry.ServiceRegistry().IsRegistered("cleanup_tcp") || len(config.Global().Services) != 0 {
@@ -193,15 +220,13 @@ func TestFailedUpdateRestoresEntireOriginalPair(t *testing.T) {
 	if err := createServices(createServicesRequest{Data: original}); err != nil {
 		t.Fatal(err)
 	}
-	blocker, err := net.ListenPacket("udp4", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer blocker.Close()
+	blocker := blockUDPOnFreeTCPPort(t)
 	badAddr := blocker.LocalAddr().String()
 	replacements := []config.ServiceConfig{serviceTestConfig("update_tcp", badAddr, "tcp"), serviceTestConfig("update_udp", badAddr, "udp")}
 	if err := updateServices(updateServicesRequest{Data: replacements}); err == nil {
 		t.Fatal("expected UDP bind failure")
+	} else if !strings.Contains(err.Error(), "update service update_udp failed:") {
+		t.Fatalf("replacement did not reach its blocked UDP member: %v", err)
 	}
 	assertTCPPortFree(t, badAddr)
 	for _, cfg := range config.Global().Services {

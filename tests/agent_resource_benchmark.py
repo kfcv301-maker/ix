@@ -35,6 +35,15 @@ def main():
     helpers = source[source.index("func udpTestListener"):source.index("func TestUDPDatagrams")]
     benchmarks = source[source.index("func BenchmarkUDPListenerThroughput"):]
     fixture = 'package udp\nimport("bytes";"errors";"io";"net";"strconv";"testing";"time")\n' + helpers + benchmarks
+    # Recent baselines already contain these helpers and the benchmark. Use a
+    # private namespace for the identical injected body instead of redeclaring
+    # their symbols or accidentally timing both benchmarks on that source.
+    names = {"udpTestListener": "resourceBenchmarkUDPTestListener",
+             "acceptTestPeer": "resourceBenchmarkAcceptPeer",
+             "fmtName": "resourceBenchmarkFormatName",
+             "BenchmarkUDPListenerThroughput": "BenchmarkResourceUDPListenerThroughput"}
+    for name, replacement in names.items():
+        fixture = re.sub(r"\b" + name + r"\b", replacement, fixture)
     (original / "internal/net/udp/resource_benchmark_test.go").write_text(fixture, encoding="utf-8")
     # Keep the QUIC dependency initialization identical. Otherwise the proposed
     # test binary loads quic-go while the baseline's synthetic fixture does not.
@@ -47,13 +56,15 @@ def main():
         run(["go", "test", "-run=^$", "./internal/net/udp"], folder, env)
     observations = {"original": {}, "repaired": {}}
     raw = {"original": [], "repaired": []}
-    pattern = re.compile(r"BenchmarkUDPListenerThroughput/(\S+)-\d+\s+\d+\s+([\d.]+) ns/op")
+    pattern = re.compile(r"Benchmark(?:Resource)?UDPListenerThroughput/(\S+)-\d+\s+\d+\s+([\d.]+) ns/op")
     for iteration in range(6):
         variants = [("original", original), ("repaired", repaired)]
         if iteration % 2:
             variants.reverse()
         for label, folder in variants:
-            output = run(["go", "test", "-run=^$", "-bench=BenchmarkUDPListenerThroughput",
+            benchmark = ("BenchmarkResourceUDPListenerThroughput" if label == "original"
+                         else "BenchmarkUDPListenerThroughput")
+            output = run(["go", "test", "-run=^$", "-bench=^" + benchmark + "$",
                           "-benchmem", "-benchtime=1s", "-count=1", "-timeout=120s",
                           "./internal/net/udp"], folder, env)
             raw[label].append(output)

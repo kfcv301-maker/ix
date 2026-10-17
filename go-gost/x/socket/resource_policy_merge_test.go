@@ -3,9 +3,9 @@ package socket
 import (
 	"bytes"
 	"encoding/json"
-	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -27,16 +27,14 @@ func TestFailedPairReplacementRetainsScopedPolicy(t *testing.T) {
 	if err := createServices(createServicesRequest{Data: original}); err != nil {
 		t.Fatal(err)
 	}
-	blocker, err := net.ListenPacket("udp4", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer blocker.Close()
+	blocker := blockUDPOnFreeTCPPort(t)
 	// A legacy update omits policy metadata. It must inherit the restriction,
 	// and a later listener failure must restore both original configurations.
 	replacements := []config.ServiceConfig{serviceTestConfig(original[0].Name, blocker.LocalAddr().String(), "tcp"), serviceTestConfig(original[1].Name, blocker.LocalAddr().String(), "udp")}
 	if err := updateServices(updateServicesRequest{Data: replacements}); err == nil {
 		t.Fatal("expected blocked UDP listener to reject replacement")
+	} else if !strings.Contains(err.Error(), "update service "+original[1].Name+" failed:") {
+		t.Fatalf("replacement did not reach its blocked UDP member: %v", err)
 	}
 	for _, cfg := range config.Global().Services {
 		got, err := xservice.ParseUserProtocolPolicy(cfg.Metadata)
