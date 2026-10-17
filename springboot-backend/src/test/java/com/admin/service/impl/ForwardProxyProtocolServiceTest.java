@@ -73,15 +73,18 @@ class ForwardProxyProtocolServiceTest {
         return constructor.newInstance(false, null, List.of(first, second), null);
     }
 
-    @Test void multiIngressCapabilityFailureStopsCreateUpdateAndTunnelChangeBeforeAnyMutation() throws Exception {
+    @ParameterizedTest @ValueSource(booleans = {false, true})
+    void multiIngressCapabilityFailureStopsCreateUpdateAndTunnelChangeBeforeAnyMutation(boolean revisionOne) throws Exception {
         Forward forward = existing();
         Object nodeInfo = nodes();
         try (var socket = mockStatic(WebSocketServer.class)) {
             socket.when(() -> WebSocketServer.send_msg(eq(11L), any(), eq("ForwardProxyProtocolCapabilities")))
                     .thenAnswer(call -> { GostDto supported = new GostDto(); supported.setMsg("OK");
-                        supported.setData(JSONObject.of("forwardProxyProtocol", 1, "proxyProtocolVersions", JSONArray.of(1, 2))); return supported; });
+                        supported.setData(JSONObject.of("forwardProxyProtocol", 2, "proxyProtocolVersions", JSONArray.of(1, 2))); return supported; });
             socket.when(() -> WebSocketServer.send_msg(eq(12L), any(), eq("ForwardProxyProtocolCapabilities")))
-                    .thenAnswer(call -> { GostDto old = new GostDto(); old.setMsg("未知命令类型"); return old; });
+                    .thenAnswer(call -> { GostDto old = new GostDto(); old.setMsg(revisionOne ? "OK" : "未知命令类型");
+                        if (revisionOne) old.setData(JSONObject.of("forwardProxyProtocol", 1, "proxyProtocolVersions", JSONArray.of(1, 2)));
+                        return old; });
             ForwardServiceImpl service = new ForwardServiceImpl();
             R create = ReflectionTestUtils.invokeMethod(service, "createGostServices", forward, new Tunnel(), null, nodeInfo, null);
             R update = ReflectionTestUtils.invokeMethod(service, "updateGostServices", forward, new Tunnel(), null, nodeInfo, null);

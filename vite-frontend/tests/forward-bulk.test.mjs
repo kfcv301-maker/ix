@@ -22,7 +22,7 @@ execFileSync(process.execPath, [resolve(frontend, 'node_modules/typescript/bin/t
 writeFileSync(resolve(temporary, 'package.json'), '{"type":"module"}');
 const { planBulkForwardUpdates: plan, executeBulkForwardUpdates: execute, normalizeBulkTargetAddresses: targets } =
   await import(pathToFileURL(resolve(temporary, 'forward-bulk.js')).href);
-const { parseProxyProtocol, proxyProtocolLabel } =
+const { parseProxyProtocol, proxyProtocolLabel, proxyProtocolDiagnosisNotice } =
   await import(pathToFileURL(resolve(temporary, 'forward-proxy-protocol.js')).href);
 
 const access = { isAdministrator: false, currentUserId: 7 };
@@ -192,4 +192,17 @@ test('older records and exports default to disabled, while invalid protocol valu
   assert.equal(proxyProtocolLabel(0), '关闭');
   assert.equal(proxyProtocolLabel(1), 'PROXY v1');
   assert.equal(proxyProtocolLabel(2), 'PROXY v2');
+});
+
+
+test('configured Proxy Protocol versions remain explicitly unverified and missing versions are not invented', () => {
+  for (const version of [1, 2]) {
+    const notice = proxyProtocolDiagnosisNotice(version);
+    assert.match(notice, new RegExp(`PROXY v${version}`));
+    assert.match(notice, /目标接收与真实 IP 识别未验证/);
+    assert.equal(proxyProtocolDiagnosisNotice(String(version)), notice);
+  }
+  for (const absent of [undefined, null, 0, '0', 3, 'invalid']) {
+    assert.equal(proxyProtocolDiagnosisNotice(absent), null);
+  }
 });

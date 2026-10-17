@@ -759,7 +759,7 @@ func (w *WebSocketReporter) routeCommand(cmd CommandMessage) {
 		response.Data = map[string]any{"userProtocolPolicy": 1}
 	case "ForwardProxyProtocolCapabilities":
 		response.Type = "ForwardProxyProtocolCapabilitiesResponse"
-		response.Data = map[string]any{"forwardProxyProtocol": 1, "proxyProtocolVersions": []int{1, 2}}
+		response.Data = map[string]any{"forwardProxyProtocol": 2, "proxyProtocolVersions": []int{1, 2}}
 	case "SetUserProtocolPolicy":
 		err = w.handleSetUserProtocolPolicy(cmd.Data)
 		response.Type = "SetUserProtocolPolicyResponse"

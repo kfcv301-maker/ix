@@ -48,8 +48,8 @@ import {
 } from "@/api";
 import { JwtUtil } from "@/utils/jwt";
 import { useTunnelDiagnosis } from '@/hooks/use-tunnel-diagnosis';
-import { diagnosisProgressText } from '@/utils/tunnel-diagnosis';
-import { parseProxyProtocol, proxyProtocolLabel, type ProxyProtocolVersion } from '@/utils/forward-proxy-protocol';
+import { diagnosisProgressText, TCP_DIAGNOSIS_NOTICE } from '@/utils/tunnel-diagnosis';
+import { parseProxyProtocol, proxyProtocolLabel, proxyProtocolDiagnosisNotice, PROXY_PROTOCOL_DESCRIPTION, type ProxyProtocolVersion } from '@/utils/forward-proxy-protocol';
 import {
   bulkForwardFieldLabels, planBulkForwardUpdates, executeBulkForwardUpdates,
   type BulkForwardField, type BulkForwardPatch, type BulkForwardPlanEntry, type BulkForwardResult,
@@ -131,6 +131,7 @@ interface AddressItem {
 
 interface DiagnosisResult {
   forwardName: string;
+  proxyProtocol?: number;
   timestamp: number;
   results: Array<{
     success: boolean;
@@ -1842,7 +1843,7 @@ export default function ForwardPage() {
                           className="shadow-none border border-divider"
                         >
                           <div className="flex flex-col gap-2 border-b border-divider px-4 pb-3 pt-1 sm:flex-row sm:items-center sm:justify-between">
-                            <p className="text-xs text-default-500">检测全部转发的完整 TCP 链路；每 20 条自动分批，30 秒冷却</p>
+                            <p className="text-xs text-default-500">检测全部转发的分段 TCP 连通性；每 20 条自动分批，30 秒冷却</p>
                             <Button
                               size="sm"
                               color="primary"
@@ -1983,7 +1984,7 @@ export default function ForwardPage() {
                   <Select aria-label="批量发送 Proxy Protocol" selectedKeys={[bulkValues.proxyProtocol]} isDisabled={!bulkFields.proxyProtocol || bulkApplying || bulkPreviewLoading} disallowEmptySelection onSelectionChange={keys => {
                     const key = Array.from(keys)[0];
                     if (key !== undefined) setBulkValue('proxyProtocol', String(key));
-                  }} variant="bordered" description="向目标传递真实客户端 IP，仅 TCP 生效。目标服务需支持所选的 Proxy Protocol。">
+                  }} variant="bordered" description={PROXY_PROTOCOL_DESCRIPTION}>
                     <SelectItem key="0">关闭</SelectItem>
                     <SelectItem key="1">PROXY v1</SelectItem>
                     <SelectItem key="2">PROXY v2</SelectItem>
@@ -2194,7 +2195,7 @@ export default function ForwardPage() {
                         isDisabled={submitLoading}
                         size="sm"
                       >发送 Proxy Protocol</Switch>
-                      <p className="text-xs text-default-500">向目标传递真实客户端 IP，仅 TCP 生效。目标服务需支持所选的 Proxy Protocol。</p>
+                      <p className="text-xs text-default-500">{PROXY_PROTOCOL_DESCRIPTION}</p>
                       {form.proxyProtocol !== 0 && (
                         <Select
                           label="Proxy Protocol 版本"
@@ -2625,6 +2626,7 @@ export default function ForwardPage() {
                   </p>
                 </ModalHeader>
                 <ModalBody>
+                  <Alert color="primary" variant="flat" title="检测范围" description={TCP_DIAGNOSIS_NOTICE} />
                   {tunnelPingSummary && (
                     <div className="grid grid-cols-3 gap-2">
                       <Card className="border border-divider shadow-none">
@@ -2636,13 +2638,13 @@ export default function ForwardPage() {
                       <Card className="border border-success/30 shadow-none">
                         <CardBody className="items-center gap-0 py-3">
                           <span className="text-xl font-semibold text-success">{tunnelPingSummary.successfulForwards}</span>
-                          <span className="text-tiny text-default-500">已通过</span>
+                          <span className="text-tiny text-default-500">TCP 连通</span>
                         </CardBody>
                       </Card>
                       <Card className="border border-danger/30 shadow-none">
                         <CardBody className="items-center gap-0 py-3">
                           <span className="text-xl font-semibold text-danger">{tunnelPingSummary.failedForwards}</span>
-                          <span className="text-tiny text-default-500">未通过</span>
+                          <span className="text-tiny text-default-500">TCP 未连通</span>
                         </CardBody>
                       </Card>
                     </div>
@@ -2672,16 +2674,19 @@ export default function ForwardPage() {
                               </code>
                             </div>
                             <Chip color={forward.success ? 'success' : 'danger'} variant="flat" size="sm">
-                                  {forward.success ? '通过' : forward.outcome && forward.outcome !== 'failed' ? '未检测' : '未通过'}
+                                  {forward.success ? 'TCP 连通' : forward.outcome && forward.outcome !== 'failed' ? '未检测' : 'TCP 未连通'}
                             </Chip>
                           </CardHeader>
                           <CardBody className="gap-2 pt-0">
+                            {proxyProtocolDiagnosisNotice(forward.proxyProtocol ?? forwards.find(rule => rule.id === forward.forwardId)?.proxyProtocol) && (
+                              <p className="text-small text-warning">{proxyProtocolDiagnosisNotice(forward.proxyProtocol ?? forwards.find(rule => rule.id === forward.forwardId)?.proxyProtocol)}</p>
+                            )}
                             {forward.results.length ? forward.results.map((result, index) => (
                               <div key={`${forward.forwardId}-${index}`} className="flex items-center justify-between gap-3 rounded-medium bg-default-100 px-3 py-2 dark:bg-default-50/10">
                                 <span className="min-w-0 truncate text-small">{result.description}</span>
                                 <span className={`shrink-0 text-tiny font-medium ${result.success ? 'text-success' : 'text-danger'}`}>
                                   {result.success
-                                    ? `${result.averageTime?.toFixed(0) ?? '-'} ms · ${result.packetLoss?.toFixed(0) ?? '-'}% 丢包`
+                                    ? `${result.averageTime?.toFixed(0) ?? '-'} ms · ${result.packetLoss?.toFixed(0) ?? '-'}% 连接失败`
                                     : '连接失败'}
                                 </span>
                               </div>
@@ -2742,6 +2747,10 @@ export default function ForwardPage() {
                   )}
                 </ModalHeader>
                 <ModalBody>
+                  <Alert color="primary" variant="flat" title="检测范围" description={TCP_DIAGNOSIS_NOTICE} />
+                  {proxyProtocolDiagnosisNotice(diagnosisResult?.proxyProtocol ?? currentDiagnosisForward?.proxyProtocol) && (
+                    <p className="text-small text-warning">{proxyProtocolDiagnosisNotice(diagnosisResult?.proxyProtocol ?? currentDiagnosisForward?.proxyProtocol)}</p>
+                  )}
                   {diagnosisLoading ? (
                     <div className="flex items-center justify-center py-16">
                       <div className="flex items-center gap-3">
@@ -2767,7 +2776,7 @@ export default function ForwardPage() {
                                       variant="flat" 
                                       size="sm"
                                     >
-                                      {result.success ? '连接成功' : '连接失败'}
+                                      {result.success ? 'TCP 连通' : 'TCP 未连通'}
                                     </Chip>
                                   </div>
                                 </div>
@@ -2784,7 +2793,7 @@ export default function ForwardPage() {
                                     </div>
                                     <div className="text-center">
                                       <div className="text-2xl font-bold text-warning">{result.packetLoss?.toFixed(1)}</div>
-                                      <div className="text-small text-default-500">丢包率(%)</div>
+                                      <div className="text-small text-default-500">连接失败率(%)</div>
                                     </div>
                                     <div className="text-center">
                                       {quality && (

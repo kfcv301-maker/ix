@@ -52,6 +52,7 @@ class CheckGostConfigAsyncTest {
     private final List<String> commands = new ArrayList<>();
     private final List<String> createdServices = new ArrayList<>();
     private final List<String> deletedServices = new ArrayList<>();
+    private int proxyProtocolCapabilityRevision = 2;
     private String failedCommand;
     private String failureMessage = "节点不在线";
 
@@ -130,7 +131,7 @@ class CheckGostConfigAsyncTest {
             GostDto result = new GostDto();
             result.setMsg(command.equals(failedCommand) ? failureMessage : "OK");
             if ("UserProtocolPolicyCapabilities".equals(command)) result.setData(JSONObject.of("userProtocolPolicy", 1));
-            if ("ForwardProxyProtocolCapabilities".equals(command)) result.setData(JSONObject.of("forwardProxyProtocol", 1,
+            if ("ForwardProxyProtocolCapabilities".equals(command)) result.setData(JSONObject.of("forwardProxyProtocol", proxyProtocolCapabilityRevision,
                     "proxyProtocolVersions", JSONArray.of(1, 2)));
             return result;
         });
@@ -168,6 +169,17 @@ class CheckGostConfigAsyncTest {
         try (var socket = socket()) { reconcile(inventory("12_7_9_udp")); }
         assertEquals(List.of("ForwardProxyProtocolCapabilities"), commands);
         assertTrue(createdServices.isEmpty());
+        verifyNoInteractions(aliases);
+    }
+
+    @ParameterizedTest @ValueSource(ints = {1, 2})
+    void revisionOneTcpRecoveryPreservesExistingServicesAndStopsBeforeLegacyCleanupOrChainUpdates(int version) {
+        forward.setProxyProtocol(version); tunnel.setType(2);
+        proxyProtocolCapabilityRevision = 1;
+        try (var socket = socket()) { reconcile(inventory("12_7_9_udp")); }
+        assertEquals(List.of("ForwardProxyProtocolCapabilities"), commands);
+        assertTrue(createdServices.isEmpty());
+        assertTrue(deletedServices.isEmpty());
         verifyNoInteractions(aliases);
     }
 

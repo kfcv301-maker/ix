@@ -48,7 +48,7 @@ func TestForwardProxyProtocolCapabilitiesIsReadOnlyAndCorrelated(t *testing.T) {
 	if err := json.Unmarshal(payload, &response); err != nil {
 		t.Fatal(err)
 	}
-	if !response.Success || response.Type != "ForwardProxyProtocolCapabilitiesResponse" || response.RequestId != "proxy-capability-test" || response.Data.ForwardProxyProtocol != 1 || len(response.Data.ProxyProtocolVersions) != 2 || response.Data.ProxyProtocolVersions[0] != 1 || response.Data.ProxyProtocolVersions[1] != 2 {
+	if !response.Success || response.Type != "ForwardProxyProtocolCapabilitiesResponse" || response.RequestId != "proxy-capability-test" || response.Data.ForwardProxyProtocol != 2 || len(response.Data.ProxyProtocolVersions) != 2 || response.Data.ProxyProtocolVersions[0] != 1 || response.Data.ProxyProtocolVersions[1] != 2 {
 		t.Fatalf("invalid capability response %s", payload)
 	}
 	after, afterErr := os.ReadFile("gost.json")
