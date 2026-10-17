@@ -42,6 +42,9 @@ VALUES (1,'admin_user','3c85cdebade1c51cf64ca9f3c09d182d',0,0,4102444800000,9999
 INSERT INTO user_tunnel (id,user_id,tunnel_id,num,flow,in_flow,out_flow,flow_reset_time,exp_time,status)
 VALUES (8,3,42,1,10,100,200,1,4102444800000,1), (9,3,42,2,20,300,400,1,4102444800000,1);
 CREATE TABLE user_tunnel_duplicate_archive LIKE user_tunnel;
+INSERT INTO forward (id,user_id,user_name,name,tunnel_id,in_port,remote_addr,created_time,updated_time,status)
+VALUES (9100,91000,'migration-fixture','legacy-proxy-default',9100,18100,'127.0.0.1:18101',1,1,2);
+ALTER TABLE forward DROP COLUMN proxy_protocol;
 ALTER TABLE user_tunnel DROP COLUMN tls_policy, DROP COLUMN allow_udp, DROP COLUMN protocol_sync_pending,
   DROP COLUMN protocol_sync_generation, DROP COLUMN protocol_sync_error, DROP COLUMN protocol_policy_revision;
 ALTER TABLE user_tunnel_duplicate_archive DROP COLUMN tls_policy, DROP COLUMN allow_udp, DROP COLUMN protocol_sync_pending,
@@ -64,11 +67,18 @@ done
 [[ "$(sql -e 'SELECT COUNT(*) FROM user_tunnel_duplicate_archive WHERE id IN (8,9)')" == '2' ]]
 [[ "$(sql -e 'SELECT CONCAT(tls_policy, ":", allow_udp, ":", protocol_sync_pending, ":", protocol_policy_revision) FROM user_tunnel WHERE id=9')" == 'UNRESTRICTED:1:0:0' ]]
 [[ "$(sql -e 'SELECT user FROM user WHERE id=1')" == 'admin' ]]
+[[ "$(sql -e 'SELECT proxy_protocol FROM forward WHERE id=9100')" == '0' ]]
 [[ "$(sql -e 'SELECT pwd LIKE "{bcrypt-sha256}$2%" FROM user WHERE id=1')" == '1' ]]
 docker exec "$BACKEND_CONTAINER" sh -c 'test "$(stat -c %a /app/config/initial-admin-credentials)" = 600'
 python3 "$ROOT_DIR/tests/forward_dispatch_test.py" "$BACKEND_CONTAINER" "$MYSQL_CONTAINER"
 python3 "$ROOT_DIR/tests/node_cascade_delete_test.py" "$BACKEND_CONTAINER" "$MYSQL_CONTAINER"
 python3 "$ROOT_DIR/tests/user_disable_forward_test.py" "$BACKEND_CONTAINER" "$MYSQL_CONTAINER"
+python3 "$ROOT_DIR/tests/forward_proxy_protocol_test.py" "$BACKEND_CONTAINER" "$MYSQL_CONTAINER"
+sql <<'SQL'
+INSERT INTO forward (id,user_id,user_name,name,tunnel_id,in_port,remote_addr,proxy_protocol,created_time,updated_time,status)
+VALUES (9101,91000,'migration-fixture','proxy-v1-restart',9100,18102,'127.0.0.1:18103',1,1,1,2),
+       (9102,91000,'migration-fixture','proxy-v2-restart',9100,18104,'127.0.0.1:18105',2,1,1,2);
+SQL
 # Both idempotence and unchanged credential persistence survive a restart.
 digest="$(docker exec "$BACKEND_CONTAINER" sha256sum /app/config/initial-admin-credentials)"
 docker restart "$BACKEND_CONTAINER" >/dev/null
@@ -81,4 +91,5 @@ done
 [[ "$ready" == true ]]
 [[ "$(docker exec "$BACKEND_CONTAINER" sha256sum /app/config/initial-admin-credentials)" == "$digest" ]]
 [[ "$(sql -e 'SELECT in_flow+out_flow FROM user_tunnel WHERE id=9')" == '1000' ]]
+[[ "$(sql -e 'SELECT GROUP_CONCAT(proxy_protocol ORDER BY id) FROM forward WHERE id IN (9100,9101,9102)')" == '0,1,2' ]]
 printf 'Backend bootstrap, duplicate migration and restart checks passed with %s\n' "$MYSQL_TEST_IMAGE"

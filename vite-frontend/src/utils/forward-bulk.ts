@@ -1,3 +1,5 @@
+import { parseProxyProtocol } from './forward-proxy-protocol.js';
+
 /** Selective changes use the existing update API and never move rules or owners. */
 export interface BulkForwardSource {
   id: number;
@@ -8,13 +10,15 @@ export interface BulkForwardSource {
   remoteAddr: string;
   interfaceName?: string;
   strategy: string;
+  proxyProtocol?: number;
   vpsHostId?: number;
   status: number;
   syncState?: string;
 }
 
-export type BulkForwardField = 'remoteAddr' | 'interfaceName' | 'strategy';
+export type BulkForwardField = 'remoteAddr' | 'interfaceName' | 'strategy' | 'proxyProtocol';
 export type BulkForwardPatch = Partial<Record<BulkForwardField, string>>;
+type NormalizedBulkForwardPatch = Omit<BulkForwardPatch, 'proxyProtocol'> & { proxyProtocol?: number };
 export interface BulkForwardAccess { isAdministrator: boolean; currentUserId: number | null }
 export interface BulkForwardPayload {
   id: number;
@@ -25,6 +29,7 @@ export interface BulkForwardPayload {
   remoteAddr: string;
   interfaceName: string;
   strategy: string;
+  proxyProtocol: number;
 }
 export interface BulkForwardChange { field: BulkForwardField; before: string; after: string }
 export interface BulkForwardPlanEntry {
@@ -43,7 +48,7 @@ export interface BulkForwardResult {
 }
 
 export const bulkForwardFieldLabels: Record<BulkForwardField, string> = {
-  remoteAddr: '目标地址', interfaceName: '出口接口 / IP', strategy: '负载策略',
+  remoteAddr: '目标地址', interfaceName: '出口接口 / IP', strategy: '负载策略', proxyProtocol: '发送 Proxy Protocol',
 };
 
 export function normalizeBulkTargetAddresses(value: string): string {
@@ -75,8 +80,8 @@ export function normalizeBulkTargetAddresses(value: string): string {
   return addresses.join(',');
 }
 
-function normalizePatch(patch: BulkForwardPatch): BulkForwardPatch {
-  const next: BulkForwardPatch = {};
+function normalizePatch(patch: BulkForwardPatch): NormalizedBulkForwardPatch {
+  const next: NormalizedBulkForwardPatch = {};
   if (patch.remoteAddr !== undefined) next.remoteAddr = normalizeBulkTargetAddresses(patch.remoteAddr);
   if (patch.interfaceName !== undefined) {
     const value = patch.interfaceName.trim();
@@ -87,6 +92,7 @@ function normalizePatch(patch: BulkForwardPatch): BulkForwardPatch {
     if (!['fifo', 'round', 'rand', 'hash'].includes(patch.strategy)) throw new Error('请选择有效的负载策略');
     next.strategy = patch.strategy;
   }
+  if (patch.proxyProtocol !== undefined) next.proxyProtocol = parseProxyProtocol(patch.proxyProtocol);
   if (Object.keys(next).length === 0) throw new Error('请至少勾选一个要修改的字段');
   return next;
 }
@@ -106,6 +112,7 @@ function configuration(source: BulkForwardSource) {
     userId: Number(source.userId), name: source.name, tunnelId: Number(source.tunnelId),
     inPort: Number(source.inPort), remoteAddr: source.remoteAddr,
     interfaceName: source.interfaceName || '', strategy: source.strategy || 'fifo',
+    proxyProtocol: parseProxyProtocol(source.proxyProtocol),
     vpsHostId: source.vpsHostId == null ? null : Number(source.vpsHostId),
   };
 }
@@ -127,13 +134,13 @@ export function planBulkForwardUpdates(
     const payload: BulkForwardPayload = {
       id, userId: config.userId, name: config.name, tunnelId: config.tunnelId,
       inPort: config.inPort, remoteAddr: config.remoteAddr,
-      interfaceName: config.interfaceName, strategy: config.strategy, ...normalized,
+      interfaceName: config.interfaceName, strategy: config.strategy, proxyProtocol: config.proxyProtocol, ...normalized,
     };
     if (normalized.strategy && payload.remoteAddr.split(',').filter(Boolean).length < 2 && normalized.strategy !== 'fifo') {
       return skipped('单个目标不适用轮询 / 随机 / 哈希策略');
     }
     const changes = (Object.keys(normalized) as BulkForwardField[]).flatMap(field =>
-      config[field] === payload[field] ? [] : [{ field, before: config[field], after: payload[field] }]);
+      config[field] === payload[field] ? [] : [{ field, before: String(config[field]), after: String(payload[field]) }]);
     if (changes.length === 0) return skipped('勾选字段的值没有变化');
     return { id, name: source.name, state: 'ready', message: '待应用', before, payload, changes };
   });

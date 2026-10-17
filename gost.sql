@@ -37,6 +37,7 @@ CREATE TABLE `forward` (
   `out_port` int(10) DEFAULT NULL,
   `remote_addr` longtext NOT NULL,
   `vps_host_id` bigint(20) DEFAULT NULL,
+  `proxy_protocol` int(10) NOT NULL DEFAULT '0',
   `strategy` varchar(100) NOT NULL DEFAULT 'fifo',
   `interface_name` varchar(200) DEFAULT NULL,
   `in_flow` bigint(20) NOT NULL DEFAULT '0',

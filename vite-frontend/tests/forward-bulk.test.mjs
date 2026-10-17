@@ -22,6 +22,8 @@ execFileSync(process.execPath, [resolve(frontend, 'node_modules/typescript/bin/t
 writeFileSync(resolve(temporary, 'package.json'), '{"type":"module"}');
 const { planBulkForwardUpdates: plan, executeBulkForwardUpdates: execute, normalizeBulkTargetAddresses: targets } =
   await import(pathToFileURL(resolve(temporary, 'forward-bulk.js')).href);
+const { parseProxyProtocol, proxyProtocolLabel } =
+  await import(pathToFileURL(resolve(temporary, 'forward-proxy-protocol.js')).href);
 
 const access = { isAdministrator: false, currentUserId: 7 };
 const rule = (id = 1, extra = {}) => ({ id, userId: 7, name: `Rule ${id}`, tunnelId: 9, inPort: 4000 + id,
@@ -40,7 +42,7 @@ test('selective target changes preserve unchecked fields and never include unsel
   assert.equal(entries.length, 1);
   assert.deepEqual(entries[0].changes, [{ field: 'remoteAddr', before: sources[0].remoteAddr, after: 'c.example:8443,[2001:db8::1]:443' }]);
   assert.deepEqual(entries[0].payload, { id: 1, userId: 7, name: 'Rule 1', tunnelId: 9, inPort: 4001,
-    remoteAddr: 'c.example:8443,[2001:db8::1]:443', interfaceName: 'eth0', strategy: 'round' });
+    remoteAddr: 'c.example:8443,[2001:db8::1]:443', interfaceName: 'eth0', strategy: 'round', proxyProtocol: 0 });
   assert.deepEqual(sources, original);
   // Association fields are omitted, as the existing API preserves them.
   assert.equal(Object.hasOwn(entries[0].payload, 'vpsHostId'), false);
@@ -80,7 +82,7 @@ test('paused, abnormal, syncing, missing and unauthorized rules are previewed as
 
 test('configuration conflicts block writes, including changes to unchecked fields or VPS association', async () => {
   const entries = plan([rule()], [1], { interfaceName: '' }, access);
-  for (const change of [{ name: 'Edited elsewhere' }, { vpsHostId: 4 }, { inPort: 5000 }, { status: 0 }, { syncState: 'syncing' }, { userId: 8 }]) {
+  for (const change of [{ name: 'Edited elsewhere' }, { vpsHostId: 4 }, { inPort: 5000 }, { status: 0 }, { syncState: 'syncing' }, { userId: 8 }, { proxyProtocol: 2 }]) {
     let writes = 0;
     const results = await outcome(entries, { list: async () => [rule(1, change)], update: async () => { writes++; return { code: 0 }; } });
     assert.equal(results[0].state, 'conflict');
@@ -152,4 +154,42 @@ test('one failed rule can be retried without rebuilding successful rules', async
   assert.deepEqual(writes, [1, 2, 1]);
   assert.equal(sources[0].interfaceName, '');
   assert.equal(sources[1].interfaceName, '');
+});
+
+test('selective updates preserve Proxy Protocol unless explicitly selected', () => {
+  for (const version of [0, 1, 2]) {
+    const entry = plan([rule(1, { proxyProtocol: version })], [1], { interfaceName: '' }, access)[0];
+    assert.equal(entry.payload.proxyProtocol, version);
+    assert.deepEqual(entry.changes, [{ field: 'interfaceName', before: 'eth0', after: '' }]);
+  }
+});
+
+test('bulk Proxy Protocol changes use numeric API values and preview both enabling and disabling', async () => {
+  const sources = [rule(), rule(2, { proxyProtocol: 1 }), rule(3, { proxyProtocol: 2 })];
+  const entries = plan(sources, [1, 2, 3], { proxyProtocol: '2' }, access);
+  assert.deepEqual(entries.map(entry => entry.state), ['ready', 'ready', 'skipped']);
+  assert.deepEqual(entries[0].changes, [{ field: 'proxyProtocol', before: '0', after: '2' }]);
+  const writes = [];
+  await outcome(entries, { list: async () => sources, update: async payload => { writes.push(payload); return { code: 0 }; } });
+  assert.deepEqual(writes.map(payload => payload.proxyProtocol), [2, 2]);
+  assert.ok(writes.every(payload => typeof payload.proxyProtocol === 'number' && payload.strategy === 'round'));
+  const disabled = plan(sources, [2], { proxyProtocol: '0' }, access)[0];
+  assert.equal(disabled.payload.proxyProtocol, 0);
+  assert.deepEqual(disabled.changes, [{ field: 'proxyProtocol', before: '1', after: '0' }]);
+  assert.throws(() => plan(sources, [1], { proxyProtocol: '3' }, access), /Proxy Protocol/);
+});
+
+test('older records and exports default to disabled, while invalid protocol values are rejected', () => {
+  assert.equal(parseProxyProtocol(undefined), 0);
+  assert.equal(parseProxyProtocol(null), 0);
+  for (const version of [0, 1, 2]) {
+    assert.equal(parseProxyProtocol(JSON.parse(JSON.stringify({ proxyProtocol: version })).proxyProtocol), version);
+    assert.equal(parseProxyProtocol(String(version)), version);
+  }
+  for (const invalid of ['', 'v1', '3', 3, -1, true, false, [], {}, Number.NaN]) {
+    assert.throws(() => parseProxyProtocol(invalid), /Proxy Protocol/);
+  }
+  assert.equal(proxyProtocolLabel(0), '关闭');
+  assert.equal(proxyProtocolLabel(1), 'PROXY v1');
+  assert.equal(proxyProtocolLabel(2), 'PROXY v2');
 });

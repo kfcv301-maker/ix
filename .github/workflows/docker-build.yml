@@ -119,9 +119,9 @@ jobs:
         working-directory: ./go-gost/x
         run: go test ./...
 
-      - name: Check Agent resource and user policy races
+      - name: Check Agent forwarding and resource races
         working-directory: ./go-gost/x
-        run: go test -race -count=5 -timeout=180s ./internal/net/udp ./internal/util/mux ./dialer ./service ./socket ./api
+        run: go test -race -count=5 -timeout=180s ./internal/net/udp ./internal/net/proxyproto ./internal/util/mux ./handler/forward/local ./dialer ./service ./socket ./api
 
       - name: Record optional mux diagnostics cost
         working-directory: ./go-gost/x

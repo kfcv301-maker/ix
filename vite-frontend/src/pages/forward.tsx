@@ -49,6 +49,7 @@ import {
 import { JwtUtil } from "@/utils/jwt";
 import { useTunnelDiagnosis } from '@/hooks/use-tunnel-diagnosis';
 import { diagnosisProgressText } from '@/utils/tunnel-diagnosis';
+import { parseProxyProtocol, proxyProtocolLabel, type ProxyProtocolVersion } from '@/utils/forward-proxy-protocol';
 import {
   bulkForwardFieldLabels, planBulkForwardUpdates, executeBulkForwardUpdates,
   type BulkForwardField, type BulkForwardPatch, type BulkForwardPlanEntry, type BulkForwardResult,
@@ -64,6 +65,7 @@ interface Forward {
   remoteAddr: string;
   interfaceName?: string;
   strategy: string;
+  proxyProtocol?: number;
   status: number;
   inFlow: number;
   outFlow: number;
@@ -108,6 +110,7 @@ interface ForwardForm {
   vpsHostOrigin?: 'USER' | 'ADMIN';
   interfaceName?: string;
   strategy: string;
+  proxyProtocol: ProxyProtocolVersion;
 }
 
 interface VpsHost {
@@ -253,7 +256,8 @@ export default function ForwardPage() {
     vpsHostId: null,
     clearVpsHost: false,
     interfaceName: '',
-    strategy: 'fifo'
+    strategy: 'fifo',
+    proxyProtocol: 0
   });
   
   // 表单验证错误
@@ -262,8 +266,8 @@ export default function ForwardPage() {
   const [bulkSelectionMode, setBulkSelectionMode] = useState(false);
   const [bulkSelectedIds, setBulkSelectedIds] = useState<Set<number>>(() => new Set());
   const [bulkModalOpen, setBulkModalOpen] = useState(false);
-  const [bulkFields, setBulkFields] = useState<Record<BulkForwardField, boolean>>({ remoteAddr: false, interfaceName: false, strategy: false });
-  const [bulkValues, setBulkValues] = useState<Record<BulkForwardField, string>>({ remoteAddr: '', interfaceName: '', strategy: 'fifo' });
+  const [bulkFields, setBulkFields] = useState<Record<BulkForwardField, boolean>>({ remoteAddr: false, interfaceName: false, strategy: false, proxyProtocol: false });
+  const [bulkValues, setBulkValues] = useState<Record<BulkForwardField, string>>({ remoteAddr: '', interfaceName: '', strategy: 'fifo', proxyProtocol: '0' });
   const [bulkPlan, setBulkPlan] = useState<BulkForwardPlanEntry[]>([]);
   const [bulkResults, setBulkResults] = useState<Record<number, BulkForwardResult>>({});
   const [bulkPreviewLoading, setBulkPreviewLoading] = useState(false);
@@ -621,7 +625,8 @@ export default function ForwardPage() {
       vpsHostName: sourceHost?.name,
       vpsHostOrigin: sourceHost?.origin,
       interfaceName: '',
-      strategy: 'fifo'
+      strategy: 'fifo',
+      proxyProtocol: 0
     });
     setSelectedTunnel(null);
     setErrors({});
@@ -650,7 +655,8 @@ export default function ForwardPage() {
       vpsHostName: forward.vpsHostName,
       vpsHostOrigin: forward.vpsHostOrigin,
       interfaceName: forward.interfaceName || '',
-      strategy: forward.strategy || 'fifo'
+      strategy: forward.strategy || 'fifo',
+      proxyProtocol: parseProxyProtocol(forward.proxyProtocol)
     });
     setSelectedTunnel(selected || null);
     setErrors({});
@@ -751,7 +757,8 @@ export default function ForwardPage() {
           vpsHostId: form.vpsHostId,
           clearVpsHost: form.clearVpsHost,
           interfaceName: form.interfaceName,
-          strategy: addressCount > 1 ? form.strategy : 'fifo'
+          strategy: addressCount > 1 ? form.strategy : 'fifo',
+          proxyProtocol: form.proxyProtocol
         };
         res = await updateForward(updateData);
       } else {
@@ -763,7 +770,8 @@ export default function ForwardPage() {
           remoteAddr: processedRemoteAddr,
           vpsHostId: form.vpsHostId,
           interfaceName: form.interfaceName,
-          strategy: addressCount > 1 ? form.strategy : 'fifo'
+          strategy: addressCount > 1 ? form.strategy : 'fifo',
+          proxyProtocol: form.proxyProtocol
         };
         res = await createForward(createData);
       }
@@ -1074,7 +1082,8 @@ export default function ForwardPage() {
           name: forward.name,
           remoteAddr: forward.remoteAddr,
           inPort: forward.inPort ?? null,
-          strategy: forward.strategy || 'fifo'
+          strategy: forward.strategy || 'fifo',
+          proxyProtocol: parseProxyProtocol(forward.proxyProtocol)
         }))
       };
       setExportData(JSON.stringify(exportBundle, null, 2));
@@ -1121,6 +1130,7 @@ export default function ForwardPage() {
         remoteAddr?: unknown;
         inPort?: unknown;
         strategy?: unknown;
+        proxyProtocol?: unknown;
       };
       let items: ImportItem[];
       const raw = importData.trim();
@@ -1136,7 +1146,8 @@ export default function ForwardPage() {
             name: value.name,
             remoteAddr: value.remoteAddr,
             inPort: value.inPort,
-            strategy: value.strategy
+            strategy: value.strategy,
+            proxyProtocol: value.proxyProtocol
           };
         });
       } else {
@@ -1205,15 +1216,23 @@ export default function ForwardPage() {
           results.push({ line, success: false, message: '已存在相同名称和目标地址的转发，已跳过' });
           continue;
         }
-        const strategy = item.strategy === 'round' || item.strategy === 'rand' || item.strategy === 'fifo'
+        const strategy = item.strategy === 'round' || item.strategy === 'rand' || item.strategy === 'fifo' || item.strategy === 'hash'
           ? item.strategy : 'fifo';
+        let proxyProtocol: ProxyProtocolVersion;
+        try {
+          proxyProtocol = parseProxyProtocol(item.proxyProtocol);
+        } catch (error) {
+          results.push({ line, success: false, message: error instanceof Error ? error.message : 'Proxy Protocol 格式错误' });
+          continue;
+        }
         try {
           const response = await createForward({
             name,
             tunnelId: selectedTunnelForImport,
             inPort: portNumber,
             remoteAddr,
-            strategy
+            strategy,
+            proxyProtocol
           });
           if (response.code === 0) {
             duplicateKeys.add(duplicateKey);
@@ -1560,6 +1579,11 @@ export default function ForwardPage() {
                     : `关联 VPS：${forward.vpsHostName || '已移除 VPS'}（历史记录）`
                   : '目标：手动填写'}
               </Chip>
+              {(forward.proxyProtocol === 1 || forward.proxyProtocol === 2) && (
+                <Chip variant="flat" size="sm" className="max-w-full text-xs" color="warning" title="向目标传递真实客户端 IP，仅 TCP 生效">
+                  {proxyProtocolLabel(forward.proxyProtocol)} · TCP
+                </Chip>
+              )}
             </div>
 
             {/* 统计信息 */}
@@ -1753,8 +1777,8 @@ export default function ForwardPage() {
             <Button size="sm" variant="light" isDisabled={bulkModalOpen} onPress={() => setBulkSelectedIds(new Set())}>清空选择</Button>
             <Button size="sm" color="secondary" isDisabled={bulkSelectedIds.size === 0 || bulkModalOpen || operatingForwardIds.size > 0} onPress={() => {
               invalidateBulkPreview();
-              setBulkFields({ remoteAddr: false, interfaceName: false, strategy: false });
-              setBulkValues({ remoteAddr: '', interfaceName: '', strategy: 'fifo' });
+              setBulkFields({ remoteAddr: false, interfaceName: false, strategy: false, proxyProtocol: false });
+              setBulkValues({ remoteAddr: '', interfaceName: '', strategy: 'fifo', proxyProtocol: '0' });
               setBulkModalOpen(true);
             }}>设置修改字段</Button>
             <span className="text-xs text-default-500">仅更新勾选字段；暂停、异常或同步中的规则会跳过。</span>
@@ -1954,6 +1978,17 @@ export default function ForwardPage() {
                     <SelectItem key="hash">IP 哈希模式</SelectItem>
                   </Select>
                 </div>
+                <div className="md:col-span-2 space-y-2">
+                  <Switch size="sm" isSelected={bulkFields.proxyProtocol} isDisabled={bulkApplying || bulkPreviewLoading} onValueChange={enabled => setBulkField('proxyProtocol', enabled)}>修改发送 Proxy Protocol</Switch>
+                  <Select aria-label="批量发送 Proxy Protocol" selectedKeys={[bulkValues.proxyProtocol]} isDisabled={!bulkFields.proxyProtocol || bulkApplying || bulkPreviewLoading} disallowEmptySelection onSelectionChange={keys => {
+                    const key = Array.from(keys)[0];
+                    if (key !== undefined) setBulkValue('proxyProtocol', String(key));
+                  }} variant="bordered" description="向目标传递真实客户端 IP，仅 TCP 生效。目标服务需支持所选的 Proxy Protocol。">
+                    <SelectItem key="0">关闭</SelectItem>
+                    <SelectItem key="1">PROXY v1</SelectItem>
+                    <SelectItem key="2">PROXY v2</SelectItem>
+                  </Select>
+                </div>
               </div>
               {bulkPlan.length > 0 && (
                 <div className="space-y-3 mt-2" aria-live="polite">
@@ -1963,7 +1998,7 @@ export default function ForwardPage() {
                     const state = result?.state || entry.state;
                     const color = state === 'success' ? 'success' : state === 'failed' || state === 'conflict' ? 'danger' : state === 'applying' ? 'primary' : 'default';
                     const label = { ready: '待应用', skipped: '跳过', applying: '执行中', success: '成功', failed: '失败', conflict: '冲突' }[state];
-                    const displayValue = (field: BulkForwardField, value: string) => field === 'strategy' ? (({ fifo: '主备', round: '轮询', rand: '随机', hash: 'IP 哈希' } as Record<string, string>)[value] || value) : value || '（空）';
+                    const displayValue = (field: BulkForwardField, value: string) => field === 'proxyProtocol' ? proxyProtocolLabel(value) : field === 'strategy' ? (({ fifo: '主备', round: '轮询', rand: '随机', hash: 'IP 哈希' } as Record<string, string>)[value] || value) : value || '（空）';
                     return (
                       <div key={entry.id} className="rounded-lg border border-divider p-3 space-y-2">
                         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -2152,6 +2187,32 @@ export default function ForwardPage() {
                       maxRows={6}
                     />
                     
+                    <div className="rounded-lg border border-divider p-3 space-y-3">
+                      <Switch
+                        isSelected={form.proxyProtocol !== 0}
+                        onValueChange={enabled => setForm(previous => ({ ...previous, proxyProtocol: enabled ? 1 : 0 }))}
+                        isDisabled={submitLoading}
+                        size="sm"
+                      >发送 Proxy Protocol</Switch>
+                      <p className="text-xs text-default-500">向目标传递真实客户端 IP，仅 TCP 生效。目标服务需支持所选的 Proxy Protocol。</p>
+                      {form.proxyProtocol !== 0 && (
+                        <Select
+                          label="Proxy Protocol 版本"
+                          selectedKeys={[String(form.proxyProtocol)]}
+                          disallowEmptySelection
+                          isDisabled={submitLoading}
+                          onSelectionChange={keys => {
+                            const key = Array.from(keys)[0];
+                            if (key === '1' || key === '2') setForm(previous => ({ ...previous, proxyProtocol: parseProxyProtocol(key) }));
+                          }}
+                          variant="bordered"
+                        >
+                          <SelectItem key="1">PROXY v1 · 文本格式</SelectItem>
+                          <SelectItem key="2">PROXY v2 · 二进制格式</SelectItem>
+                        </Select>
+                      )}
+                    </div>
+
                     <Input
                       label="出口网卡名或IP"
                       placeholder="请输入出口网卡名或IP"
@@ -2414,7 +2475,7 @@ export default function ForwardPage() {
                 推荐使用本面板导出的 v2 JSON 文件；仍兼容旧格式：目标地址|转发名称|入口端口，每行一个
               </p>
               <p className="text-small text-default-400">
-                v2 会保留负载策略；旧格式的第 4 列仍会忽略。目标地址支持域名/IPv4:端口及 [IPv6]:端口，多个地址可用逗号分隔；重复记录会被安全跳过。
+                v2 会保留负载策略和 Proxy Protocol；缺少 Proxy Protocol 的旧记录默认关闭。旧格式的第 4 列仍会忽略。目标地址支持域名/IPv4:端口及 [IPv6]:端口，多个地址可用逗号分隔；重复记录会被安全跳过。
               </p>
             </ModalHeader>
             <ModalBody className="pb-6">

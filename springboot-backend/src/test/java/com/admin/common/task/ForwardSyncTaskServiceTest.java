@@ -16,6 +16,22 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ForwardSyncTaskServiceTest {
+    @Test void resumingOnALegacyAgentStopsBeforeLegacyCleanupOrResume() {
+        ForwardSyncTaskService service = new ForwardSyncTaskService();
+        UserTunnelAliasService aliases = mock(UserTunnelAliasService.class);
+        ReflectionTestUtils.setField(service, "userTunnelAliasService", aliases);
+        Forward forward = new Forward(); forward.setProxyProtocol(2);
+        ForwardSyncTask task = new ForwardSyncTask(); task.setNodeId(5L); task.setOperation("resume");
+        GostDto denied = new GostDto(); denied.setMsg("请升级节点后端");
+        try (var commands = mockStatic(GostUtil.class)) {
+            commands.when(() -> GostUtil.CheckForwardProxyProtocolSupport(5L, 2)).thenReturn(denied);
+            String error = ReflectionTestUtils.invokeMethod(service, "executeIngress", task, forward, new Tunnel());
+            assertNotNull(error); assertTrue(error.contains("升级节点后端"));
+            verifyNoInteractions(aliases);
+            commands.verify(() -> GostUtil.ResumeService(anyLong(), anyString()), never());
+            commands.verify(() -> GostUtil.UpdateChains(anyLong(), anyString(), anyString(), anyString(), any()), never());
+        }
+    }
     @Test void aPreUpgradeTaskPausesBothItsOldNameAndTheCurrentCanonicalName() {
         ForwardSyncTaskService service = new ForwardSyncTaskService();
         UserTunnelService grants = mock(UserTunnelService.class);

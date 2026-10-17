@@ -489,7 +489,7 @@ public class UserTunnelServiceImpl extends ServiceImpl<UserTunnelMapper, UserTun
                 for (String name : serviceNames) {
                     GostUtil.UpdateService(nodeId, name, forward.getInPort(), speedId,
                             forward.getRemoteAddr(), tunnel.getType(), tunnel, forward.getStrategy(), interfaceName,
-                            userProtocolPolicyService.forForward(forward));
+                            userProtocolPolicyService.forForward(forward), forward.getProxyProtocol());
                 }
             }
         }

@@ -457,6 +457,10 @@ public class ForwardSyncTaskService {
     }
 
     private String executeWithLegacyNames(ForwardSyncTask task, Forward forward, Tunnel tunnel, boolean ingress) {
+        if (ingress && OPERATION_RESUME.equals(task.getOperation())) {
+            GostDto denied = GostUtil.CheckForwardProxyProtocolSupport(task.getNodeId(), forward.getProxyProtocol());
+            if (denied != null) return endpointError("恢复入口 Proxy Protocol", denied);
+        }
         UserTunnel grant = findUserTunnel(forward);
         if (OPERATION_RESUME.equals(task.getOperation())) {
             String error = userTunnelAliasService.removeLegacyOnNode(task.getNodeId(), forward, tunnel, grant, ingress);
@@ -569,7 +573,7 @@ public class ForwardSyncTaskService {
                 ? null : forward.getInterfaceName();
         GostDto serviceResult = GostUtil.AddService(task.getNodeId(), task.getServiceName(), forward.getInPort(),
                 limiter, forward.getRemoteAddr(), tunnel.getType(), tunnel, forward.getStrategy(), interfaceName,
-                userProtocolPolicyService.forForward(forward));
+                userProtocolPolicyService.forForward(forward), forward.getProxyProtocol());
         return isSuccess(serviceResult) ? null : endpointError("重建入口服务", serviceResult);
     }
 

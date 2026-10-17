@@ -511,6 +511,13 @@ public class CheckGostConfigAsync {
                                        String serviceName, boolean tcpMissing, boolean udpMissing, boolean chainMissing,
                                        boolean remoteServiceMissing) {
         boolean ingress = tcpMissing || udpMissing || chainMissing;
+        if (tcpMissing) {
+            GostDto denied = GostUtil.CheckForwardProxyProtocolSupport(node.getId(), forward.getProxyProtocol());
+            if (denied != null) {
+                logRestoreResult("入口 Proxy Protocol", serviceName, node.getId(), denied);
+                return;
+            }
+        }
         String cleanupError = userTunnelAliasService.removeLegacyOnNode(node.getId(), forward, tunnel, userTunnel, ingress);
         if (cleanupError == null && ingress && remoteServiceMissing) {
             cleanupError = userTunnelAliasService.removeLegacyOnNode(node.getId(), forward, tunnel, userTunnel, false);
@@ -538,7 +545,7 @@ public class CheckGostConfigAsync {
             String interfaceName = Objects.equals(tunnel.getType(), 2) ? null : forward.getInterfaceName();
             GostDto result = GostUtil.AddMissingService(node.getId(), serviceName, forward.getInPort(), limiter,
                     forward.getRemoteAddr(), tunnel.getType(), tunnel, forward.getStrategy(), interfaceName,
-                    userProtocolPolicyService.forForward(forward), tcpMissing, udpMissing);
+                    userProtocolPolicyService.forForward(forward), tcpMissing, udpMissing, forward.getProxyProtocol());
             logRestoreResult("主服务", serviceName, node.getId(), result);
         }
     }

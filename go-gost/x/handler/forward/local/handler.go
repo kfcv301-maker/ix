@@ -141,6 +141,12 @@ func (h *forwardHandler) Handle(ctx context.Context, conn net.Conn, opts ...hand
 			var buf bytes.Buffer
 			cc, err := h.options.Router.Dial(ctxvalue.ContextWithBuffer(ctx, &buf), "tcp", address)
 			ro.Route = buf.String()
+			if err == nil {
+				if err = h.writeProxyProtocol(ctx, network, conn, cc); err != nil {
+					cc.Close()
+					return nil, err
+				}
+			}
 			return cc, err
 		}
 		sniffer := &forwarder.Sniffer{
@@ -217,6 +223,9 @@ func (h *forwardHandler) Handle(ctx context.Context, conn net.Conn, opts ...hand
 		marker.Reset()
 	}
 	defer cc.Close()
+	if err := h.writeProxyProtocol(ctx, network, conn, cc); err != nil {
+		return err
+	}
 
 	xnet.Transport(conn, cc)
 

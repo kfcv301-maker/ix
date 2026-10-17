@@ -119,12 +119,19 @@ class CheckGostConfigAsyncTest {
                         assertEquals(UserProtocolPolicyService.policy(owner, grant),
                                 config.getJSONObject("metadata").getJSONObject("userProtocolPolicy"));
                         assertEquals(grant.getSpeedId() == null ? null : grant.getSpeedId().toString(), config.getString("limiter"));
+                        if (forward.getProxyProtocol() != null && forward.getProxyProtocol() > 0
+                                && config.getString("name").endsWith("_tcp")) {
+                            assertEquals(forward.getProxyProtocol(), config.getJSONObject("handler")
+                                    .getJSONObject("metadata").getInteger("proxyProtocol"));
+                        }
                     }
                 }
             }
             GostDto result = new GostDto();
             result.setMsg(command.equals(failedCommand) ? failureMessage : "OK");
             if ("UserProtocolPolicyCapabilities".equals(command)) result.setData(JSONObject.of("userProtocolPolicy", 1));
+            if ("ForwardProxyProtocolCapabilities".equals(command)) result.setData(JSONObject.of("forwardProxyProtocol", 1,
+                    "proxyProtocolVersions", JSONArray.of(1, 2)));
             return result;
         });
         return socket;
@@ -138,6 +145,30 @@ class CheckGostConfigAsyncTest {
         try (var socket = socket()) { reconcile(inventory("12_7_9_tcp")); }
         assertEquals(List.of("12_7_9_udp"), createdServices);
         assertEquals(List.of("AddService"), commands);
+    }
+
+    @ParameterizedTest @ValueSource(ints = {1, 2})
+    void partialTcpRecoveryPreservesConfiguredProxyVersion(int version) {
+        forward.setProxyProtocol(version);
+        try (var socket = socket()) { reconcile(inventory("12_7_9_udp")); }
+        assertEquals(List.of("12_7_9_tcp"), createdServices);
+        assertTrue(commands.contains("ForwardProxyProtocolCapabilities"));
+    }
+
+    @Test void proxyEnabledForwardCanRestoreOnlyUdpOnALegacyNode() {
+        forward.setProxyProtocol(2); failedCommand = "ForwardProxyProtocolCapabilities";
+        try (var socket = socket()) { reconcile(inventory("12_7_9_tcp")); }
+        assertEquals(List.of("12_7_9_udp"), createdServices);
+        assertEquals(List.of("AddService"), commands);
+    }
+
+    @Test void unsupportedTcpRecoveryDoesNotRemoveLegacyServicesOrCreateChains() {
+        forward.setProxyProtocol(2); tunnel.setType(2);
+        failedCommand = "ForwardProxyProtocolCapabilities";
+        try (var socket = socket()) { reconcile(inventory("12_7_9_udp")); }
+        assertEquals(List.of("ForwardProxyProtocolCapabilities"), commands);
+        assertTrue(createdServices.isEmpty());
+        verifyNoInteractions(aliases);
     }
 
     @Test void restoresOnlyTcpWhenUdpIsRunning() {

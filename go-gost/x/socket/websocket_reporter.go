@@ -757,6 +757,9 @@ func (w *WebSocketReporter) routeCommand(cmd CommandMessage) {
 	case "UserProtocolPolicyCapabilities":
 		response.Type = "UserProtocolPolicyCapabilitiesResponse"
 		response.Data = map[string]any{"userProtocolPolicy": 1}
+	case "ForwardProxyProtocolCapabilities":
+		response.Type = "ForwardProxyProtocolCapabilitiesResponse"
+		response.Data = map[string]any{"forwardProxyProtocol": 1, "proxyProtocolVersions": []int{1, 2}}
 	case "SetUserProtocolPolicy":
 		err = w.handleSetUserProtocolPolicy(cmd.Data)
 		response.Type = "SetUserProtocolPolicyResponse"
@@ -767,7 +770,7 @@ func (w *WebSocketReporter) routeCommand(cmd CommandMessage) {
 	}
 
 	// 发送响应
-	if err == nil && cmd.Type != "UserProtocolPolicyCapabilities" {
+	if err == nil && cmd.Type != "UserProtocolPolicyCapabilities" && cmd.Type != "ForwardProxyProtocolCapabilities" {
 		err = saveConfig()
 	}
 	if err != nil {
