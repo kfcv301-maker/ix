@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -36,6 +37,8 @@ import (
 	proxyproto "github.com/pires/go-proxyproto"
 )
 
+var proxyFixtureID atomic.Uint64
+
 func proxyIntegrationSetup(t *testing.T) {
 	t.Helper()
 	oldLogger, oldTLS := logger.Default(), parsing.DefaultTLSConfig()
@@ -53,13 +56,27 @@ func proxyIntegrationSetup(t *testing.T) {
 
 func startProxyService(t *testing.T, cfg *config.ServiceConfig) service.Service {
 	t.Helper()
+	cfg.Name = fmt.Sprintf("%s-%d", cfg.Name, proxyFixtureID.Add(1))
 	cfg.Metadata = map[string]any{"enableStats": false}
 	s, err := serviceparser.ParseService(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	go s.Serve()
-	t.Cleanup(func() { s.Close() })
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		s.Serve()
+	}()
+	t.Cleanup(func() {
+		s.Close()
+		// Serve waits for its accepted handlers. Finish the fixture before
+		// unregistering its chain or restoring the shared parser defaults.
+		select {
+		case <-stopped:
+		case <-time.After(5 * time.Second):
+			t.Errorf("service %s did not stop", cfg.Name)
+		}
+	})
 	return s
 }
 
@@ -72,7 +89,7 @@ func proxyRelayChain(t *testing.T, transport, target string, noDelay bool) strin
 		Listener:  &config.ListenerConfig{Type: transport},
 		Handler:   &config.HandlerConfig{Type: "relay", Metadata: map[string]any{"nodelay": noDelay}},
 		Forwarder: &config.ForwarderConfig{Nodes: []*config.ForwardNodeConfig{{Name: "target", Addr: target}}}})
-	name := "proxy-integration-chain"
+	name := fmt.Sprintf("proxy-integration-chain-%d", proxyFixtureID.Add(1))
 	cfg := &config.ChainConfig{Name: name, Hops: []*config.HopConfig{{Name: "exit", Nodes: []*config.NodeConfig{{Name: "exit", Addr: exit.Addr().String(),
 		Connector: &config.ConnectorConfig{Type: "relay", Metadata: map[string]any{"nodelay": noDelay}}, Dialer: &config.DialerConfig{Type: transport}}}}}}
 	c, err := chainparser.ParseChain(cfg, logger.Default())
@@ -215,7 +232,11 @@ func TestForwardProxyProtocolDoesNotAlterRealUDP(t *testing.T) {
 					}
 				}()
 				chain := proxyRelayChain(t, transport, target.LocalAddr().String(), false)
-				ingressConfig := &config.ServiceConfig{Name: "proxy-udp", Addr: "127.0.0.1:0", Listener: &config.ListenerConfig{Type: "udp"},
+				ingressConfig := &config.ServiceConfig{Name: "proxy-udp", Addr: "127.0.0.1:0",
+					// Match GostUtil's persistent UDP peer. The listener default
+					// is one response per peer: a second datagram can otherwise
+					// race that peer's deferred Close and be discarded.
+					Listener:  &config.ListenerConfig{Type: "udp", Metadata: map[string]any{"keepAlive": true}},
 					Handler:   &config.HandlerConfig{Type: "udp", Chain: chain, Metadata: map[string]any{"proxyProtocol": version}},
 					Forwarder: &config.ForwarderConfig{Nodes: []*config.ForwardNodeConfig{{Name: "target", Addr: target.LocalAddr().String()}}}}
 				if transport != "direct" {
@@ -228,14 +249,14 @@ func TestForwardProxyProtocolDoesNotAlterRealUDP(t *testing.T) {
 				}
 				defer c.Close()
 				c.SetDeadline(time.Now().Add(5 * time.Second))
-				for _, payload := range [][]byte{[]byte("PROXY UDP stays unchanged\r\n"), {0, 255, 1, 2, 0}} {
+				for packet, payload := range [][]byte{[]byte("PROXY UDP stays unchanged\r\n"), {0, 255, 1, 2, 0}} {
 					if _, err := c.Write(payload); err != nil {
 						t.Fatal(err)
 					}
 					b := make([]byte, 1024)
 					n, err := c.Read(b)
 					if err != nil || !bytes.Equal(b[:n], payload) {
-						t.Fatalf("UDP payload changed: %x, %v", b[:n], err)
+						t.Fatalf("UDP packet %d payload changed: %x, %v", packet+1, b[:n], err)
 					}
 				}
 			})

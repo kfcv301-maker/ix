@@ -26,12 +26,21 @@ func setMetrics(t *testing.T, enabled bool) {
 
 func sessionPair(t *testing.T, versions ...int) (*Session, *Session) {
 	t.Helper()
+	return sessionPairWithTransport(t, nil, versions...)
+}
+
+func sessionPairWithTransport(t *testing.T, wrap func(net.Conn) net.Conn, versions ...int) (*Session, *Session) {
+	t.Helper()
 	a, b := net.Pipe()
+	var transport net.Conn = a
+	if wrap != nil {
+		transport = wrap(a)
+	}
 	cfg := &Config{KeepAliveDisabled: true}
 	if len(versions) > 0 {
 		cfg.Version = versions[0]
 	}
-	client, err := ClientSession(a, cfg)
+	client, err := ClientSession(transport, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,6 +54,44 @@ func sessionPair(t *testing.T, versions ...int) (*Session, *Session) {
 		server.Close()
 	})
 	return client, server
+}
+
+// Arm only after stream setup has finished. Holding a physical write makes a
+// logical write genuinely wait instead of racing an expired timer against a
+// successfully completed small frame in smux's send/result selects.
+type writeGateConn struct {
+	net.Conn
+	mu      sync.Mutex
+	blocked *writeGate
+}
+
+type writeGate struct {
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (c *writeGateConn) Write(b []byte) (int, error) {
+	c.mu.Lock()
+	gate := c.blocked
+	c.mu.Unlock()
+	if gate != nil {
+		gate.once.Do(func() { close(gate.entered) })
+		<-gate.release
+	}
+	return c.Conn.Write(b)
+}
+
+func (c *writeGateConn) blockWrites(t *testing.T) (<-chan struct{}, func()) {
+	t.Helper()
+	gate := &writeGate{entered: make(chan struct{}), release: make(chan struct{})}
+	c.mu.Lock()
+	c.blocked = gate
+	c.mu.Unlock()
+	var once sync.Once
+	release := func() { once.Do(func() { close(gate.release) }) }
+	t.Cleanup(release)
+	return gate.entered, release
 }
 
 func streamPair(t *testing.T, client, server *Session) (net.Conn, net.Conn) {
@@ -95,7 +142,11 @@ func TestStreamDeadlineDoesNotAffectOtherStreams(t *testing.T) {
 	for _, version := range []int{1, 2} {
 		for _, mode := range []string{"read", "write", "both"} {
 			t.Run(fmt.Sprintf("v%d/%s", version, mode), func(t *testing.T) {
-				client, server := sessionPair(t, version)
+				var transport *writeGateConn
+				client, server := sessionPairWithTransport(t, func(conn net.Conn) net.Conn {
+					transport = &writeGateConn{Conn: conn}
+					return transport
+				}, version)
 				timed, _ := streamPair(t, client, server)
 				other, peer := streamPair(t, client, server)
 				deadline := time.Now().Add(-time.Second)
@@ -103,8 +154,6 @@ func TestStreamDeadlineDoesNotAffectOtherStreams(t *testing.T) {
 				switch mode {
 				case "read":
 					err = timed.SetReadDeadline(deadline)
-				case "write":
-					err = timed.SetWriteDeadline(deadline)
 				case "both":
 					err = timed.SetDeadline(deadline)
 				}
@@ -114,7 +163,51 @@ func TestStreamDeadlineDoesNotAffectOtherStreams(t *testing.T) {
 				if mode != "write" {
 					_, err = timed.Read(make([]byte, 1))
 				} else {
-					_, err = timed.Write([]byte("expired"))
+					entered, release := transport.blockWrites(t)
+					const heldPayload = "unrelated stream held by the write gate"
+					heldResult := make(chan error, 1)
+					go func() {
+						_, writeErr := io.WriteString(other, heldPayload)
+						heldResult <- writeErr
+					}()
+					select {
+					case <-entered:
+					case <-time.After(3 * time.Second):
+						t.Fatal("unrelated stream never reached the blocked physical write")
+					}
+					// A physical write is now blocked, so this write cannot win
+					// the timer race by completing a frame. No sleep or deadline
+					// budget for scheduler progress is needed to establish that.
+					if err := timed.SetWriteDeadline(deadline); err != nil {
+						t.Fatal(err)
+					}
+					result := make(chan error, 1)
+					go func() {
+						_, writeErr := timed.Write([]byte("expired"))
+						result <- writeErr
+					}()
+					select {
+					case err = <-result:
+					case <-time.After(3 * time.Second):
+						t.Fatal("logical write did not honor its deadline while physical write was blocked")
+					}
+					release()
+					if err := peer.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
+						t.Fatal(err)
+					}
+					buf := make([]byte, len(heldPayload))
+					if _, readErr := io.ReadFull(peer, buf); readErr != nil || string(buf) != heldPayload {
+						t.Fatalf("unrelated blocked stream interrupted: payload=%q error=%v", buf, readErr)
+					}
+					peer.SetReadDeadline(time.Time{})
+					select {
+					case heldErr := <-heldResult:
+						if heldErr != nil {
+							t.Fatalf("unrelated blocked write interrupted: %v", heldErr)
+						}
+					case <-time.After(3 * time.Second):
+						t.Fatal("unrelated blocked write did not resume after the gate opened")
+					}
 				}
 				var timeout net.Error
 				if !errors.As(err, &timeout) || !timeout.Timeout() {
