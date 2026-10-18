@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Button } from "@heroui/button";
 import { Dropdown, DropdownTrigger, DropdownMenu, DropdownItem } from "@heroui/dropdown";
@@ -6,11 +6,11 @@ import { Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, useDisclosure
 import { Input } from "@heroui/input";
 import { toast } from 'react-hot-toast';
 
-import { Logo } from '@/components/icons';
+import { ConsoleIcon } from '@/components/console-ui';
 import { updatePassword } from '@/api';
 import { safeLogout } from '@/utils/logout';
 import { siteConfig } from '@/config/site';
-import { getPanelTheme, panelThemes, savePanelTheme, type PanelTheme } from '@/utils/panel-theme';
+import { getPanelTheme, panelThemes, savePanelTheme, getPanelAppearance, savePanelAppearance, type PanelTheme, type PanelAppearance } from '@/utils/panel-theme';
 
 interface MenuItem {
   path: string;
@@ -43,12 +43,58 @@ export default function AdminLayout({
   const [passwordLoading, setPasswordLoading] = useState(false);
   const [isThemePickerOpen, setIsThemePickerOpen] = useState(false);
   const [panelTheme, setPanelTheme] = useState<PanelTheme>(() => getPanelTheme());
+  const [appearance, setAppearance] = useState<PanelAppearance>(() => getPanelAppearance());
   const [passwordForm, setPasswordForm] = useState<PasswordForm>({
     newUsername: '',
     currentPassword: '',
     newPassword: '',
     confirmPassword: ''
   });
+
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try { return localStorage.getItem('console-sidebar-collapsed') === 'true'; } catch { return false; }
+  });
+  const [commandOpen, setCommandOpen] = useState(false);
+  const [commandQuery, setCommandQuery] = useState('');
+  const menuButton = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    document.documentElement.dataset.console = 'xboard';
+    const keyboard = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault(); setCommandOpen(open => !open);
+      }
+    };
+    window.addEventListener('keydown', keyboard);
+    return () => { delete document.documentElement.dataset.console; window.removeEventListener('keydown', keyboard); };
+  }, []);
+
+  useEffect(() => {
+    if (!isMobile || !mobileMenuVisible) return;
+    const menu = document.getElementById('console-side-menu');
+    const focusable = () => Array.from(menu?.querySelectorAll<HTMLButtonElement>('button:not([disabled])') || []);
+    const timer = window.setTimeout(() => focusable()[0]?.focus(), 50);
+    const keyboard = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { setMobileMenuVisible(false); event.preventDefault(); }
+      if (event.key === 'Tab') {
+        const buttons = focusable(); const first = buttons[0]; const last = buttons[buttons.length - 1];
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+      }
+    };
+    window.addEventListener('keydown', keyboard);
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      window.clearTimeout(timer); window.removeEventListener('keydown', keyboard);
+      document.body.style.overflow = previousOverflow; menuButton.current?.focus();
+    };
+  }, [isMobile, mobileMenuVisible]);
+
+  useEffect(() => {
+    setMobileMenuVisible(false);
+    window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+  }, [location.pathname]);
 
   // 菜单项配置
   const menuItems: MenuItem[] = [
@@ -264,186 +310,80 @@ export default function AdminLayout({
   };
 
   // 过滤菜单项（根据权限）
-  const filteredMenuItems = menuItems.filter(item => 
-    !item.adminOnly || isAdmin
-  );
+  const filteredMenuItems = [
+    ...menuItems,
+    { path: '/profile', label: '个人中心', group: 'management' as const, icon: null },
+    { path: '/settings', label: '面板地址', group: 'management' as const, icon: null },
+  ].filter(item => !('adminOnly' in item && item.adminOnly) || isAdmin);
   const activeMenuItem = filteredMenuItems.find((item) => item.path === location.pathname);
 
+
+  const groups = [
+    { label: '工作台', items: filteredMenuItems.filter(item => item.path === '/dashboard') },
+    { label: '业务管理', items: filteredMenuItems.filter(item => ['/forward', '/tunnel', '/node', '/vps'].includes(item.path)) },
+    { label: '系统与账户', items: filteredMenuItems.filter(item => !['/dashboard', '/forward', '/tunnel', '/node', '/vps'].includes(item.path)) },
+  ];
+  const commandItems = filteredMenuItems.filter(item => (item.label + item.path).toLowerCase().includes(commandQuery.toLowerCase().trim()));
+  const collapsed = sidebarCollapsed && !isMobile;
+
   return (
-          <div className={`panel-shell flex ${isMobile ? 'min-h-screen' : 'h-screen'} bg-gray-100 dark:bg-black`}>
-      {/* 移动端遮罩层 */}
-      {isMobile && mobileMenuVisible && (
-        <div 
-          className="fixed inset-0 backdrop-blur-sm bg-white/50 dark:bg-black/30 z-40"
-          onClick={hideMobileMenu}
-        />
-      )}
-
-      {/* 左侧菜单栏 */}
-      <aside className={`panel-sidebar
-        ${isMobile ? 'fixed' : 'relative'} 
-        ${isMobile && !mobileMenuVisible ? '-translate-x-full' : 'translate-x-0'}
-        ${isMobile ? 'w-64' : 'w-72'} 
-        bg-white dark:bg-black 
-        shadow-lg 
-        border-r border-gray-200 dark:border-gray-600
-        z-50 
-        transition-transform duration-300 ease-in-out
-        flex flex-col
-        ${isMobile ? 'h-screen' : 'h-full'}
-        ${isMobile ? 'top-0 left-0' : ''}
-      `}>
-                 {/* Logo 区域 */}
-         <div className="px-3 py-3 h-14 flex items-center">
-            <div className="panel-brand flex items-center gap-2 w-full">
-             <Logo size={24} />
-              <div className="flex-1 min-w-0">
-                <h1 className="text-sm font-bold text-foreground overflow-hidden whitespace-nowrap">{siteConfig.name}</h1>
-                <p className="text-xs text-default-500">v{siteConfig.version}</p>
-                {panelTheme === 'akcdn-console' && <p className="akcdn-brand-subtitle">转发管理控制台</p>}
-              </div>
-           </div>
-         </div>
-
-                 {/* 菜单导航 */}
-         <nav className="panel-navigation flex-1 px-4 py-6 overflow-y-auto">
-           <ul className="space-y-1">
-             {filteredMenuItems.map((item, index) => {
-               const isActive = location.pathname === item.path;
-               return (
-                 <React.Fragment key={item.path}>
-                 {panelTheme === 'akcdn-console' && (index === 0 || filteredMenuItems[index - 1].group !== item.group) && (
-                   <li className="akcdn-nav-group-title">{item.group === 'forwarding' ? '转发' : '管理'}</li>
-                 )}
-                 <li>
-                                     <button
-                     onClick={() => handleMenuClick(item.path)}
-                     className={`panel-nav-item
-                       w-full flex items-center gap-3 px-4 py-3 rounded-lg text-left
-                       transition-colors duration-200 min-h-[44px]
-                       ${isActive 
-                         ? 'bg-primary-100 dark:bg-primary-600/20 text-primary-600 dark:text-primary-300' 
-                         : 'text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-900'
-                       }
-                     `}
-                   >
-                     <div className="flex-shrink-0">
-                       {item.icon}
-                     </div>
-                     <span className="font-medium text-sm">{item.label}</span>
-                  </button>
-                 </li>
-                 </React.Fragment>
-               );
-             })}
-            <li>
-              <button
-                type="button"
-                onClick={() => setIsThemePickerOpen(true)}
-                className="panel-nav-item w-full flex items-center gap-3 px-4 py-3 rounded-lg text-left transition-colors duration-200 min-h-[44px] text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-900"
-              >
-                <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="1.8" aria-hidden="true">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 3a9 9 0 1 0 9 9c0-1.2-.24-2.34-.68-3.38a.75.75 0 0 0-.86-.43 3.2 3.2 0 0 1-3.83-3.83.75.75 0 0 0-.43-.86A8.96 8.96 0 0 0 12 3Z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 10.5h.01M9 6.75h.01M14.5 7.5h.01M6.75 14.25h.01" />
-                </svg>
-                <span className="font-medium text-sm flex-1">主题切换</span>
-                <span className="text-[10px] text-default-400 truncate max-w-16">{panelThemes.find((theme) => theme.id === panelTheme)?.name}</span>
-              </button>
-            </li>
-          </ul>
+    <div className={`console-shell ${collapsed ? 'is-collapsed' : ''}`}>
+      {isMobile && mobileMenuVisible && <button className="console-backdrop" aria-label="关闭导航遮罩" tabIndex={-1} onClick={hideMobileMenu}/>}
+      <aside id="console-side-menu" className={`console-sidebar ${mobileMenuVisible ? 'is-open' : ''}`} aria-label="主导航" role={isMobile && mobileMenuVisible ? 'dialog' : undefined} aria-modal={isMobile && mobileMenuVisible ? true : undefined}>
+        <div className="console-brand">
+          <div className="console-brand-mark"><ConsoleIcon name="tunnel" size={20}/></div>
+          <div className="console-brand-copy min-w-0"><div className="console-brand-name">{siteConfig.name}</div><div className="console-brand-caption">RELAY CONSOLE</div></div>
+          <button type="button" className="console-icon-button console-mobile-close" aria-label="关闭导航" onClick={hideMobileMenu}><ConsoleIcon name="close"/></button>
+        </div>
+        <nav className="console-nav">
+          {groups.map(group => <React.Fragment key={group.label}>
+            <p className="console-nav-section">{group.label}</p>
+            {group.items.map(item => <button key={item.path} type="button" onClick={() => handleMenuClick(item.path)} className="console-nav-link" aria-current={location.pathname === item.path ? 'page' : undefined} title={collapsed ? item.label : undefined}>
+              <ConsoleIcon name={item.path.slice(1)}/><span className="console-nav-label">{item.label}</span>
+            </button>)}
+          </React.Fragment>)}
         </nav>
-
-                {/* 底部版权信息 */}
-        <div className="px-4 py-2 pb-4 mt-auto flex-shrink-0">
-          <div className="text-center">
-            <p className="text-xs text-gray-400 dark:text-gray-500">
-              Powered by{' '}
-              <a 
-                href="https://github.com/bqlpfy/flux-panel" 
-                target="_blank" 
-                rel="noopener noreferrer"
-                className="text-gray-500 dark:text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
-              >
-                flux-panel
-              </a>
-            </p>
-          </div>
+        <div className="console-sidebar-footer">
+          <button type="button" className="console-nav-link" onClick={() => { setIsThemePickerOpen(true); hideMobileMenu(); }} title={collapsed ? '主题切换' : undefined}><ConsoleIcon name="theme"/><span className="console-nav-label">主题切换</span></button>
+          <p>v{siteConfig.version} · <a href="https://github.com/bqlpfy/flux-panel" target="_blank" rel="noopener noreferrer">Powered by flux-panel</a></p>
         </div>
       </aside>
 
-      {/* 主内容区域 */}
-      <div className={`flex flex-col flex-1 ${isMobile ? 'min-h-0' : 'h-full overflow-hidden'}`}>
-                 {/* 顶部导航栏 */}
-          <header className="panel-header bg-white dark:bg-black shadow-md border-b border-gray-200 dark:border-gray-600 h-14 flex items-center justify-between px-4 lg:px-6 relative z-10">
-            <div className="flex items-center gap-4">
-              {!isMobile && panelTheme === 'akcdn-console' && (
-                <div className="akcdn-page-heading">
-                  <span>控制台</span>
-                  <h2>{activeMenuItem?.label || '概览'}</h2>
-                </div>
-              )}
-            {/* 移动端菜单按钮 */}
-            {isMobile && (
-              <Button
-                isIconOnly
-                variant="light"
-                onPress={toggleMobileMenu}
-                className="lg:hidden"
-              >
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-                </svg>
-              </Button>
-            )}
+      <div className="console-workspace">
+        <header className="console-topbar">
+          <div className="console-topbar-left">
+            <button ref={menuButton} type="button" className="console-icon-button" aria-label={isMobile ? '打开导航' : collapsed ? '展开侧栏' : '收起侧栏'} aria-expanded={isMobile ? mobileMenuVisible : !collapsed} aria-controls="console-side-menu" onClick={() => {
+              if (isMobile) toggleMobileMenu();
+              else { const next = !sidebarCollapsed; setSidebarCollapsed(next); try { localStorage.setItem('console-sidebar-collapsed', String(next)); } catch { /* Keep the current session usable. */ } }
+            }}><ConsoleIcon name={isMobile ? 'menu' : 'panel'} size={17}/></button>
+            <span className="console-topbar-divider"/>
+            <div className="console-breadcrumb"><span>控制台</span><ConsoleIcon name="chevron" size={11}/><strong>{activeMenuItem?.label || '账户'}</strong></div>
           </div>
-
-          <div className="flex items-center gap-3">
-            {/* 用户菜单 */}
-             <Dropdown placement="bottom-end">
-               <DropdownTrigger>
-                 <Button variant="light" className="text-sm font-medium text-foreground">
-                   {username}
-                   <svg className="w-4 h-4 ml-1" fill="currentColor" viewBox="0 0 20 20">
-                     <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" />
-                   </svg>
-                 </Button>
-               </DropdownTrigger>
+          <div className="console-topbar-right">
+            <button className="console-command-trigger" type="button" onClick={() => setCommandOpen(true)} aria-label="搜索页面"><ConsoleIcon name="search" size={14}/><span>搜索页面…</span><kbd>⌘ K</kbd></button>
+            <button className="console-icon-button" type="button" aria-label="主题切换" onClick={() => setIsThemePickerOpen(true)}><ConsoleIcon name="theme" size={17}/></button>
+            <Dropdown placement="bottom-end"><DropdownTrigger><Button variant="light" className="min-w-0 h-9 px-1 gap-2" aria-label="账户菜单"><span className="console-avatar">{username.slice(0, 2).toUpperCase()}</span><span className="console-account">{username}</span></Button></DropdownTrigger>
               <DropdownMenu aria-label="用户菜单">
-                <DropdownItem
-                  key="change-password"
-                  startContent={
-                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                      <path fillRule="evenodd" d="M18 8a6 6 0 01-7.743 5.743L10 14l-1 1-1 1H6v2H2v-4l4.257-4.257A6 6 0 1118 8zm-6-4a1 1 0 100 2 2 2 0 012 2 1 1 0 102 0 4 4 0 00-4-4z" clipRule="evenodd" />
-                    </svg>
-                  }
-                  onPress={onOpen}
-                >
-                  修改密码
-                </DropdownItem>
-                <DropdownItem
-                  key="logout"
-                  startContent={
-                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                      <path fillRule="evenodd" d="M3 3a1 1 0 00-1 1v12a1 1 0 102 0V4a1 1 0 00-1-1zm10.293 9.293a1 1 0 001.414 1.414l3-3a1 1 0 000-1.414l-3-3a1 1 0 10-1.414 1.414L14.586 9H7a1 1 0 100 2h7.586l-1.293 1.293z" clipRule="evenodd" />
-                    </svg>
-                  }
-                  className="text-danger"
-                  color="danger"
-                  onPress={handleLogout}
-                >
-                  退出登录
-                </DropdownItem>
+                <DropdownItem key="profile" onPress={() => navigate('/profile')}>个人中心</DropdownItem>
+                <DropdownItem key="password" onPress={onOpen}>修改密码</DropdownItem>
+                <DropdownItem key="logout" className="text-danger" color="danger" onPress={handleLogout}>退出登录</DropdownItem>
               </DropdownMenu>
             </Dropdown>
           </div>
         </header>
-
-        {/* 主内容 */}
-        <main className={`panel-main flex-1 bg-gray-100 dark:bg-black ${isMobile ? '' : 'overflow-y-auto'}`}>
-          {children}
-        </main>
+        <main id="console-main" className="console-main" data-page={location.pathname.slice(1)}>{children}</main>
       </div>
 
+      <nav className="console-mobile-tabs" aria-label="快捷导航">
+        {[['dashboard', '概览'], ['forward', '转发'], ['tunnel', '隧道'], ['node', '节点'], ['profile', '我的']].map(([path, label]) => <button key={path} type="button" onClick={() => handleMenuClick('/' + path)} aria-current={location.pathname === '/' + path ? 'page' : undefined}><ConsoleIcon name={path} size={18}/><span>{label}</span></button>)}
+      </nav>
+
+      <Modal isOpen={commandOpen} onOpenChange={setCommandOpen} placement="top-center" size="lg">
+        <ModalContent><ModalHeader>前往页面</ModalHeader><ModalBody>
+          <Input autoFocus aria-label="搜索页面名称" placeholder="输入页面名称…" value={commandQuery} onValueChange={setCommandQuery} variant="bordered" startContent={<ConsoleIcon name="search" size={16}/>}/>
+          <div className="console-command-list">{commandItems.map(item => <button key={item.path} type="button" onClick={() => { setCommandOpen(false); setCommandQuery(''); handleMenuClick(item.path); }}><ConsoleIcon name={item.path.slice(1)}/><span>{item.label}</span><span>前往 →</span></button>)}{commandItems.length === 0 && <p className="py-6 text-center text-default-500 text-sm">未找到页面</p>}</div>
+        </ModalBody></ModalContent>
+      </Modal>
       {/* 修改密码弹窗 */}
       <Modal 
         isOpen={isOpen} 
@@ -523,7 +463,12 @@ export default function AdminLayout({
           <>
             <ModalHeader className="flex flex-col gap-1">主题切换</ModalHeader>
             <ModalBody>
-              <p className="text-sm text-default-500">只改变界面外观，不会修改节点、转发、账户或任何面板数据。</p>
+              <div className="flex flex-wrap items-center justify-between gap-3 pb-3">
+                <span className="text-sm text-default-500">显示模式</span>
+                <div className="console-segment" aria-label="显示模式">
+                  {([['light', '浅色'], ['dark', '深色'], ['system', '跟随系统']] as const).map(([mode, label]) => <button type="button" key={mode} aria-pressed={appearance === mode} onClick={() => { setAppearance(mode); savePanelAppearance(mode); }}>{label}</button>)}
+                </div>
+              </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pb-2">
                 {panelThemes.map((theme) => (
                   <button

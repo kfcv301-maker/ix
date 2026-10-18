@@ -2,14 +2,19 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <link rel="icon" type="image/svg+xml" href="/relay.svg" />
+    <meta name="lunaris-ui" content="20261019-proportions-console" />
     
     <title>Lunaris Relay</title>
     <script>
-      // 防止暗黑模式闪烁：在页面加载前立即应用系统主题
+      // Apply the saved display preference before React mounts. White is the default.
       (function() {
-        // 立即检测系统主题并应用
-        const isDarkMode = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        function appearance() {
+          try { return localStorage.getItem('flux-panel-appearance') || 'light'; }
+          catch (_) { return 'light'; }
+        }
+        const mode = appearance();
+        const isDarkMode = mode === 'dark' || (mode === 'system' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
         
         // 立即设置主题类，避免闪烁
         if (isDarkMode) {
@@ -23,6 +28,7 @@
         // 监听系统主题变化
         if (window.matchMedia) {
           window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function(e) {
+            if (appearance() !== 'system') return;
             if (e.matches) {
               document.documentElement.classList.add('dark');
               document.documentElement.style.colorScheme = 'dark';

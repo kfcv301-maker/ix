@@ -1,11 +1,9 @@
 import { Route, Routes, useNavigate } from "react-router-dom";
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect } from "react";
 
 import IndexPage from "@/pages/index";
 
 import AdminLayout from "@/layouts/admin";
-import H5Layout from "@/layouts/h5";
-import H5SimpleLayout from "@/layouts/h5-simple";
 
 import { isLoggedIn } from "@/utils/auth";
 import { siteConfig } from "@/config/site";
@@ -26,48 +24,9 @@ const PageFallback = () => (
   <div className="flex min-h-64 items-center justify-center text-sm text-default-500">正在加载页面…</div>
 );
 
-// 检测是否为H5模式
-const useH5Mode = () => {
-  // 立即检测H5模式，避免初始渲染时的闪屏
-  const getInitialH5Mode = () => {
-    // 检测移动设备或小屏幕
-    const isMobile = window.innerWidth <= 768;
-    // 检测是否为移动端浏览器
-    const isMobileBrowser = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-    // 检测URL参数是否包含h5模式
-    const urlParams = new URLSearchParams(window.location.search);
-    const isH5Param = urlParams.get('h5') === 'true';
-    
-    return isMobile || isMobileBrowser || isH5Param;
-  };
-
-  const [isH5, setIsH5] = useState(getInitialH5Mode);
-
-  useEffect(() => {
-    const checkH5Mode = () => {
-      // 检测移动设备或小屏幕
-      const isMobile = window.innerWidth <= 768;
-      // 检测是否为移动端浏览器
-      const isMobileBrowser = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-      // 检测URL参数是否包含h5模式
-      const urlParams = new URLSearchParams(window.location.search);
-      const isH5Param = urlParams.get('h5') === 'true';
-      
-      setIsH5(isMobile || isMobileBrowser || isH5Param);
-    };
-
-    window.addEventListener('resize', checkH5Mode);
-    
-    return () => window.removeEventListener('resize', checkH5Mode);
-  }, []);
-
-  return isH5;
-};
-
 // 简化的路由保护组件 - 使用 React Router 导航避免循环
-const ProtectedRoute = ({ children, useSimpleLayout = false, skipLayout = false }: { children: React.ReactNode, useSimpleLayout?: boolean, skipLayout?: boolean }) => {
+const ProtectedRoute = ({ children, skipLayout = false }: { children: React.ReactNode, useSimpleLayout?: boolean, skipLayout?: boolean }) => {
   const authenticated = isLoggedIn();
-  const isH5 = useH5Mode();
   const navigate = useNavigate();
   
   useEffect(() => {
@@ -90,17 +49,7 @@ const ProtectedRoute = ({ children, useSimpleLayout = false, skipLayout = false 
     return <>{children}</>;
   }
 
-  // 根据模式和页面类型选择布局
-  let Layout;
-  if (isH5 && useSimpleLayout) {
-    Layout = H5SimpleLayout;
-  } else if (isH5) {
-    Layout = H5Layout;
-  } else {
-    Layout = AdminLayout;
-  }
-  
-  return <Layout>{children}</Layout>;
+  return <AdminLayout>{children}</AdminLayout>;
 };
 
 
@@ -126,6 +75,11 @@ const LoginRoute = () => {
   
   return <IndexPage />;
 };
+
+function SettingsRoute() {
+  const content = <Suspense fallback={<PageFallback />}><SettingsPage /></Suspense>;
+  return isLoggedIn() ? <AdminLayout>{content}</AdminLayout> : content;
+}
 
 function App() {
   // 立即设置页面标题（使用已从缓存读取的配置）
@@ -239,7 +193,7 @@ function App() {
       />
       <Route 
         path="/settings" 
-        element={<Suspense fallback={<PageFallback />}><SettingsPage /></Suspense>}
+        element={<SettingsRoute />}
       />
     </Routes>
   );

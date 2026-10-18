@@ -1,6 +1,23 @@
 export const PANEL_THEME_STORAGE_KEY = 'flux-panel-theme';
+export const PANEL_APPEARANCE_STORAGE_KEY = 'flux-panel-appearance';
+export type PanelAppearance = 'light' | 'dark' | 'system';
+
+export function getPanelAppearance(): PanelAppearance {
+  try {
+    const saved = localStorage.getItem(PANEL_APPEARANCE_STORAGE_KEY);
+    return saved === 'dark' || saved === 'system' ? saved : 'light';
+  } catch {
+    return 'light';
+  }
+}
+
+export function savePanelAppearance(appearance: PanelAppearance) {
+  try { localStorage.setItem(PANEL_APPEARANCE_STORAGE_KEY, appearance); } catch { /* Apply for this session even when persistence is unavailable. */ }
+  window.dispatchEvent(new CustomEvent('panel-appearance-change', { detail: appearance }));
+}
 
 export const panelThemes = [
+  { id: 'xboard-console', name: '简约控制台', description: '白色基调、圆润卡片与轻量科技蓝' },
   { id: 'original', name: '原版主题', description: '保持当前界面与系统深浅色行为' },
   { id: 'dora-sky', name: '晴空蓝', description: '清爽蓝色、圆润卡片与轻量二次元感' },
   { id: 'akcdn-console', name: '运营蓝调', description: '浅色蓝调、运营控制台层级与高密度数据卡片' },
@@ -15,7 +32,7 @@ export function getPanelTheme(): PanelTheme {
   const savedTheme = localStorage.getItem(PANEL_THEME_STORAGE_KEY);
   return panelThemes.some((theme) => theme.id === savedTheme)
     ? (savedTheme as PanelTheme)
-    : 'original';
+    : 'xboard-console';
 }
 
 export function applyPanelTheme(theme: PanelTheme) {

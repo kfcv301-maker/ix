@@ -665,14 +665,14 @@ export default function UserPage() {
       <div className="px-3 lg:px-6 py-8">
       {/* 页面头部 */}
       <div className="flex flex-col gap-4 mb-6">
-        <div className="flex items-center gap-3">
-        </div>
+        <div className="console-page-heading"><div><h1>用户管理</h1><p>管理账号、流量配额和隧道使用权限。</p></div></div>
         
         <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center justify-between">
           <div className="flex items-center gap-3 flex-1 max-w-md">
             <Input
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
+              aria-label="搜索用户名"
               placeholder="搜索用户名"
               startContent={<SearchIcon className="w-4 h-4 text-default-400" />}
               onKeyDown={(e) => e.key === 'Enter' && handleSearch()}

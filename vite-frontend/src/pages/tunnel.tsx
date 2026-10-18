@@ -1,3 +1,4 @@
+import { ConsoleSearch, ConsoleStats, ConsoleEmpty } from '@/components/console-ui';
 import { useState, useEffect } from "react";
 import { Card, CardBody, CardHeader } from "@heroui/card";
 import { Button } from "@heroui/button";
@@ -97,6 +98,11 @@ export default function TunnelPage() {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [tunnels, setTunnels] = useState<Tunnel[]>([]);
+  const [tunnelSearch, setTunnelSearch] = useState('');
+  const [tunnelTypeFilter, setTunnelTypeFilter] = useState('all');
+  const visibleTunnels = tunnels.filter(tunnel => (tunnelTypeFilter === 'all' || String(tunnel.type) === tunnelTypeFilter) && [tunnel.name, tunnel.inIp, tunnel.outIp, tunnel.protocol].join(' ').toLowerCase().includes(tunnelSearch.trim().toLowerCase()));
+  const clearTunnelFilters = () => { setTunnelSearch(''); setTunnelTypeFilter('all'); };
+
   const [nodes, setNodes] = useState<Node[]>([]);
   
   // 模态框状态
@@ -634,9 +640,8 @@ export default function TunnelPage() {
     
       <div className="px-3 lg:px-6 py-8">
         {/* 页面头部 */}
-        <div className="flex items-center justify-between mb-6">
-        <div className="flex-1">
-        </div>
+        <div className="console-page-heading">
+        <div><h1>隧道管理</h1><p>配置入口与出口，管理连接协议和访问域名。</p></div>
 
         <Button
               size="sm"
@@ -646,7 +651,7 @@ export default function TunnelPage() {
               isDisabled={onlineManageableNodes.length === 0}
              
             >
-              新增
+              + 新增隧道
             </Button>
      
         </div>
@@ -658,10 +663,18 @@ export default function TunnelPage() {
           </div>
         )}
 
+        <ConsoleStats items={[
+          {label:'全部隧道',value:tunnels.length,detail:'当前账户可管理的隧道'},
+          {label:'端口转发',value:tunnels.filter(t=>t.type === 1).length,detail:'入口直接连接落地'},
+          {label:'隧道转发',value:tunnels.filter(t=>t.type === 2).length,detail:'通过出口节点连接落地'},
+          {label:'多入口隧道',value:tunnels.filter(t=>(t.entryNodeIds?.length || 0)>1).length,detail:'同一规则同步至多个入口'},
+        ]}/>
+        <div className="console-toolbar"><ConsoleSearch value={tunnelSearch} onChange={setTunnelSearch} placeholder="搜索隧道名称、地址或协议…"/><select className="console-filter-select" aria-label="按隧道类型筛选" value={tunnelTypeFilter} onChange={event=>setTunnelTypeFilter(event.target.value)}><option value="all">全部类型</option><option value="1">端口转发</option><option value="2">隧道转发</option></select><div className="console-toolbar-tail">{visibleTunnels.length} 条隧道</div></div>
+
         {/* 隧道卡片网格 */}
-        {tunnels.length > 0 ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4">
-            {tunnels.map((tunnel) => {
+        {tunnels.length > 0 && visibleTunnels.length === 0 ? <ConsoleEmpty onClear={clearTunnelFilters}/> : tunnels.length > 0 ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+            {visibleTunnels.map((tunnel) => {
               const statusDisplay = getStatusDisplay(tunnel.status);
               const typeDisplay = getTypeDisplay(tunnel.type);
               
