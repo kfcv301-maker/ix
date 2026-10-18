@@ -30,6 +30,9 @@ const paths: Record<string, ReactNode> = {
   upload: <path d="M12 20V4m-5 5 5-5 5 5"/>,
   download: <path d="M12 4v16m-5-5 5 5 5-5"/>,
   globe: <><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="4" ry="9"/><path d="M3 12h18"/></>,
+  eye: <><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></>,
+  'eye-off': <><path d="m3 3 18 18M10 5h2c7 0 10 7 10 7a20 20 0 0 1-3 4M6 6a20 20 0 0 0-4 6s3 7 10 7a12 12 0 0 0 5-1M10 10a3 3 0 0 0 4 4"/></>,
+  copy: <><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V3H3v13h5"/></>,
 };
 
 export function ConsoleIcon({ name, size = 18, className = '' }: { name: string; size?: number; className?: string }) {

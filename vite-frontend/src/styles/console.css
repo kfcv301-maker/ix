@@ -248,6 +248,37 @@
 .profile-footer { padding:26px 0 8px; color:var(--console-muted); font-size:11px; text-align:center; }
 .profile-footer a:hover { text-decoration:underline; }
 
+/* Quota indicators keep their own contrast, including unlimited accounts. */
+.usage-meter { width:100%; padding-top:4px; --usage-fill:#397bf6; }
+.usage-meter-caption { display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:11px; line-height:1.5; margin-bottom:7px; }
+.usage-meter-caption > span { color:var(--console-muted); }
+.usage-meter-caption strong { color:var(--usage-fill); font-size:13px; font-weight:650; font-variant-numeric:tabular-nums; }
+.usage-meter-track { height:10px; width:100%; overflow:hidden; border-radius:20px; background:#e2e9f3; }
+.usage-meter-fill { display:block; height:100%; border-radius:inherit; background:var(--usage-fill); transition:width .3s; }
+.usage-meter-sm .usage-meter-track { height:8px; }
+.usage-meter-warning { --usage-fill:#c27b10; }
+.usage-meter-danger { --usage-fill:#df4d59; }
+.usage-meter.is-unlimited .usage-meter-fill { width:100%; background:repeating-linear-gradient(120deg,#397bf6 0 9px,#6b9fff 9px 18px); }
+:root.dark .usage-meter-track { background:#303f56; }
+:root.dark .usage-meter { --usage-fill:#75a7ff; }
+:root.dark .usage-meter-warning { --usage-fill:#e8b355; }
+:root.dark .usage-meter-danger { --usage-fill:#ff7c87; }
+.user-password-field { min-width:0; }
+.user-password-tools { display:flex; align-items:center; gap:8px; margin-top:8px; }
+.user-password-tools button { font-size:11px; min-height:32px; padding:0 10px; }
+.user-password-hint { font-size:11px; color:var(--console-muted); margin-top:7px; line-height:1.6; }
+.user-password-visibility { flex-shrink:0; width:32px; height:32px; display:grid; place-items:center; color:var(--console-muted); border-radius:8px; }
+.user-password-visibility:hover { color:var(--console-accent); background:var(--console-subtle); }
+@media(max-width:768px) {
+  .console-dashboard-summary [data-slot='body'] { padding:14px; }
+  .console-dashboard-summary [data-slot='body'] > div > p { font-size:clamp(19px,5.3vw,24px); }
+  .usage-meter-caption { font-size:10px; gap:4px; }
+  .usage-meter-caption strong { font-size:12px; }
+  .user-password-tools button { min-height:40px; font-size:12px; }
+  .user-password-visibility { width:36px; height:36px; }
+}
+@media(prefers-reduced-motion:reduce) { .usage-meter-fill { transition:none; } }
+
 /* Monitoring is a comparison table on desktop and a metric card on small screens. */
 .monitor-overview { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); border:1px solid var(--console-border); background:var(--console-surface); border-radius:16px; padding:18px 0; }
 .monitor-overview > div { display:flex; align-items:center; justify-content:space-between; padding:0 24px; gap:12px; }

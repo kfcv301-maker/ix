@@ -1,5 +1,6 @@
 import { useNavigate } from 'react-router-dom';
 import { ConsoleHeading, ConsoleIcon } from '@/components/console-ui';
+import { UsageMeter } from '@/components/usage-meter';
 import { Card, CardBody, CardHeader } from "@heroui/card";
 import { Button } from "@heroui/button";
 import { Modal, ModalContent, ModalHeader, ModalBody } from "@heroui/modal";
@@ -544,35 +545,8 @@ export default function DashboardPage() {
     return 0;
   };
 
-  const getUsageColor = (percentage: number) => {
-    if (percentage >= 90) return 'bg-red-500 dark:bg-red-600';
-    if (percentage >= 70) return 'bg-orange-500 dark:bg-orange-600';
-    return 'bg-blue-500 dark:bg-blue-600';
-  };
-
   const renderProgressBar = (percentage: number, size: 'sm' | 'md' = 'md', isUnlimited: boolean = false) => {
-    const height = size === 'sm' ? 'h-1.5' : 'h-2';
-    
-    if (isUnlimited) {
-      return (
-        <div className="w-full">
-          <div className={`w-full bg-gradient-to-r from-blue-200 to-purple-200 dark:from-blue-500/30 dark:to-purple-500/30 rounded-full ${height}`}>
-            <div className={`${height} bg-gradient-to-r from-blue-500 to-purple-500 rounded-full w-full opacity-60`}></div>
-          </div>
-        </div>
-      );
-    }
-    
-    return (
-      <div className="w-full">
-        <div className={`w-full bg-gray-200 dark:bg-gray-800 rounded-full ${height}`}>
-          <div 
-            className={`${height} rounded-full transition-all duration-300 ${getUsageColor(percentage)}`}
-            style={{ width: `${Math.min(percentage, 100)}%` }}
-          ></div>
-        </div>
-      </div>
-    );
+    return <UsageMeter percentage={percentage} unlimited={isUnlimited} size={size}/>;
   };
 
   const calculateTunnelUsedFlow = (tunnel: UserTunnel): number => {
@@ -871,7 +845,7 @@ export default function DashboardPage() {
                    {renderProgressBar(calculateUsagePercentage('flow'), 'sm', userInfo.flow === 99999)}
                    <div className="flex items-center justify-between mt-1">
                      <p className="text-xs text-default-500 truncate">
-                       {userInfo.flow === 99999 ? '无限制' : `${calculateUsagePercentage('flow').toFixed(1)}%`}
+                       额度 {formatFlow(userInfo.flow, 'gb')}
                      </p>
                      {(userInfo.flowResetTime !== undefined && userInfo.flowResetTime !== null) && (
                        <div className="text-xs text-default-500 flex items-center gap-1">
@@ -918,7 +892,7 @@ export default function DashboardPage() {
                  <div className="mt-1">
                    {renderProgressBar(calculateUsagePercentage('forwards'), 'sm', userInfo.num === 99999)}
                    <p className="text-xs text-default-500 mt-1 truncate">
-                     {userInfo.num === 99999 ? '无限制' : `${calculateUsagePercentage('forwards').toFixed(1)}%`}
+                     额度 {formatNumber(userInfo.num || 0)}
                    </p>
                  </div>
                </div>

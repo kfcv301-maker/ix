@@ -24,7 +24,6 @@ import { RadioGroup, Radio } from "@heroui/radio";
 import { Switch } from "@heroui/switch";
 import { DatePicker } from "@heroui/date-picker";
 import { Spinner } from "@heroui/spinner";
-import { Progress } from "@heroui/progress";
 import { Pagination } from "@heroui/pagination";
 
 import toast from 'react-hot-toast';
@@ -54,6 +53,9 @@ import {
 } from '@/api';
 import { SearchIcon, EditIcon, DeleteIcon, UserIcon, SettingsIcon } from '@/components/icons';
 import { parseDate } from "@internationalized/date";
+import { ConsoleIcon } from '@/components/console-ui';
+import { UsageMeter } from '@/components/usage-meter';
+import { generateUserPassword } from '@/utils/user-password';
 
 
 // 工具函数
@@ -153,6 +155,33 @@ export default function UserPage() {
     flowResetTime: 0
   });
   const [userFormLoading, setUserFormLoading] = useState(false);
+  const [passwordVisible, setPasswordVisible] = useState(false);
+
+  const closeUserModal = () => {
+    onUserModalClose();
+    setPasswordVisible(false);
+    setUserForm(previous => ({ ...previous, pwd: '' }));
+  };
+
+  const newPassword = () => {
+    try {
+      return generateUserPassword();
+    } catch {
+      toast.error('无法自动生成密码，请手动输入');
+      return '';
+    }
+  };
+
+  const copyUserPassword = async () => {
+    if (!userForm.pwd) return;
+    try {
+      await navigator.clipboard.writeText(userForm.pwd);
+      toast.success('密码已复制');
+    } catch {
+      setPasswordVisible(true);
+      toast.error('复制失败，请手动复制密码');
+    }
+  };
 
   // 隧道权限管理相关状态
   const { isOpen: isTunnelModalOpen, onOpen: onTunnelModalOpen, onClose: onTunnelModalClose } = useDisclosure();
@@ -347,9 +376,10 @@ export default function UserPage() {
 
   const handleAdd = () => {
     setIsEdit(false);
+    setPasswordVisible(false);
     setUserForm({
       user: '',
-      pwd: '',
+      pwd: newPassword(),
       status: 1,
       flow: 100,
       num: 10,
@@ -361,6 +391,7 @@ export default function UserPage() {
 
   const handleEdit = (user: User) => {
     setIsEdit(true);
+    setPasswordVisible(false);
     setUserForm({
       id: user.id,
       name: user.name,
@@ -419,7 +450,7 @@ export default function UserPage() {
       
       if (response.code === 0) {
         toast.success(isEdit ? '更新成功' : '创建成功');
-        onUserModalClose();
+        closeUserModal();
         loadUsers();
       } else {
         toast.error(response.msg || (isEdit ? '更新失败' : '创建失败'));
@@ -733,7 +764,7 @@ export default function UserPage() {
             const userStatus = getUserStatus(user);
             const expStatus = user.expTime ? getExpireStatus(user.expTime) : null;
             const usedFlow = calculateUserTotalUsedFlow(user);
-            const flowPercent = user.flow > 0 ? Math.min((usedFlow / (user.flow * 1024 * 1024 * 1024)) * 100, 100) : 0;
+            const flowPercent = user.flow > 0 ? (usedFlow / (user.flow * 1024 * 1024 * 1024)) * 100 : 0;
             
             return (
               <Card 
@@ -773,13 +804,7 @@ export default function UserPage() {
                         <span className="text-default-600">已使用</span>
                         <span className="font-medium text-xs text-danger">{formatFlow(usedFlow)}</span>
                       </div>
-                      <Progress 
-                        size="sm" 
-                        value={flowPercent}
-                        color={flowPercent > 90 ? 'danger' : flowPercent > 70 ? 'warning' : 'success'}
-                        className="mt-1"
-                        aria-label={`流量使用 ${flowPercent.toFixed(1)}%`}
-                      />
+                      <UsageMeter percentage={flowPercent} unlimited={user.flow === 99999} size="sm"/>
                     </div>
 
                     {/* 其他信息 */}
@@ -890,7 +915,7 @@ export default function UserPage() {
       {/* 用户表单模态框 */}
       <Modal
         isOpen={isUserModalOpen}
-        onClose={onUserModalClose}
+        onClose={closeUserModal}
         size="2xl"
       scrollBehavior="outside"
       backdrop="blur"
@@ -908,14 +933,23 @@ export default function UserPage() {
                 onChange={(e) => setUserForm(prev => ({ ...prev, user: e.target.value }))}
                 isRequired
               />
-              <Input
-                label="密码"
-                type="password"
-                value={userForm.pwd}
-                onChange={(e) => setUserForm(prev => ({ ...prev, pwd: e.target.value }))}
-                placeholder={isEdit ? '留空则不修改密码' : '请输入密码'}
-                isRequired={!isEdit}
-              />
+              <div className="user-password-field">
+                <Input
+                  label="密码"
+                  type={passwordVisible ? 'text' : 'password'}
+                  value={userForm.pwd}
+                  onChange={(e) => setUserForm(prev => ({ ...prev, pwd: e.target.value }))}
+                  placeholder={isEdit ? '留空则不修改密码' : '自动生成或手动输入密码'}
+                  isRequired={!isEdit}
+                  autoComplete="new-password"
+                  endContent={<button type="button" className="user-password-visibility" onClick={() => setPasswordVisible(value => !value)} aria-label={passwordVisible ? '隐藏密码' : '显示密码'} aria-pressed={passwordVisible}><ConsoleIcon name={passwordVisible ? 'eye-off' : 'eye'}/></button>}
+                />
+                <div className="user-password-tools">
+                  {!isEdit && <Button size="sm" variant="flat" color="primary" startContent={<ConsoleIcon name="refresh" size={14}/>} onPress={() => { const password = newPassword(); if (password) setUserForm(previous => ({ ...previous, pwd: password })); }}>重新生成</Button>}
+                  <Button size="sm" variant="bordered" isDisabled={!userForm.pwd} startContent={<ConsoleIcon name="copy" size={14}/>} onPress={copyUserPassword}>复制密码</Button>
+                </div>
+                <p className="user-password-hint">{isEdit ? '留空则保留原密码' : '自动生成 20 位密码，含大小写字母、数字和符号，可手动修改。'}</p>
+              </div>
               <Input
                 label="流量限制(GB)"
                 type="number"
@@ -988,7 +1022,7 @@ export default function UserPage() {
             <p className="text-small text-default-500">禁用账号会暂停该用户的全部转发；离线节点会在恢复连接后同步暂停。重新启用账号不会自动恢复转发。</p>
           </ModalBody>
           <ModalFooter>
-            <Button onPress={onUserModalClose}>
+            <Button onPress={closeUserModal}>
               取消
             </Button>
             <Button
