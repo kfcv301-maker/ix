@@ -224,9 +224,8 @@ export default function LimitPage() {
     
       <div className="px-3 lg:px-6 py-8">
         {/* 页面头部 */}
-        <div className="flex items-center justify-between mb-6">
-        <div className="flex-1">
-        </div>
+        <div className="console-page-heading">
+        <div><h1>限速管理</h1><p>设置带宽规则，并分配给对应用户或隧道。</p></div>
 
         <Button
               size="sm"

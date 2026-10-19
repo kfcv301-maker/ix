@@ -1,3 +1,4 @@
+import { ConsoleSearch, ConsoleEmpty } from '@/components/console-ui';
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { Button } from '@heroui/button';
 import { Card, CardBody, CardHeader } from '@heroui/card';
@@ -108,6 +109,9 @@ export default function VpsPage() {
   const navigate = useNavigate();
   const [isAdmin, setIsAdmin] = useState(false);
   const [hosts, setHosts] = useState<VpsHost[]>([]);
+  const [hostSearch, setHostSearch] = useState('');
+  const visibleHosts = hosts.filter(host => [host.name, host.host].join(' ').toLowerCase().includes(hostSearch.trim().toLowerCase()));
+
   const [assignableUsers, setAssignableUsers] = useState<AssignableUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [formOpen, setFormOpen] = useState(false);
@@ -340,13 +344,14 @@ export default function VpsPage() {
         <Card className="border border-divider shadow-none"><CardBody className="p-3"><p className="text-xs text-default-500">已分配</p><p className="mt-1 text-xl font-semibold">{hostSummary.assigned}</p></CardBody></Card>
       </div>
 
+      <div className="console-toolbar"><ConsoleSearch value={hostSearch} onChange={setHostSearch} placeholder="搜索 VPS 名称或地址…"/><div className="console-toolbar-tail">{visibleHosts.length} 台服务器</div></div>
       {loading ? (
         <div className="flex min-h-64 items-center justify-center"><Spinner label="正在加载 VPS…" /></div>
       ) : hosts.length === 0 ? (
         <Card className="border border-dashed border-divider shadow-none"><CardBody className="py-16 text-center"><p className="text-base font-medium">暂无 VPS 托管记录</p><p className="mt-2 text-sm text-default-500">添加服务器后，可手动检测 SSH 连通性或直接打开在线终端。</p><Button className="mt-5" color="primary" variant="flat" onPress={openCreate}>托管第一台 VPS</Button></CardBody></Card>
-      ) : (
+      ) : visibleHosts.length === 0 ? <ConsoleEmpty onClear={()=>setHostSearch('')}/> : (
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-          {hosts.map((host) => {
+          {visibleHosts.map((host) => {
             const health = statusMeta(host.healthStatus);
             return (
               <Card key={host.id} className="border border-divider shadow-sm">

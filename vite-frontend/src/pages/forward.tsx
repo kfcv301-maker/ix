@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Card, CardBody, CardHeader } from "@heroui/card";
 import { Button } from "@heroui/button";
+import { Dropdown, DropdownTrigger, DropdownMenu, DropdownItem } from '@heroui/dropdown';
+import { ConsoleIcon, ConsoleStats, ConsoleSearch, ConsoleEmpty } from '@/components/console-ui';
 import { Input } from "@heroui/input";
 import { Textarea } from "@heroui/input";
 import { Select, SelectItem } from "@heroui/select";
@@ -208,6 +210,17 @@ export default function ForwardPage() {
     }
   });
   
+  const [forwardSearch, setForwardSearch] = useState('');
+  const [tunnelFilter, setTunnelFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [listPresentation, setListPresentation] = useState<'table' | 'cards'>(() => {
+    try { return localStorage.getItem('forward-presentation') === 'cards' ? 'cards' : 'table'; } catch { return 'table'; }
+  });
+  const [tablePage, setTablePage] = useState(1);
+  const [tablePageSize, setTablePageSize] = useState(20);
+  useEffect(() => { setTablePage(1); }, [forwardSearch, tunnelFilter, statusFilter, viewMode, adminOnlyMyForwards, tablePageSize]);
+  const clearFilters = () => { setForwardSearch(''); setTunnelFilter('all'); setStatusFilter('all'); };
+
   // 拖拽排序相关状态
   const [forwardOrder, setForwardOrder] = useState<number[]>([]);
   
@@ -524,11 +537,11 @@ export default function ForwardPage() {
   };
 
   // 按用户和隧道分组转发数据
-  const groupForwardsByUserAndTunnel = (): UserGroup[] => {
+  const groupForwardsByUserAndTunnel = (applyFilters = true): UserGroup[] => {
     const userMap = new Map<string, UserGroup>();
     
     // 获取排序后的转发列表
-    const sortedForwards = getSortedForwards();
+    const sortedForwards = getSortedForwards(applyFilters);
     
     sortedForwards.forEach(forward => {
       const userKey = forward.userId ? forward.userId.toString() : 'unknown';
@@ -1054,7 +1067,7 @@ export default function ForwardPage() {
       
       if (viewMode === 'grouped') {
         // 分组模式下，获取指定隧道的转发
-        const userGroups = groupForwardsByUserAndTunnel();
+        const userGroups = groupForwardsByUserAndTunnel(false);
         forwardsToExport = userGroups.flatMap(userGroup => 
           userGroup.tunnelGroups
             .filter(tunnelGroup => tunnelGroup.tunnelId === selectedTunnelForExport)
@@ -1062,7 +1075,7 @@ export default function ForwardPage() {
         );
       } else {
         // 直接显示模式下，过滤指定隧道的转发
-        forwardsToExport = getSortedForwards().filter(forward => forward.tunnelId === selectedTunnelForExport);
+        forwardsToExport = getSortedForwards(false).filter(forward => forward.tunnelId === selectedTunnelForExport);
       }
       
       if (forwardsToExport.length === 0) {
@@ -1371,15 +1384,18 @@ export default function ForwardPage() {
   );
 
   // 根据排序顺序获取转发列表
-  const getSortedForwards = (): Forward[] => {
+  const getSortedForwards = (applyFilters = true): Forward[] => {
     // 确保 forwards 数组存在且有效
     if (!forwards || forwards.length === 0) {
       return [];
     }
     
-    const filteredForwards = viewMode === 'direct'
-      ? getDirectVisibleForwards(forwards)
-      : forwards;
+    const keyword = applyFilters ? forwardSearch.trim().toLowerCase() : '';
+    const filteredForwards = (viewMode === 'direct' ? getDirectVisibleForwards(forwards) : forwards).filter(forward => {
+      if (applyFilters && tunnelFilter !== 'all' && String(forward.tunnelId) !== tunnelFilter) return false;
+      if (applyFilters && (statusFilter === 'pending' ? ![2, 3].includes(forward.status) : statusFilter !== 'all' && String(forward.status) !== statusFilter)) return false;
+      return !keyword || [forward.name, forward.id, forward.tunnelName, forward.inIp, forward.entryDomain, forward.inPort, forward.remoteAddr, forward.userName, forward.vpsHostName].join(' ').toLowerCase().includes(keyword);
+    });
     
     // 确保过滤后的转发列表有效
     if (!filteredForwards || filteredForwards.length === 0) {
@@ -1432,7 +1448,7 @@ export default function ForwardPage() {
       transform,
       transition,
       isDragging,
-    } = useSortable({ id: forward.id });
+    } = useSortable({ id: forward.id, disabled: Boolean(forwardSearch || tunnelFilter !== 'all' || statusFilter !== 'all') });
 
     const style = {
       transform: transform ? CSS.Transform.toString(transform) : undefined,
@@ -1458,7 +1474,7 @@ export default function ForwardPage() {
         <CardHeader className="pb-2">
           <div className="flex justify-between items-start w-full">
             <div className="flex-1 min-w-0">
-              {bulkSelectionMode && (
+                      {bulkSelectionMode && (
                 <label className="flex items-center gap-2 mb-1 text-xs text-default-600">
                   <input
                     type="checkbox"
@@ -1672,18 +1688,22 @@ export default function ForwardPage() {
   }
 
   const userGroups = groupForwardsByUserAndTunnel();
+  const visibleForwards = getSortedForwards();
+  const tablePageCount = Math.max(1, Math.ceil(visibleForwards.length / tablePageSize));
+  const currentTablePage = Math.min(tablePage, tablePageCount);
+  const pagedForwards = visibleForwards.slice((currentTablePage - 1) * tablePageSize, currentTablePage * tablePageSize);
 
   return (
     
-      <div className="px-3 lg:px-6 py-8">
+      <div className="console-forward-page px-3 lg:px-6 py-8">
         {/* 页面头部 */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+        <div className="console-page-heading">
           <div className="flex-1">
             <h1 className="text-xl font-bold text-foreground sm:text-2xl">转发管理</h1>
             <p className="mt-1 text-sm text-default-500">
               {isAdministrator
-                ? '可查看并管理所有用户创建的转发；规则会标明创建/归属用户和关联的托管 VPS。'
-                : '可为自己托管或管理员分配的 VPS 创建转发，并选择管理员已授权给你的隧道。'}
+                ? '管理全部转发规则，查看入口、目标与运行状态。'
+                : '查看和管理自己的转发规则，使用已授权的隧道与 VPS。'}
             </p>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-3">
@@ -1713,32 +1733,17 @@ export default function ForwardPage() {
                 {adminOnlyMyForwards ? '仅看我的' : '全部用户'}
               </Button>
             )}
-            {/* 显示模式切换按钮 */}
-            <Button
-              size="sm"
-              variant="flat"
-              color="default"
-              onPress={handleViewModeChange}
-              isIconOnly
-              className="text-sm"
-              title={viewMode === 'grouped' ? '切换到直接显示' : '切换到分类显示'}
-            >
-              {viewMode === 'grouped' ? (
-                <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M3 4a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-1 1H4a1 1 0 01-1-1V4zM3 10a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-1 1H4a1 1 0 01-1-1v-2zM3 16a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-1 1H4a1 1 0 01-1-1v-2z" clipRule="evenodd" />
-                </svg>
-              ) : (
-                <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                  <path d="M3 4a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-1 1H4a1 1 0 01-1-1V4zM3 10a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H4a1 1 0 01-1-1v-6zM14 9a1 1 0 00-1 1v6a1 1 0 001 1h2a1 1 0 001-1v-6a1 1 0 00-1-1h-2z" />
-                </svg>
-              )}
-            </Button>
-            
+            <div className="console-segment" aria-label="转发显示方式">
+              {(['table', 'cards', 'grouped'] as const).map(mode => <button key={mode} type="button" aria-pressed={mode === 'grouped' ? viewMode === 'grouped' : viewMode === 'direct' && listPresentation === mode} onClick={() => {
+                if ((mode === 'grouped') !== (viewMode === 'grouped')) handleViewModeChange();
+                if (mode !== 'grouped') { setListPresentation(mode); try { localStorage.setItem('forward-presentation', mode); } catch { /* Session-only preference. */ } }
+              }}><ConsoleIcon name={mode === 'table' ? 'list' : mode === 'cards' ? 'grid' : 'user'} size={13}/>{mode === 'table' ? '列表' : mode === 'cards' ? '卡片' : '分组'}</button>)}
+            </div>
             {/* 导入按钮 */}
             <Button
               size="sm"
               variant="flat"
-              color="warning"
+              color="default"
               onPress={handleImport}
             >
               导入
@@ -1748,7 +1753,7 @@ export default function ForwardPage() {
             <Button
               size="sm"
               variant="flat"
-              color="success"
+              color="default"
               onPress={handleExport}
               isLoading={exportLoading}
           
@@ -1758,12 +1763,13 @@ export default function ForwardPage() {
 
             <Button
               size="sm"
-              variant="flat"
+              variant="solid"
               color="primary"
+              startContent={<ConsoleIcon name="plus" size={15}/>}
               onPress={() => handleAdd()}
              
             >
-              新增
+              新增转发
             </Button>
             
         
@@ -1771,10 +1777,24 @@ export default function ForwardPage() {
         </div>
 
 
+<ConsoleStats items={[
+          { label: '全部规则', value: forwards.length, detail: '当前账户可管理的转发' },
+          { label: '正常运行', value: forwards.filter(item => item.status === 1).length, detail: '已完成同步', tone: 'success' },
+          { label: '已暂停', value: forwards.filter(item => item.status === 0).length, detail: '保留规则配置' },
+          { label: '需要关注', value: forwards.filter(item => ![0, 1].includes(item.status)).length, detail: '异常或正在同步', tone: 'warning' },
+        ]}/>
+        <div className="console-toolbar">
+          <ConsoleSearch value={forwardSearch} onChange={setForwardSearch} placeholder="搜索规则、入口、目标或用户…"/>
+          <select className="console-filter-select" aria-label="按隧道筛选" value={tunnelFilter} onChange={event => setTunnelFilter(event.target.value)}><option value="all">全部隧道</option>{tunnels.map(tunnel => <option value={tunnel.id} key={tunnel.id}>{tunnel.name}</option>)}</select>
+          <select className="console-filter-select" aria-label="按状态筛选" value={statusFilter} onChange={event => setStatusFilter(event.target.value)}><option value="all">全部状态</option><option value="1">正常</option><option value="0">暂停</option><option value="-1">异常</option><option value="pending">同步中</option></select>
+          <div className="console-toolbar-tail"><span>{visibleForwards.length} 条结果</span>{(forwardSearch || tunnelFilter !== 'all' || statusFilter !== 'all') && <button type="button" onClick={clearFilters}>清空筛选</button>}</div>
+        </div>
+
+
         {bulkSelectionMode && (
           <div className="flex flex-wrap items-center gap-3 mb-5 p-3 border border-divider rounded-lg bg-default-50">
             <span className="text-sm">已选择 {bulkSelectedIds.size} 条规则</span>
-            <Button size="sm" variant="light" isDisabled={bulkModalOpen} onPress={() => setBulkSelectedIds(new Set(getSortedForwards().map(forward => forward.id)))}>选择当前可见规则</Button>
+            <Button size="sm" variant="light" isDisabled={bulkModalOpen} onPress={() => setBulkSelectedIds(new Set(getSortedForwards().map(forward => forward.id)))}>选择全部筛选结果</Button>
             <Button size="sm" variant="light" isDisabled={bulkModalOpen} onPress={() => setBulkSelectedIds(new Set())}>清空选择</Button>
             <Button size="sm" color="secondary" isDisabled={bulkSelectedIds.size === 0 || bulkModalOpen || operatingForwardIds.size > 0} onPress={() => {
               invalidateBulkPreview();
@@ -1787,7 +1807,39 @@ export default function ForwardPage() {
         )}
 
         {/* 根据显示模式渲染不同内容 */}
-        {viewMode === 'grouped' ? (
+        {forwards.length > 0 && visibleForwards.length === 0 ? <ConsoleEmpty onClear={clearFilters}/> : viewMode === 'direct' && listPresentation === 'table' ? (
+          <div className="console-table-panel">
+            {!isAdministrator && userGroups.flatMap(group => group.tunnelGroups).length > 0 && <div className="flex flex-wrap gap-2 p-3 border-b border-divider">{userGroups.flatMap(group => group.tunnelGroups).map(group => <Button key={group.tunnelId} size="sm" variant="flat" onPress={() => handleDiagnoseTunnelForwards(group)}>{group.tunnelName} · 一键 PING</Button>)}</div>}
+            <div className="console-table-scroll" tabIndex={0} role="region" aria-label="转发规则列表，可横向滚动">
+              <table className="console-table"><thead><tr>
+                {bulkSelectionMode && <th>选择</th>}<th>规则名称</th><th>入口地址</th><th>目标地址</th><th>状态</th><th>流量</th><th>负载策略</th><th>操作</th>
+              </tr></thead><tbody>{pagedForwards.map(forward => {
+                const status = getStatusDisplay(forward.status, forward.syncState);
+                const entry = getForwardEntryAddress(forward);
+                return <tr key={forward.id}>
+                  {bulkSelectionMode && <td><input type="checkbox" aria-label={`选择规则 ${forward.name}`} checked={bulkSelectedIds.has(forward.id)} disabled={bulkApplying || bulkModalOpen || operatingForwardIds.has(forward.id)} onChange={event => { const checked = event.target.checked; setBulkSelectedIds(previous => { const next = new Set(previous); if (checked) next.add(forward.id); else next.delete(forward.id); return next; }); }}/></td>}
+                  <td className="console-cell-name"><span className="console-table-name" title={forward.name}>{forward.name}</span><span className="console-table-secondary">#{forward.id} · {forward.userName || '我的账号'}{forward.vpsHostName ? ` · ${forward.vpsHostName}` : ''}</span></td>
+                  <td data-label="入口地址"><button type="button" className="console-address-button" title={formatInAddress(entry, forward.inPort)} onClick={() => showAddressModal(entry, forward.inPort, '入口端口')}>{formatInAddress(entry, forward.inPort)}</button><span className="console-table-secondary">{forward.tunnelName}</span></td>
+                  <td data-label="目标地址"><button type="button" className="console-address-button" title={forward.remoteAddr} onClick={() => showAddressModal(forward.remoteAddr, null, '目标地址')}>{formatRemoteAddress(forward.remoteAddr)}</button>{(forward.proxyProtocol === 1 || forward.proxyProtocol === 2) && <span className="console-table-secondary">{proxyProtocolLabel(forward.proxyProtocol)} · TCP</span>}</td>
+                  <td data-label="状态"><div className="flex items-center gap-2"><span className={`console-status-dot status-${status.color}`}/><span>{status.text}</span></div>{forward.syncError && <span className="console-table-secondary text-warning" title={forward.syncError}>{forward.syncError}</span>}</td>
+                  <td data-label="流量" className="whitespace-nowrap"><span>↑ {formatFlow(forward.outFlow || 0)}</span><span className="console-table-secondary">↓ {formatFlow(forward.inFlow || 0)}</span></td>
+                  <td data-label="负载策略">{getStrategyDisplay(forward.strategy).text}{forward.interfaceName && <span className="console-table-secondary" title={forward.interfaceName}>{forward.interfaceName}</span>}</td>
+                  <td className="console-cell-actions"><div className="flex items-center gap-2">
+                    <Switch size="sm" aria-label={`${forward.serviceRunning ? '暂停' : '启动'}规则 ${forward.name}`} isSelected={forward.serviceRunning} onValueChange={() => handleServiceToggle(forward)} isDisabled={bulkApplying || (forward.status !== 1 && forward.status !== 0) || operatingForwardIds.has(forward.id)}/>
+                    <Button size="sm" variant="light" isIconOnly aria-label={`编辑规则 ${forward.name}`} onPress={() => handleEdit(forward)} isDisabled={bulkApplying || forward.status === 2 || forward.status === 3}><ConsoleIcon name="edit" size={15}/></Button>
+                    <Dropdown><DropdownTrigger><Button size="sm" variant="light" isIconOnly aria-label={`更多操作 ${forward.name}`}><ConsoleIcon name="more" size={17}/></Button></DropdownTrigger><DropdownMenu aria-label={`${forward.name} 操作`}>
+                      <DropdownItem key="diagnose" onPress={() => handleDiagnose(forward)} isDisabled={bulkApplying || forward.status === 3}>PING 诊断</DropdownItem>
+                      <DropdownItem key="address" onPress={() => showAddressModal(entry, forward.inPort, '入口端口')}>查看与复制入口</DropdownItem>
+                      <DropdownItem key="delete" className="text-danger" color="danger" onPress={() => handleDelete(forward)} isDisabled={bulkApplying || forward.status === 3}>删除规则</DropdownItem>
+                    </DropdownMenu></Dropdown>
+                  </div></td>
+                </tr>;
+              })}</tbody></table>
+              {visibleForwards.length === 0 && <div className="console-filter-empty"><strong>暂无转发规则</strong><p>点击“新增转发”，配置第一个入口和目标。</p></div>}
+            </div>
+            <div className="console-table-footer"><span>共 {visibleForwards.length} 条 · 第 {currentTablePage} / {tablePageCount} 页</span><div className="flex items-center gap-2"><select className="console-filter-select" aria-label="每页规则数量" value={tablePageSize} onChange={event => setTablePageSize(Number(event.target.value))}>{[20, 50, 100].map(size => <option value={size} key={size}>{size} 条 / 页</option>)}</select><button type="button" disabled={currentTablePage <= 1} onClick={() => setTablePage(currentTablePage - 1)}>上一页</button><button type="button" disabled={currentTablePage >= tablePageCount} onClick={() => setTablePage(currentTablePage + 1)}>下一页</button></div></div>
+          </div>
+        ) : viewMode === 'grouped' ? (
           /* 按用户和隧道分组的转发列表 */
           userGroups.length > 0 ? (
             <div className="space-y-6">
@@ -2188,6 +2240,9 @@ export default function ForwardPage() {
                       maxRows={6}
                     />
                     
+                    <details className="console-advanced-options">
+                      <summary>高级设置 <span>负载均衡 · 出口网卡 · Proxy Protocol</span></summary>
+                      <div className="space-y-4 pt-4">
                     <div className="rounded-lg border border-divider p-3 space-y-3">
                       <Switch
                         isSelected={form.proxyProtocol !== 0}
@@ -2243,6 +2298,8 @@ export default function ForwardPage() {
                         <SelectItem key="hash" >哈希模式 - IP哈希</SelectItem>
                       </Select>
                     )}
+                      </div>
+                    </details>
                   </div>
                 </ModalBody>
                 <ModalFooter>

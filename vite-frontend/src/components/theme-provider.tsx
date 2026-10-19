@@ -1,47 +1,39 @@
 import React, { useEffect } from 'react';
 import { useTheme } from '@heroui/use-theme';
-import { applyPanelTheme, getPanelTheme } from '@/utils/panel-theme';
+import { applyPanelTheme, getPanelTheme, getPanelAppearance, type PanelAppearance } from '@/utils/panel-theme';
 
 interface ThemeProviderProps {
   children: React.ReactNode;
 }
 
 export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
-  const { theme, setTheme } = useTheme();
+  const { setTheme } = useTheme();
 
   useEffect(() => {
     applyPanelTheme(getPanelTheme());
 
-    // 确保主题与HTML class同步
-    const updateThemeClass = (currentTheme: string) => {
-      if (currentTheme === 'dark') {
-        document.documentElement.classList.add('dark');
-        document.documentElement.style.colorScheme = 'dark';
-      } else {
-        document.documentElement.classList.remove('dark');
-        document.documentElement.style.colorScheme = 'light';
-      }
-    };
-
-    // 始终跟随系统主题
-    const systemTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-    if (systemTheme !== theme) {
-      setTheme(systemTheme);
-    }
-
-    // 监听主题变化
-    updateThemeClass(theme);
-
-    // 监听系统主题变化
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
-    const handleThemeChange = (e: MediaQueryListEvent) => {
-      const newTheme = e.matches ? 'dark' : 'light';
-      setTheme(newTheme);
+    let appearance = getPanelAppearance();
+    const apply = () => {
+      const resolved = appearance === 'system' ? (mediaQuery.matches ? 'dark' : 'light') : appearance;
+      setTheme(resolved);
+      document.documentElement.classList.toggle('dark', resolved === 'dark');
+      document.documentElement.style.colorScheme = resolved;
     };
-
+    const handleThemeChange = () => { if (appearance === 'system') apply(); };
+    const handleAppearanceChange = (event: Event) => {
+      const choice = (event as CustomEvent<PanelAppearance>).detail;
+      if (choice === 'light' || choice === 'dark' || choice === 'system') appearance = choice;
+      apply();
+    };
+    apply();
     mediaQuery.addEventListener('change', handleThemeChange);
-    return () => mediaQuery.removeEventListener('change', handleThemeChange);
-  }, [theme, setTheme]);
+    window.addEventListener('panel-appearance-change', handleAppearanceChange);
+    return () => {
+      mediaQuery.removeEventListener('change', handleThemeChange);
+      window.removeEventListener('panel-appearance-change', handleAppearanceChange);
+    };
+  }, [setTheme]);
 
   return <>{children}</>;
 };

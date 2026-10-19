@@ -1,10 +1,11 @@
+import { ConsoleHeading, ConsoleIcon, ConsoleSearch, ConsoleEmpty } from '@/components/console-ui';
 import { useState, useEffect, useRef } from "react";
-import { Card, CardBody, CardHeader } from "@heroui/card";
+import { Card, CardBody } from "@heroui/card";
 import { Button } from "@heroui/button";
 import { Input } from "@heroui/input";
 import { Textarea } from "@heroui/input";
 import { Modal, ModalContent, ModalHeader, ModalBody, ModalFooter } from "@heroui/modal";
-import { Chip } from "@heroui/chip";
+import { Dropdown, DropdownTrigger, DropdownMenu, DropdownItem } from "@heroui/dropdown";
 import { Switch } from "@heroui/switch";
 import { Spinner } from "@heroui/spinner";
 import { Alert } from "@heroui/alert";
@@ -157,6 +158,15 @@ type TcpTuningProfile = 'tiny' | 'small' | 'balanced' | 'standard';
 
 export default function NodePage() {
   const [nodeList, setNodeList] = useState<Node[]>([]);
+  const [nodeSearch, setNodeSearch] = useState('');
+  const [nodeFilter, setNodeFilter] = useState('all');
+  const visibleNodes = nodeList.filter(node => {
+    const online = node.connectionStatus === 'online';
+    if (nodeFilter === 'online' && !online || nodeFilter === 'offline' && online) return false;
+    return [node.name, node.serverIp, node.ip, node.version].join(' ').toLowerCase().includes(nodeSearch.trim().toLowerCase());
+  });
+  const clearNodeFilters = () => { setNodeSearch(''); setNodeFilter('all'); };
+
   const [loading, setLoading] = useState(false);
   const [nodeLoadError, setNodeLoadError] = useState('');
   const [socketStatus, setSocketStatus] = useState<'connecting' | 'connected' | 'reconnecting'>('connecting');
@@ -935,330 +945,58 @@ export default function NodePage() {
   return (
     
       <div className="px-3 py-3 lg:px-6 lg:py-8">
-        {/* 页面头部 */}
-        <div className="mb-4 flex items-center justify-between gap-3 lg:mb-6">
-          <div className="min-w-0">
-            <h1 className="text-lg font-semibold text-foreground lg:text-xl">节点监控</h1>
-            <p className="mt-0.5 truncate text-xs text-default-500">实时查看资源、链路速率与节点状态</p>
-          </div>
-          <Button
-            size="sm"
-            variant="flat"
-            color="primary"
-            onPress={handleAdd}
-            className="min-h-10 flex-shrink-0 px-4"
-          >
-            新增节点
-          </Button>
+        <ConsoleHeading title="节点监控" description="资源使用、网络速率与连接状态，一览掌握。">
+          <Button size="sm" variant="bordered" isDisabled={loading} onPress={retryMonitoring} startContent={<ConsoleIcon name="refresh" size={16}/>}>重新获取数据</Button>
+          <Button size="sm" color="primary" onPress={handleAdd} startContent={<ConsoleIcon name="plus" size={17}/>}>新增节点</Button>
+        </ConsoleHeading>
+        <div className="monitor-overview" aria-label="节点概览">
+          {[
+            {label: '全部节点', value: nodeList.length, tone: ''},
+            {label: '在线节点', value: nodeList.filter(node => node.connectionStatus === 'online').length, tone: 'success'},
+            {label: '离线节点', value: nodeList.filter(node => node.connectionStatus !== 'online').length, tone: 'warning'},
+            {label: '可管理', value: nodeList.filter(node => node.canManage !== false).length, tone: ''},
+          ].map(item => <div key={item.label}><span>{item.label}</span><strong className={`console-tone-${item.tone}`}>{item.value}</strong></div>)}
         </div>
-
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-divider bg-content1 px-3 py-2 text-xs" role="status" aria-live="polite">
-          <span className={socketStatus === 'connected' ? 'text-default-500' : 'text-warning-600'}>
-            {socketStatus === 'connecting' ? '正在连接实时监控…' : socketStatus === 'reconnecting'
-              ? '实时监控连接中断，正在自动重连；已显示数据可能不是最新。'
-              : nodeList.some(node => node.connectionStatus === 'online' && !node.systemInfo)
-                ? '实时监控已连接，部分在线节点正在等待首次上报。'
-                : '实时监控已连接'}
-          </span>
-          <Button size="sm" variant="light" isDisabled={loading} onPress={retryMonitoring}>重新获取数据</Button>
+        <div className={`monitor-connection ${socketStatus === 'connected' ? '' : 'is-pending'}`} role="status" aria-live="polite">
+          <span className={`console-status-dot ${socketStatus === 'connected' ? 'status-success' : 'status-warning'}`}/>
+          <span>{socketStatus === 'connecting' ? '正在连接实时监控…' : socketStatus === 'reconnecting'
+            ? '实时监控连接中断，正在自动重连；已显示数据可能不是最新。'
+            : nodeList.some(node => node.connectionStatus === 'online' && !node.systemInfo)
+              ? '实时监控已连接，部分在线节点正在等待首次上报。' : '实时监控已连接'}</span>
+          <span className="monitor-connection-hint">点击节点查看详细监控</span>
         </div>
-        {nodeLoadError && (
-          <div role="alert" className="mb-4 rounded-xl border border-danger-200 bg-danger-50 px-3 py-2 text-sm text-danger-700">
-            {nodeLoadError}，点击“重新获取数据”重试。
-          </div>
-        )}
-
-        {/* 节点列表 */}
-        {loading ? (
-          <div className="flex items-center justify-center h-64">
-            <div className="flex items-center gap-3">
-              <Spinner size="sm" />
-              <span className="text-default-600">正在加载...</span>
-            </div>
-          </div>
-        ) : nodeList.length === 0 && !nodeLoadError ? (
-          <Card className="shadow-sm border border-gray-200 dark:border-gray-700">
-            <CardBody className="text-center py-16">
-              <div className="flex flex-col items-center gap-4">
-                <div className="w-16 h-16 bg-default-100 rounded-full flex items-center justify-center">
-                  <svg className="w-8 h-8 text-default-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M5 12h14M5 12l4-4m-4 4l4 4" />
-                  </svg>
+        {nodeLoadError && <div role="alert" className="mb-4 rounded-xl border border-danger-200 bg-danger-50 px-3 py-2 text-sm text-danger-700">{nodeLoadError}，点击“重新获取数据”重试。</div>}
+        <div className="console-toolbar monitor-toolbar">
+          <ConsoleSearch value={nodeSearch} onChange={setNodeSearch} placeholder="搜索节点名称、IP 或版本…"/>
+          <select className="console-filter-select" aria-label="按节点状态筛选" value={nodeFilter} onChange={event => setNodeFilter(event.target.value)}><option value="all">全部状态</option><option value="online">在线</option><option value="offline">离线</option></select>
+          <div className="console-toolbar-tail">{visibleNodes.length} 个节点</div>
+        </div>
+        {loading ? <div className="flex items-center justify-center gap-3 py-20"><Spinner size="sm"/><span className="text-default-500 text-sm">正在加载…</span></div>
+          : nodeList.length === 0 && !nodeLoadError ? <Card><CardBody className="items-center gap-3 py-16"><ConsoleIcon name="node" size={32}/><h2>暂无节点配置</h2><p className="text-sm text-default-500">点击“新增节点”开始创建</p></CardBody></Card>
+          : visibleNodes.length === 0 ? <ConsoleEmpty onClear={clearNodeFilters}/>
+          : <div className="monitor-list" role="table" aria-label="节点实时监控">
+            <div className="monitor-list-header" role="row">{['节点 / 状态', 'CPU', '内存', '实时速率', '连接数', '网络趋势', '操作'].map(label => <div role="columnheader" key={label}>{label}</div>)}</div>
+            <div role="rowgroup">{visibleNodes.map(node => {
+              const online = node.connectionStatus === 'online';
+              const info = online ? node.systemInfo : null;
+              return <div className="monitor-row" role="row" key={node.id}>
+                <div className="monitor-identity" role="cell">
+                  <div className="monitor-name-line"><button onClick={() => setMonitorNodeId(node.id)} title={node.name}>{node.name}</button><span className={`monitor-status ${online ? 'is-online' : ''}`}><span className={`console-status-dot ${online ? 'status-success' : ''}`}/>{online ? '在线' : '离线'}</span></div>
+                  <span className="monitor-address" title={node.serverIp}>{node.serverIp || '未设置服务器地址'}</span>
+                  <span className="monitor-version">{node.version ? `v${node.version.replace(/^v/, '')}` : '版本未知'}{online && !info ? ' · 等待上报' : ''}</span>
                 </div>
-                <div>
-                  <h3 className="text-lg font-semibold text-foreground">暂无节点配置</h3>
-                  <p className="text-default-500 text-sm mt-1">还没有创建任何节点配置，点击上方按钮开始创建</p>
+                <div className="monitor-resource" role="cell" data-label="CPU"><strong>{info ? `${info.cpuUsage.toFixed(1)}%` : '—'}</strong><Progress aria-label={`${node.name} CPU 使用率`} value={info?.cpuUsage || 0} color={getProgressColor(info?.cpuUsage || 0, !info)} size="sm" className="monitor-progress"/><small>{info?.cpuCores ? `${info.cpuCores} 核` : '—'}</small></div>
+                <div className="monitor-resource" role="cell" data-label="内存"><strong>{info ? `${info.memoryUsage.toFixed(1)}%` : '—'}</strong><Progress aria-label={`${node.name} 内存使用率`} value={info?.memoryUsage || 0} color={getProgressColor(info?.memoryUsage || 0, !info)} size="sm" className="monitor-progress"/><small>{info?.memoryTotal ? formatCapacity(info.memoryTotal) : '—'}</small></div>
+                <div className="monitor-rates" role="cell" data-label="实时速率"><span><ConsoleIcon name="upload" size={14}/><span className="sr-only">上传</span>{info ? formatSpeed(info.uploadSpeed) : '—'}</span><span><ConsoleIcon name="download" size={14}/><span className="sr-only">下载</span>{info ? formatSpeed(info.downloadSpeed) : '—'}</span></div>
+                <div className="monitor-connections" role="cell" data-label="连接数"><span><small>TCP</small>{info ? formatOptionalNumber(info.tcpConnections) : '—'}</span><span><small>UDP</small>{info ? formatOptionalNumber(info.udpConnections) : '—'}</span></div>
+                <div className="monitor-trend" role="cell" data-label="网络趋势">{info && (metricHistory[node.id]?.length || 0) >= 2 ? <><MetricSparkline data={metricHistory[node.id]} dataKey="uploadSpeed" stroke="#397bf6" ariaLabel={`${node.name} 上传速率趋势`}/><MetricSparkline data={metricHistory[node.id]} dataKey="downloadSpeed" stroke="#16a36b" ariaLabel={`${node.name} 下载速率趋势`}/></> : <span>{online ? '等待采样' : '暂无实时数据'}</span>}</div>
+                <div className="monitor-actions" role="cell">
+                  <Button size="sm" variant="light" color="primary" onPress={() => setMonitorNodeId(node.id)} aria-label={`监控 ${node.name}`} startContent={<ConsoleIcon name="activity" size={16}/>}>监控</Button>
+                  {node.canManage !== false && <Dropdown><DropdownTrigger><Button isIconOnly size="sm" variant="light" aria-label={`管理 ${node.name}`}><ConsoleIcon name="more"/></Button></DropdownTrigger><DropdownMenu aria-label={`${node.name} 节点管理`} onAction={key => { if (key === 'install') openInstallCommand(node); if (key === 'edit') handleEdit(node); if (key === 'delete') handleDelete(node); }}><DropdownItem key="install" startContent={<ConsoleIcon name="vps" size={16}/>}>安装</DropdownItem><DropdownItem key="edit" startContent={<ConsoleIcon name="edit" size={16}/>}>编辑</DropdownItem><DropdownItem key="delete" color="danger" className="text-danger" startContent={<ConsoleIcon name="close" size={16}/>}>删除</DropdownItem></DropdownMenu></Dropdown>}
                 </div>
-              </div>
-            </CardBody>
-          </Card>
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4">
-            {nodeList.map((node) => (
-              <Card 
-                key={node.id} 
-                className="border border-divider shadow-sm transition-shadow duration-200 hover:shadow-md"
-              >
-                <CardHeader className="pb-2">
-                  <div className="flex justify-between items-start w-full">
-                    <div className="flex-1 min-w-0">
-                      <h3 className="font-semibold text-foreground truncate text-sm">{node.name}</h3>
-                      <p className="text-xs text-default-500 truncate">{node.serverIp}</p>
-                    </div>
-                    <div className="flex items-center gap-1.5 ml-2">
-                      <Chip 
-                        color={node.connectionStatus === 'online' ? 'success' : 'danger'} 
-                        variant="flat" 
-                        size="sm"
-                        className="text-xs"
-                      >
-                        {node.connectionStatus === 'online' ? '在线' : '离线'}
-                      </Chip>
-                    </div>
-                  </div>
-                </CardHeader>
-
-                <CardBody className="pt-0 pb-3">
-                  {/* 基础信息 */}
-                  <div className="space-y-2 mb-4">
-                    <div className="flex justify-between items-center text-sm min-w-0">
-                      <span className="text-default-600 flex-shrink-0">入口IP</span>
-                      <div className="text-right text-xs min-w-0 flex-1 ml-2">
-                        {node.ip ? (
-                          node.ip.split(',').length > 1 ? (
-                            <span className="font-mono truncate block" title={node.ip.split(',')[0].trim()}>
-                              {node.ip.split(',')[0].trim()} +{node.ip.split(',').length - 1}个
-                            </span>
-                          ) : (
-                            <span className="font-mono truncate block" title={node.ip.trim()}>
-                              {node.ip.trim()}
-                            </span>
-                          )
-                        ) : '-'}
-                      </div>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span className="text-default-600">端口</span>
-                      <span className="text-xs">{node.portSta}-{node.portEnd}</span>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span className="text-default-600">版本</span>
-                      <span className="text-xs">{node.version || '未知'}</span>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span className="text-default-600">开机时间</span>
-                      <span className="text-xs">
-                        {node.connectionStatus === 'online' && node.systemInfo 
-                          ? formatUptime(node.systemInfo.uptime)
-                          : '-'
-                        }
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* 服务器配置：由节点 Agent 只读采集，不保存或修改节点配置。 */}
-                  <div className="rounded-md border border-divider p-2.5 text-xs">
-                    <div className="mb-2 flex items-center justify-between">
-                      <span className="font-medium text-default-700">服务器配置</span>
-                      <span className="text-default-400">实时检测</span>
-                    </div>
-                    <div className="grid grid-cols-3 gap-2 text-center">
-                      <div className="rounded bg-default-50 px-1.5 py-1.5 dark:bg-default-100">
-                        <div className="text-default-500">CPU</div>
-                        <div className="mt-0.5 font-mono text-foreground">
-                          {node.systemInfo?.cpuCores ? `${node.systemInfo.cpuCores} 核` : '--'}
-                        </div>
-                      </div>
-                      <div className="rounded bg-default-50 px-1.5 py-1.5 dark:bg-default-100">
-                        <div className="text-default-500">内存</div>
-                        <div className="mt-0.5 font-mono text-foreground">{formatCapacity(node.systemInfo?.memoryTotal || 0)}</div>
-                      </div>
-                      <div className="rounded bg-default-50 px-1.5 py-1.5 dark:bg-default-100">
-                        <div className="text-default-500">硬盘</div>
-                        <div className="mt-0.5 font-mono text-foreground">
-                          {node.systemInfo?.diskUsed === undefined
-                            ? formatCapacity(node.systemInfo?.diskTotal || 0)
-                            : formatOptionalRatio(node.systemInfo.diskUsed, node.systemInfo.diskTotal)}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* 系统监控 */}
-                  <div className="space-y-3 mb-4">
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <div className="flex justify-between text-xs mb-1">
-                          <span>CPU</span>
-                          <span className="font-mono">
-                            {node.connectionStatus === 'online' && node.systemInfo 
-                              ? `${node.systemInfo.cpuUsage.toFixed(1)}%` 
-                              : '-'
-                            }
-                          </span>
-                        </div>
-                        <Progress
-                          value={node.connectionStatus === 'online' && node.systemInfo ? node.systemInfo.cpuUsage : 0}
-                          color={getProgressColor(
-                            node.connectionStatus === 'online' && node.systemInfo ? node.systemInfo.cpuUsage : 0,
-                            node.connectionStatus !== 'online'
-                          )}
-                          size="sm"
-                          aria-label="CPU使用率"
-                        />
-                      </div>
-                      <div>
-                        <div className="flex justify-between text-xs mb-1">
-                          <span>内存</span>
-                          <span className="font-mono">
-                            {node.connectionStatus === 'online' && node.systemInfo 
-                              ? `${node.systemInfo.memoryUsage.toFixed(1)}%` 
-                              : '-'
-                            }
-                          </span>
-                        </div>
-                        <Progress
-                          value={node.connectionStatus === 'online' && node.systemInfo ? node.systemInfo.memoryUsage : 0}
-                          color={getProgressColor(
-                            node.connectionStatus === 'online' && node.systemInfo ? node.systemInfo.memoryUsage : 0,
-                            node.connectionStatus !== 'online'
-                          )}
-                          size="sm"
-                          aria-label="内存使用率"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-2 text-xs">
-                      <div className="text-center p-2 bg-default-50 dark:bg-default-100 rounded">
-                        <div className="text-default-600 mb-0.5">上传</div>
-                        <div className="font-mono">
-                          {node.connectionStatus === 'online' && node.systemInfo 
-                            ? formatSpeed(node.systemInfo.uploadSpeed) 
-                            : '-'
-                          }
-                        </div>
-                      </div>
-                      <div className="text-center p-2 bg-default-50 dark:bg-default-100 rounded">
-                        <div className="text-default-600 mb-0.5">下载</div>
-                        <div className="font-mono">
-                          {node.connectionStatus === 'online' && node.systemInfo 
-                            ? formatSpeed(node.systemInfo.downloadSpeed) 
-                            : '-'
-                          }
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* 流量统计 */}
-                    <div className="grid grid-cols-2 gap-2 text-xs">
-                      <div className="text-center p-2 bg-primary-50 dark:bg-primary-100/20 rounded border border-primary-200 dark:border-primary-300/20">
-                        <div className="text-primary-600 dark:text-primary-400 mb-0.5">↑ 上行流量</div>
-                        <div className="font-mono text-primary-700 dark:text-primary-300">
-                          {node.connectionStatus === 'online' && node.systemInfo 
-                            ? formatTraffic(node.systemInfo.uploadTraffic) 
-                            : '-'
-                          }
-                        </div>
-                      </div>
-                      <div className="text-center p-2 bg-success-50 dark:bg-success-100/20 rounded border border-success-200 dark:border-success-300/20">
-                        <div className="text-success-600 dark:text-success-400 mb-0.5">↓ 下行流量</div>
-                        <div className="font-mono text-success-700 dark:text-success-300">
-                          {node.connectionStatus === 'online' && node.systemInfo 
-                            ? formatTraffic(node.systemInfo.downloadTraffic) 
-                            : '-'
-                          }
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-2 text-xs">
-                      <div className="rounded bg-default-50 p-2 text-center dark:bg-default-100">
-                        <div className="text-default-600">TCP 已建立</div>
-                        <div className="mt-0.5 font-mono text-foreground">
-                          {node.connectionStatus === 'online' ? formatOptionalNumber(node.systemInfo?.tcpConnections) : '-'}
-                        </div>
-                      </div>
-                      <div className="rounded bg-default-50 p-2 text-center dark:bg-default-100">
-                        <div className="text-default-600">UDP 活动套接字</div>
-                        <div className="mt-0.5 font-mono text-foreground">
-                          {node.connectionStatus === 'online' ? formatOptionalNumber(node.systemInfo?.udpConnections) : '-'}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* 小型实时曲线。完整曲线在“查看曲线”中展开。 */}
-                    <div className="rounded-md border border-divider p-2.5">
-                      <div className="mb-2 flex items-center justify-between text-xs">
-                        <span className="font-medium text-default-700">实时趋势</span>
-                        <Button
-                          size="sm"
-                          variant="light"
-                          color="primary"
-                          className="h-6 min-w-0 px-1.5 text-xs"
-                          onPress={() => setMonitorNodeId(node.id)}
-                        >
-                          查看曲线
-                        </Button>
-                      </div>
-                      <div className="grid grid-cols-2 gap-x-3 gap-y-2">
-                        <div>
-                          <div className="mb-0.5 flex justify-between text-[11px] text-default-500"><span>CPU</span><span>{node.systemInfo ? `${node.systemInfo.cpuUsage.toFixed(1)}%` : '--'}</span></div>
-                          <MetricSparkline data={metricHistory[node.id] || []} dataKey="cpuUsage" stroke="#3b82f6" ariaLabel={`${node.name} CPU趋势`} />
-                        </div>
-                        <div>
-                          <div className="mb-0.5 flex justify-between text-[11px] text-default-500"><span>内存</span><span>{node.systemInfo ? `${node.systemInfo.memoryUsage.toFixed(1)}%` : '--'}</span></div>
-                          <MetricSparkline data={metricHistory[node.id] || []} dataKey="memoryUsage" stroke="#8b5cf6" ariaLabel={`${node.name} 内存趋势`} />
-                        </div>
-                        <div>
-                          <div className="mb-0.5 text-[11px] text-default-500">上行速率</div>
-                          <MetricSparkline data={metricHistory[node.id] || []} dataKey="uploadSpeed" stroke="#f59e0b" ariaLabel={`${node.name} 上行速率趋势`} />
-                        </div>
-                        <div>
-                          <div className="mb-0.5 text-[11px] text-default-500">下行速率</div>
-                          <MetricSparkline data={metricHistory[node.id] || []} dataKey="downloadSpeed" stroke="#10b981" ariaLabel={`${node.name} 下行速率趋势`} />
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* 操作按钮 */}
-                  {node.canManage !== false && <div className="space-y-1.5">
-                    <div className="flex gap-1.5">
-                      <Button
-                        size="sm"
-                        variant="flat"
-                        color="success"
-                        onPress={() => openInstallCommand(node)}
-                        className="flex-1 min-h-8"
-                      >
-                        安装
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="flat"
-                        color="primary"
-                        onPress={() => handleEdit(node)}
-                        className="flex-1 min-h-8"
-                      >
-                        编辑
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="flat"
-                        color="danger"
-                        onPress={() => handleDelete(node)}
-                        className="flex-1 min-h-8"
-                      >
-                        删除
-                      </Button>
-                    </div>
-                  </div>}
-                </CardBody>
-              </Card>
-            ))}
-          </div>
-        )}
+              </div>;
+            })}</div>
+          </div>}
 
         {/* 展开后的实时曲线，不写入数据库；保存当前页面会话内最近 3 分钟。 */}
         <Modal
@@ -1268,9 +1006,19 @@ export default function NodePage() {
           scrollBehavior="inside"
           backdrop="blur"
         >
-          <ModalContent>
+          <ModalContent className="monitor-dialog">
             <ModalHeader>{monitorNode ? `${monitorNode.name} · 实时监控` : '实时监控'}</ModalHeader>
             <ModalBody>
+              {monitorNode && <div className="monitor-detail-facts">
+                <div><span>服务器地址</span><strong>{monitorNode.serverIp || '—'}</strong></div>
+                <div><span>入口 IP</span><strong>{monitorNode.ip || '—'}</strong></div>
+                <div><span>端口范围</span><strong>{monitorNode.portSta} – {monitorNode.portEnd}</strong></div>
+                <div><span>Agent 版本</span><strong>{monitorNode.version || '未知'}</strong></div>
+                <div><span>运行时长</span><strong>{monitorNode.systemInfo ? formatUptime(monitorNode.systemInfo.uptime) : '—'}</strong></div>
+                <div><span>累计上传 / 下载</span><strong>{monitorNode.systemInfo ? `${formatTraffic(monitorNode.systemInfo.uploadTraffic)} / ${formatTraffic(monitorNode.systemInfo.downloadTraffic)}` : '—'}</strong></div>
+              </div>}
+              {monitorNode?.connectionStatus !== 'online' && <p className="text-sm text-warning-600">节点当前离线，已保存的样本仅供参考。</p>}
+
               {monitorNode?.systemInfo && (
                 <>
                   <div className="grid grid-cols-3 gap-3 rounded-lg bg-default-50 p-3 text-center text-sm dark:bg-default-100">
@@ -1278,6 +1026,91 @@ export default function NodePage() {
                     <div><div className="text-default-500">内存</div><div className="mt-1 font-mono">{formatCapacity(monitorNode.systemInfo.memoryTotal)}</div></div>
                     <div><div className="text-default-500">硬盘</div><div className="mt-1 font-mono">{monitorNode.systemInfo.diskUsed === undefined ? formatCapacity(monitorNode.systemInfo.diskTotal) : formatOptionalRatio(monitorNode.systemInfo.diskUsed, monitorNode.systemInfo.diskTotal)}</div></div>
                   </div>
+                </>
+              )}
+
+              {monitorSamples.length < 2 ? (
+                <div className="py-16 text-center text-default-500">正在等待节点上报至少两组实时数据…</div>
+              ) : (
+                <div className="monitor-chart-grid">
+                  <div>
+                    <div className="mb-2 text-sm font-medium text-foreground">CPU 与内存使用率</div>
+                    <div className="monitor-chart">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={monitorSamples} margin={{ top: 8, right: 18, bottom: 4, left: 0 }}>
+                          <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
+                          <XAxis dataKey="timestamp" tickFormatter={formatChartTime} minTickGap={48} tick={{ fontSize: 11 }} />
+                          <YAxis domain={[0, 100]} unit="%" tick={{ fontSize: 11 }} width={42} />
+                          <Tooltip
+                            labelFormatter={(value) => `时间：${formatChartTime(Number(value))}`}
+                            formatter={(value, name) => [`${Number(value).toFixed(1)}%`, name]}
+                          />
+                          <Line type="monotone" dataKey="cpuUsage" name="CPU" stroke="#3b82f6" strokeWidth={2} dot={false} isAnimationActive={false} />
+                          <Line type="monotone" dataKey="memoryUsage" name="内存" stroke="#8b5cf6" strokeWidth={2} dot={false} isAnimationActive={false} />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="mb-2 text-sm font-medium text-foreground">网络实时速率</div>
+                    <div className="monitor-chart">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={monitorSamples} margin={{ top: 8, right: 18, bottom: 4, left: 0 }}>
+                          <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
+                          <XAxis dataKey="timestamp" tickFormatter={formatChartTime} minTickGap={48} tick={{ fontSize: 11 }} />
+                          <YAxis tickFormatter={(value) => formatSpeed(Number(value))} tick={{ fontSize: 11 }} width={68} />
+                          <Tooltip
+                            labelFormatter={(value) => `时间：${formatChartTime(Number(value))}`}
+                            formatter={(value, name) => [formatSpeed(Number(value)), name]}
+                          />
+                          <Line type="monotone" dataKey="uploadSpeed" name="上行" stroke="#f59e0b" strokeWidth={2} dot={false} isAnimationActive={false} />
+                          <Line type="monotone" dataKey="downloadSpeed" name="下行" stroke="#10b981" strokeWidth={2} dot={false} isAnimationActive={false} />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="mb-2 text-sm font-medium text-foreground">Agent 连接数</div>
+                    <div className="monitor-chart">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={monitorSamples} margin={{ top: 8, right: 18, bottom: 4, left: 0 }}>
+                          <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
+                          <XAxis dataKey="timestamp" tickFormatter={formatChartTime} minTickGap={48} tick={{ fontSize: 11 }} />
+                          <YAxis allowDecimals={false} tick={{ fontSize: 11 }} width={42} />
+                          <Tooltip
+                            labelFormatter={(value) => `时间：${formatChartTime(Number(value))}`}
+                            formatter={(value, name) => [Number(value).toFixed(0), name]}
+                          />
+                          <Line connectNulls type="monotone" dataKey="tcpConnections" name="TCP 已建立" stroke="#f97316" strokeWidth={2} dot={false} isAnimationActive={false} />
+                          <Line connectNulls type="monotone" dataKey="udpConnections" name="UDP 活动套接字" stroke="#06b6d4" strokeWidth={2} dot={false} isAnimationActive={false} />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="mb-2 text-sm font-medium text-foreground">内存可用量与 Agent RSS</div>
+                    <div className="monitor-chart">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={monitorSamples} margin={{ top: 8, right: 18, bottom: 4, left: 0 }}>
+                          <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
+                          <XAxis dataKey="timestamp" tickFormatter={formatChartTime} minTickGap={48} tick={{ fontSize: 11 }} />
+                          <YAxis tickFormatter={(value) => formatTraffic(Number(value))} tick={{ fontSize: 11 }} width={68} />
+                          <Tooltip
+                            labelFormatter={(value) => `时间：${formatChartTime(Number(value))}`}
+                            formatter={(value, name) => [formatTraffic(Number(value)), name]}
+                          />
+                          <Line connectNulls type="monotone" dataKey="memoryAvailable" name="可用内存" stroke="#22c55e" strokeWidth={2} dot={false} isAnimationActive={false} />
+                          <Line connectNulls type="monotone" dataKey="agentRss" name="Agent RSS" stroke="#ec4899" strokeWidth={2} dot={false} isAnimationActive={false} />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                </div>
+              )}
+              {monitorNode?.systemInfo && <details className="monitor-diagnostics"><summary>连接、内存与链路诊断<span>展开详细指标</span></summary><div className="space-y-3 pt-4">
                   <div className="grid grid-cols-2 gap-3 rounded-lg border border-divider p-3 text-center text-sm md:grid-cols-4">
                     <div><div className="text-default-500">TCP 已建立</div><div className="mt-1 font-mono">{formatOptionalNumber(monitorNode.systemInfo.tcpConnections)}</div></div>
                     <div><div className="text-default-500">UDP 活动套接字</div><div className="mt-1 font-mono">{formatOptionalNumber(monitorNode.systemInfo.udpConnections)}</div></div>
@@ -1308,90 +1141,7 @@ export default function NodePage() {
                       {monitorNode.systemInfo.tcpTuningReason && <div className="mt-1 text-xs text-default-500">{monitorNode.systemInfo.tcpTuningReason}</div>}
                     </div>
                   )}
-                </>
-              )}
-
-              {monitorSamples.length < 2 ? (
-                <div className="py-16 text-center text-default-500">正在等待节点上报至少两组实时数据…</div>
-              ) : (
-                <div className="space-y-6">
-                  <div>
-                    <div className="mb-2 text-sm font-medium text-foreground">CPU 与内存使用率</div>
-                    <div className="h-64 w-full">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <LineChart data={monitorSamples} margin={{ top: 8, right: 18, bottom: 4, left: 0 }}>
-                          <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
-                          <XAxis dataKey="timestamp" tickFormatter={formatChartTime} minTickGap={48} tick={{ fontSize: 11 }} />
-                          <YAxis domain={[0, 100]} unit="%" tick={{ fontSize: 11 }} width={42} />
-                          <Tooltip
-                            labelFormatter={(value) => `时间：${formatChartTime(Number(value))}`}
-                            formatter={(value, name) => [`${Number(value).toFixed(1)}%`, name]}
-                          />
-                          <Line type="monotone" dataKey="cpuUsage" name="CPU" stroke="#3b82f6" strokeWidth={2} dot={false} isAnimationActive={false} />
-                          <Line type="monotone" dataKey="memoryUsage" name="内存" stroke="#8b5cf6" strokeWidth={2} dot={false} isAnimationActive={false} />
-                        </LineChart>
-                      </ResponsiveContainer>
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="mb-2 text-sm font-medium text-foreground">网络实时速率</div>
-                    <div className="h-64 w-full">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <LineChart data={monitorSamples} margin={{ top: 8, right: 18, bottom: 4, left: 0 }}>
-                          <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
-                          <XAxis dataKey="timestamp" tickFormatter={formatChartTime} minTickGap={48} tick={{ fontSize: 11 }} />
-                          <YAxis tickFormatter={(value) => formatSpeed(Number(value))} tick={{ fontSize: 11 }} width={68} />
-                          <Tooltip
-                            labelFormatter={(value) => `时间：${formatChartTime(Number(value))}`}
-                            formatter={(value, name) => [formatSpeed(Number(value)), name]}
-                          />
-                          <Line type="monotone" dataKey="uploadSpeed" name="上行" stroke="#f59e0b" strokeWidth={2} dot={false} isAnimationActive={false} />
-                          <Line type="monotone" dataKey="downloadSpeed" name="下行" stroke="#10b981" strokeWidth={2} dot={false} isAnimationActive={false} />
-                        </LineChart>
-                      </ResponsiveContainer>
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="mb-2 text-sm font-medium text-foreground">Agent 连接数</div>
-                    <div className="h-56 w-full">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <LineChart data={monitorSamples} margin={{ top: 8, right: 18, bottom: 4, left: 0 }}>
-                          <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
-                          <XAxis dataKey="timestamp" tickFormatter={formatChartTime} minTickGap={48} tick={{ fontSize: 11 }} />
-                          <YAxis allowDecimals={false} tick={{ fontSize: 11 }} width={42} />
-                          <Tooltip
-                            labelFormatter={(value) => `时间：${formatChartTime(Number(value))}`}
-                            formatter={(value, name) => [Number(value).toFixed(0), name]}
-                          />
-                          <Line connectNulls type="monotone" dataKey="tcpConnections" name="TCP 已建立" stroke="#f97316" strokeWidth={2} dot={false} isAnimationActive={false} />
-                          <Line connectNulls type="monotone" dataKey="udpConnections" name="UDP 活动套接字" stroke="#06b6d4" strokeWidth={2} dot={false} isAnimationActive={false} />
-                        </LineChart>
-                      </ResponsiveContainer>
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="mb-2 text-sm font-medium text-foreground">内存可用量与 Agent RSS</div>
-                    <div className="h-56 w-full">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <LineChart data={monitorSamples} margin={{ top: 8, right: 18, bottom: 4, left: 0 }}>
-                          <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
-                          <XAxis dataKey="timestamp" tickFormatter={formatChartTime} minTickGap={48} tick={{ fontSize: 11 }} />
-                          <YAxis tickFormatter={(value) => formatTraffic(Number(value))} tick={{ fontSize: 11 }} width={68} />
-                          <Tooltip
-                            labelFormatter={(value) => `时间：${formatChartTime(Number(value))}`}
-                            formatter={(value, name) => [formatTraffic(Number(value)), name]}
-                          />
-                          <Line connectNulls type="monotone" dataKey="memoryAvailable" name="可用内存" stroke="#22c55e" strokeWidth={2} dot={false} isAnimationActive={false} />
-                          <Line connectNulls type="monotone" dataKey="agentRss" name="Agent RSS" stroke="#ec4899" strokeWidth={2} dot={false} isAnimationActive={false} />
-                        </LineChart>
-                      </ResponsiveContainer>
-                    </div>
-                  </div>
-                </div>
-              )}
+              </div></details>}
               <p className="text-xs text-default-400">曲线保留当前页面最近约 3 分钟的实时样本；刷新页面后重新开始采集。TCP/UDP 统计为 Agent/GOST 进程套接字，不等同于账号在线人数。</p>
             </ModalBody>
             <ModalFooter>
