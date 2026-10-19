@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/go-gost/x/config"
@@ -65,9 +66,9 @@ func TestFreshAgentHTTPReportUsesCompleteInventory(t *testing.T) {
 		config.Set(previousConfig)
 		configReportURL, httpReportToken, httpAESCrypto = previousURL, previousToken, previousCrypto
 	})
-	seen := false
+	var seen atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		seen = true
+		seen.Store(true)
 		if r.Header.Get("Authorization") != "Bearer test-node-only" || r.Header.Get("User-Agent") != "Config-Reporter/1.0" {
 			t.Error("inventory report lost authentication or compatible User-Agent")
 		}
@@ -84,7 +85,7 @@ func TestFreshAgentHTTPReportUsesCompleteInventory(t *testing.T) {
 	defer server.Close()
 	configReportURL, httpReportToken, httpAESCrypto = server.URL, "test-node-only", nil
 	ok, err := sendConfigReport(context.Background())
-	if err != nil || !ok || !seen {
+	if err != nil || !ok || !seen.Load() {
 		t.Fatalf("report failed: %v %v", ok, err)
 	}
 }
