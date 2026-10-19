@@ -817,7 +817,7 @@ export default function NodePage() {
         setInstallCommand(res.data);
         try {
           await navigator.clipboard.writeText(res.data);
-          toast.success('安装命令已复制，10 分钟内单次有效');
+          toast.success('安装命令已复制，永久有效，可重复执行');
         } catch (copyError) {
           toast('安装命令已生成，请手动复制');
         }
@@ -836,7 +836,7 @@ export default function NodePage() {
   const handleManualCopy = async () => {
     try {
       await navigator.clipboard.writeText(installCommand);
-      toast.success('安装命令已复制，10 分钟内单次有效');
+      toast.success('安装命令已复制，永久有效，可重复执行');
       setInstallCommandModal(false);
     } catch (error) {
       toast.error('复制失败，请手动选择文本复制');
@@ -1413,7 +1413,7 @@ export default function NodePage() {
                 <p className="text-sm text-default-600">
                   请复制以下安装命令到服务器上执行：
                 </p>
-                <p className="text-sm text-warning-600">命令 10 分钟内单次有效；领取或下载失败后，请关闭窗口并重新获取。</p>
+                <p className="text-sm text-warning-600">命令永久有效，可保存到自动换机脚本并重复执行；每次执行都会使用节点当前保存的安装设置。</p>
                 <div className="relative">
                   <Textarea
                     value={installCommand}
