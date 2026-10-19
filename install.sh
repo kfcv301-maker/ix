@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 
 # Keep fresh installs on the reviewed TCP buffer fix after a node OS reinstall.
-AGENT_RELEASE="${AGENT_RELEASE:-1.4.12}"
+AGENT_RELEASE="${AGENT_RELEASE:-1.4.13}"
 [[ "$AGENT_RELEASE" =~ ^[0-9]+(\.[0-9]+){1,3}$ ]] || { printf '无效的 Agent 发布版本：%s\n' "$AGENT_RELEASE" >&2; exit 1; }
 AGENT_RELEASE_BASE="${AGENT_RELEASE_BASE:-https://github.com/kfcv301-maker/ix/releases/download/${AGENT_RELEASE}}"
 INSTALL_DIR="${INSTALL_DIR:-/etc/flux-panel-agent}"
@@ -60,8 +60,8 @@ Lunaris Relay 节点 Agent 安装脚本
   install.sh --uninstall
 
 可选环境变量：
-  AGENT_RELEASE=1.4.12
-  AGENT_RELEASE_BASE=https://github.com/kfcv301-maker/ix/releases/download/1.4.12
+  AGENT_RELEASE=1.4.13
+  AGENT_RELEASE_BASE=https://github.com/kfcv301-maker/ix/releases/download/1.4.13
   INSTALL_DIR=/etc/flux-panel-agent
 EOF
 }
@@ -604,7 +604,7 @@ write_config() {
 }
 EOF
   chmod 600 "$INSTALL_DIR/config.json"
-  [[ -f "$INSTALL_DIR/gost.json" ]] || printf '{}\n' > "$INSTALL_DIR/gost.json"
+  [[ -f "$INSTALL_DIR/gost.json" ]] || printf '{"services":[],"chains":[],"limiters":[]}\n' > "$INSTALL_DIR/gost.json"
   chmod 600 "$INSTALL_DIR/gost.json"
 }
 
@@ -724,7 +724,8 @@ json_string() {
 }
 
 json_record_count() {
-  grep -oE '"id"[[:space:]]*:[[:space:]]*"[^"]+"' | wc -l | tr -d '[:space:]'
+  # grep's no-match exit status is valid when the DNS record does not exist.
+  { grep -oE '"id"[[:space:]]*:[[:space:]]*"[^"]+"' || [[ "$?" -eq 1 ]]; } | wc -l | tr -d '[:space:]'
 }
 
 is_valid_ipv4() {

@@ -31,4 +31,6 @@ public interface NodeService extends IService<Node> {
 
     String claimInstallScript(String bootstrapToken);
 
+    String getReusableInstallScript(Long nodeId, Long issuerId, String panelUrl, String installToken);
+
 }

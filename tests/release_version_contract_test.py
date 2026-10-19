@@ -21,8 +21,9 @@ class ReleaseVersionContractTest(unittest.TestCase):
             'springboot-backend/src/main/resources/application.yml',
             'springboot-backend/src/main/java/com/admin/service/impl/NodeServiceImpl.java',
             'springboot-backend/src/main/java/com/admin/service/impl/VpsSshServiceImpl.java',
+            'go-gost/main.go',
         ]
-        pattern = r'(?:AGENT_RELEASE|REPO_REF|AGENT_INSTALL_RELEASE|VPS_BACKEND_INSTALL_RELEASE|PANEL_RELEASE_REF|agent\.install\.release|vps\.backend-install\.release):[-]?([\d.]+)|"BRANCH", "([\d.]+)"|const VERSION = "([\d.]+)"'
+        pattern = r'(?:AGENT_RELEASE|REPO_REF|AGENT_INSTALL_RELEASE|VPS_BACKEND_INSTALL_RELEASE|PANEL_RELEASE_REF|agent\.install\.release|vps\.backend-install\.release):[-]?([\d.]+)|"BRANCH", "([\d.]+)"|const VERSION = "([\d.]+)"|const panelAgentVersion = "([\d.]+)-enhanced"'
         for name in files:
             with self.subTest(file=name):
                 matches = re.findall(pattern, (ROOT / name).read_text(encoding='utf-8'))

@@ -84,9 +84,11 @@ func worker(id int, args []string, ctx *context.Context, ret *int) {
 	}
 }
 
-func init() {
-	var printVersion bool
+var printVersion bool
 
+const panelAgentVersion = "1.4.13-enhanced"
+
+func init() {
 	flag.Var(&services, "L", "service list")
 	flag.Var(&nodes, "F", "chain node list")
 	flag.StringVar(&cfgFile, "C", "", "configuration file")
@@ -96,6 +98,9 @@ func init() {
 	flag.BoolVar(&trace, "DD", false, "trace mode")
 	flag.StringVar(&apiAddr, "api", "", "api service address")
 	flag.StringVar(&metricsAddr, "metrics", "", "metrics service address")
+}
+
+func main() {
 	flag.Parse()
 
 	if printVersion {
@@ -103,9 +108,6 @@ func init() {
 			version, runtime.Version(), runtime.GOOS, runtime.GOARCH)
 		os.Exit(0)
 	}
-}
-
-func main() {
 	// 加载配置文件
 	config, err := LoadConfig("config.json")
 	if err != nil {
@@ -121,14 +123,14 @@ func main() {
 
 	// 用独立版本标记让面板可以识别本增强版 Agent，便于重装后的规则恢复与排查。
 	service.SetHTTPReportURL(config.Addr, config.Secret)
-	wsReporter := socket.StartWebSocketReporterWithConfig(config.Addr, config.Secret, config.Http, config.Tls, config.Socks, "1.2.8-enhanced")
-	// The HTTP reporting endpoint must be ready before the first WSS connection
-	// succeeds. Otherwise a panel restart can leave the Agent online but wait
-	// for the ten-minute periodic report before its forwarding rules recover.
-	wsReporter.SetConnectedHandler(service.ReportConfigNow)
-	defer wsReporter.Stop()
-
-	p := &program{}
+	p := &program{startReporter: func() func() {
+		// Do not connect until the saved runtime config has loaded and services
+		// have started. A fast panel could otherwise reconcile an empty global
+		// config, then have its recovered rules overwritten by startup loading.
+		wsReporter := socket.StartWebSocketReporterWithConfig(config.Addr, config.Secret, config.Http, config.Tls, config.Socks, panelAgentVersion)
+		wsReporter.SetConnectedHandler(service.ReportConfigNow)
+		return wsReporter.Stop
+	}}
 	if err := svc.Run(p); err != nil {
 		logger.Default().Fatal(err)
 	}

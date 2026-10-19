@@ -22,6 +22,7 @@ class NodeInstallCommandTest {
     private Node node;
     private User issuer;
     private UserMapper users;
+    private String origin;
 
     @BeforeEach
     void setup() {
@@ -45,20 +46,20 @@ class NodeInstallCommandTest {
     }
 
     @Test
-    void shortCommandDoesNotExposePermanentCredentialsAndStillPinsAndChecksInstaller() {
+    void permanentCommandDoesNotExposeNodeOrDdnsCredentialsAndChecksInstaller() {
         node.setDdnsEnabled(1);
         node.setDdnsRecordName("relay.example.com");
         node.setDdnsToken(new AESCrypto("test-jwt-key:node-ddns:v1").encrypt("cf-permanent-secret"));
         R response = issue("https://panel.example.com");
         String command = (String) response.getData();
         assertEquals(0, response.getCode());
-        assertTrue(command.length() < 230, "short command length=" + command.length());
+        assertTrue(command.length() < 500);
         assertFalse(command.contains("node-permanent-secret"));
         assertFalse(command.contains("cf-permanent-secret"));
         assertFalse(command.contains("| bash"));
         assertTrue(command.contains(" -o \"$f\" && bash \"$f\""));
         assertTrue(command.contains("trap 'rm -f \"$f\"' EXIT"));
-        String script = service.claimInstallScript(token(command));
+        String script = download(token(command));
         assertNotNull(script);
         assertTrue(script.startsWith("#!/usr/bin/env bash\nset -eu;"));
         assertTrue(script.contains("releases/download/1.4.10/install.sh"));
@@ -66,17 +67,39 @@ class NodeInstallCommandTest {
         assertTrue(script.contains("[ \"$expected\" = \"$actual\" ]"));
         assertTrue(script.contains("--token 'node-permanent-secret'"));
         assertTrue(script.contains("--cf-api-token 'cf-permanent-secret'"));
-        assertNull(service.claimInstallScript(token(command)));
+        assertNotNull(download(token(command)));
     }
 
     @Test
     void preservesHttpOriginsAndCustomPortsWithoutAddingATlsDeploymentPrerequisite() {
         R response = issue("http://127.0.0.1:8080/");
         String command = (String) response.getData();
-        assertTrue(command.contains("http://127.0.0.1:8080/api/v1/node/bootstrap/"));
-        String script = service.claimInstallScript(token(command));
+        assertTrue(command.contains("http://127.0.0.1:8080/api/v1/node/install-script/1"));
+        String script = download(token(command));
         assertTrue(script.contains("--panel 'http://127.0.0.1:8080'"));
         assertTrue(script.contains("https://github.com/kfcv301-maker/ix/releases/download/1.4.10"));
+    }
+
+    @Test
+    void sameCommandSurvivesBackendRestartAndRepeatedDownloads() {
+        String command = (String) issue("https://panel.example.com").getData();
+        String capability = token(command);
+        String before = download(capability);
+        assertEquals(before, download(capability));
+        assertEquals(command, issue("https://panel.example.com").getData());
+        NodeServiceImpl restarted = spy(new NodeServiceImpl());
+        ReflectionTestUtils.setField(restarted, "userMapper", users);
+        ReflectionTestUtils.setField(restarted, "agentInstallRelease", "1.4.10");
+        ReflectionTestUtils.setField(restarted, "jwtSecret", "test-jwt-key");
+        doReturn(node).when(restarted).getById(1L);
+        assertEquals(before, restarted.getReusableInstallScript(1L, 2L, origin, capability));
+    }
+
+    @Test
+    void capabilityCannotBeRedirectedToAnotherPanelOrigin() {
+        String capability = token((String) issue("https://panel.example.com").getData());
+        assertNull(service.getReusableInstallScript(1L, 2L, "https://other.example.com", capability));
+        assertNull(service.getReusableInstallScript(1L, 2L, origin, "A".repeat(43)));
     }
 
     @Test
@@ -98,11 +121,11 @@ class NodeInstallCommandTest {
     void removedNodesAndAccountsCannotDownloadTheirPreviouslyIssuedScript() {
         String token = token((String) issue("https://panel.example.com").getData());
         doReturn(null).when(service).getById(1L);
-        assertNull(service.claimInstallScript(token));
+        assertNull(download(token));
         setup();
         token = token((String) issue("https://panel.example.com").getData());
         when(users.selectById(2L)).thenReturn(null);
-        assertNull(service.claimInstallScript(token));
+        assertNull(download(token));
     }
 
     @Test
@@ -122,25 +145,26 @@ class NodeInstallCommandTest {
         node.setTcpTuningAutoEnabled(1);
         node.setTcpTuningProfileMin("tiny");
         node.setTcpTuningProfileMax("balanced");
-        String script = service.claimInstallScript(token);
+        String script = download(token);
         assertTrue(script.contains("--tcp-auto-tune --tcp-profile-min 'tiny' --tcp-profile-max 'balanced'"));
         assertFalse(script.contains("--tcp-profile '"));
         node.setSecret("quote'$(touch /tmp/unwanted)");
         token = token((String) issue("https://panel.example.com").getData());
-        assertTrue(service.claimInstallScript(token).contains("--token 'quote'\"'\"'$(touch /tmp/unwanted)'"));
+        assertTrue(download(token).contains("--token 'quote'\"'\"'$(touch /tmp/unwanted)'"));
     }
 
     private void assertRevoked(Runnable mutation) {
         String token = token((String) issue("https://panel.example.com").getData());
         mutation.run();
-        assertNull(service.claimInstallScript(token));
-        assertNull(service.claimInstallScript(token));
+        assertNull(download(token));
+        assertNull(download(token));
     }
 
-    private R issue(String origin) {
+    private R issue(String originArgument) {
+        origin = originArgument;
         NodeInstallCommandDto request = new NodeInstallCommandDto();
         request.setId(1L);
-        request.setPanelUrl(origin);
+        request.setPanelUrl(originArgument);
         try (var jwt = mockStatic(JwtUtil.class)) {
             jwt.when(JwtUtil::getUserIdFromToken).thenReturn(2);
             jwt.when(JwtUtil::getRoleIdFromToken).thenReturn(issuer.getRoleId());
@@ -148,8 +172,12 @@ class NodeInstallCommandTest {
         }
     }
 
+    private String download(String token) {
+        return service.getReusableInstallScript(1L, 2L, origin, token);
+    }
+
     private String token(String command) {
-        var matcher = Pattern.compile("/api/v1/node/bootstrap/([A-Za-z0-9_-]{32})").matcher(command);
+        var matcher = Pattern.compile("Authorization: Bearer ([A-Za-z0-9_-]{43})").matcher(command);
         assertTrue(matcher.find());
         return matcher.group(1);
     }

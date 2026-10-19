@@ -120,6 +120,19 @@ public class FlowController extends BaseController {
                 configPayload = actualConfig;
             }
             GostConfigDto gostConfigDto = configPayload.toJavaObject(GostConfigDto.class);
+            // Legacy Config-Reporter sends a full GOST snapshot, but Go encodes
+            // a fresh services slice as null and omits empty chains/limiters.
+            // Normalize that known reporter's complete snapshot, or a payload
+            // explicitly carrying all three registries. Unknown partial reports
+            // retain null/omitted fields so they cannot recreate missing rules.
+            boolean completeInventory = configPayload.containsKey("services")
+                    && ("Config-Reporter/1.0".equals(request.getHeader("User-Agent"))
+                        || (configPayload.containsKey("chains") && configPayload.containsKey("limiters")));
+            if (completeInventory) {
+                if (gostConfigDto.getServices() == null) gostConfigDto.setServices(List.of());
+                if (gostConfigDto.getChains() == null) gostConfigDto.setChains(List.of());
+                if (gostConfigDto.getLimiters() == null) gostConfigDto.setLimiters(List.of());
+            }
             try {
                 checkGostConfigAsync.cleanNodeConfigs(node.getId().toString(), gostConfigDto);
             } catch (RuntimeException exception) {

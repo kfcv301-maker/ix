@@ -567,7 +567,29 @@ func getConfigData() ([]byte, error) {
 	buf := &bytes.Buffer{}
 	// 后端兼容旧版 {"config": {...}} 格式，但新 agent 直接上报配置体，
 	// 避免服务、链和限速器在恢复流程中被错误解析为空。
-	config.Global().Write(buf, "json")
+	// A full runtime snapshot knows that nil registries are empty. Emit [] so
+	// existing panels do not mistake a fresh Agent for a partial/unknown report
+	// and skip reinstall recovery. Normalize the snapshot, not the live config.
+	snapshot := config.Global()
+	if snapshot.Services == nil {
+		snapshot.Services = []*config.ServiceConfig{}
+	}
+	if snapshot.Chains == nil {
+		snapshot.Chains = []*config.ChainConfig{}
+	}
+	if snapshot.Limiters == nil {
+		snapshot.Limiters = []*config.LimiterConfig{}
+	}
+	// Config.Write omits empty chains/limiters by design. A report must carry
+	// those fields even when empty so relay and limiter recovery is possible.
+	inventory := struct {
+		*config.Config
+		Chains   []*config.ChainConfig   `json:"chains"`
+		Limiters []*config.LimiterConfig `json:"limiters"`
+	}{snapshot, snapshot.Chains, snapshot.Limiters}
+	if err := json.NewEncoder(buf).Encode(inventory); err != nil {
+		return nil, fmt.Errorf("serialize config inventory: %w", err)
+	}
 	return buf.Bytes(), nil
 }
 

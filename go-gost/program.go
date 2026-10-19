@@ -30,7 +30,9 @@ type program struct {
 	srvMetrics   service.Service
 	srvProfiling *http.Server
 
-	cancel context.CancelFunc
+	cancel        context.CancelFunc
+	startReporter func() func()
+	stopReporter  func()
 }
 
 func (p *program) Init(env svc.Environment) error {
@@ -68,6 +70,9 @@ func (p *program) Start() error {
 
 	if err := p.run(cfg); err != nil {
 		return err
+	}
+	if p.startReporter != nil {
+		p.stopReporter = p.startReporter()
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -176,6 +181,9 @@ func (p *program) run(cfg *config.Config) error {
 }
 
 func (p *program) Stop() error {
+	if p.stopReporter != nil {
+		p.stopReporter()
+	}
 	if p.cancel != nil {
 		p.cancel()
 	}

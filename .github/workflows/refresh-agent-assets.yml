@@ -1,0 +1,54 @@
+name: Refresh verified Agent installer assets
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [fix/agent-reinstall-inventory-20261019]
+    paths: [go-gost/**, .github/workflows/refresh-agent-assets.yml]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: refresh-agent-assets-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.23.4"
+          cache-dependency-path: |
+            go-gost/go.sum
+            go-gost/x/go.sum
+      - name: Build both architectures from the exact Agent source commit
+        shell: bash
+        run: |
+          source_revision="$(git log -1 --format=%H -- go-gost)"
+          echo "AGENT_SOURCE_REVISION=$source_revision" >> "$GITHUB_ENV"
+          git checkout --detach "$source_revision"
+          cd go-gost
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -buildvcs=true -ldflags="-s -w" -o "$RUNNER_TEMP/flux-panel-agent-linux-$arch" .
+            actual="$(go version -m "$RUNNER_TEMP/flux-panel-agent-linux-$arch" | awk '$1 == "build" && $2 ~ /^vcs.revision=/ { sub(/^vcs.revision=/, "", $2); print $2 }')"
+            [[ "$actual" == "$source_revision" ]]
+          done
+      - name: Commit verified assets without overwriting a newer branch head
+        shell: bash
+        run: |
+          git checkout --detach "$GITHUB_SHA"
+          git fetch origin "$GITHUB_REF_NAME"
+          [[ "$(git rev-parse FETCH_HEAD)" == "$GITHUB_SHA" ]] || { echo 'Branch advanced; a newer run will refresh assets.'; exit 0; }
+          for arch in amd64 arm64; do
+            cp "$RUNNER_TEMP/flux-panel-agent-linux-$arch" "artifacts/flux-panel-agent-linux-$arch"
+            (cd artifacts && sha256sum "flux-panel-agent-linux-$arch" > "flux-panel-agent-linux-$arch.sha256")
+          done
+          git add artifacts/flux-panel-agent-linux-*
+          git diff --cached --quiet && exit 0
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m "Build verified installer Agents from $AGENT_SOURCE_REVISION"
+          git push origin "HEAD:refs/heads/$GITHUB_REF_NAME"

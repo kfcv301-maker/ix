@@ -105,6 +105,7 @@ class CheckGostConfigAsyncTest {
 
     private MockedStatic<WebSocketServer> socket() {
         MockedStatic<WebSocketServer> socket = mockStatic(WebSocketServer.class);
+        socket.when(() -> WebSocketServer.nodeConnectionIdentity(1L)).thenReturn("test-connection");
         socket.when(() -> WebSocketServer.send_msg(anyLong(), any(), anyString())).thenAnswer(call -> {
             String command = call.getArgument(2);
             commands.add(command);
@@ -366,6 +367,25 @@ class CheckGostConfigAsyncTest {
         assertEquals(List.of("12_7_9_udp"), createdServices);
         verify(pauseTasks, times(2)).retryPendingForNode(1L);
         verify(syncTasks, times(2)).retryPendingForNode(1L);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void identicalInventoryFromReinstalledConnectionIsNeverSuppressed(boolean completelyEmpty) {
+        GostConfigDto config = completelyEmpty ? inventory() : inventory("12_7_9_tcp");
+        try (var socket = socket()) {
+            socket.when(() -> WebSocketServer.nodeConnectionIdentity(1L)).thenReturn("first-machine");
+            service.cleanNodeConfigs("1", config);
+            int first = createdServices.size();
+            assertTrue(first > 0);
+            service.cleanNodeConfigs("1", config);
+            assertEquals(first, createdServices.size(), "Same-connection startup duplicate should still be deduplicated");
+            socket.when(() -> WebSocketServer.nodeConnectionIdentity(1L)).thenReturn("replacement-machine");
+            service.cleanNodeConfigs("1", config);
+            assertEquals(first * 2, createdServices.size(), "New connection must recover identical missing inventory immediately");
+        }
+        verify(pauseTasks, times(3)).retryPendingForNode(1L);
+        verify(syncTasks, times(3)).retryPendingForNode(1L);
     }
 
     @ParameterizedTest

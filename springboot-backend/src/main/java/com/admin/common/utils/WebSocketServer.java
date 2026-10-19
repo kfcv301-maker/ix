@@ -596,6 +596,12 @@ public class WebSocketServer extends TextWebSocketHandler {
                 snapshot.sessionId().equals(source.getId()) ? null : snapshot);
     }
 
+    /** Identity of the current transport, not the long-lived logical node. */
+    public static String nodeConnectionIdentity(Long nodeId) {
+        WebSocketSession session = nodeSessions.get(nodeId);
+        return session != null && session.isOpen() ? session.getId() : null;
+    }
+
     /** Stop monitoring immediately while retaining this transport for cleanup command ACKs. */
     public static void retireNodeMetrics(Long nodeId) {
         synchronized (nodeLifecycleLock(nodeId)) {

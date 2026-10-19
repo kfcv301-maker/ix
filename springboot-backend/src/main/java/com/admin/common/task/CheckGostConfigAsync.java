@@ -3,6 +3,7 @@ package com.admin.common.task;
 import com.admin.common.dto.*;
 import com.admin.common.lang.R;
 import com.admin.common.utils.GostUtil;
+import com.admin.common.utils.WebSocketServer;
 import com.admin.entity.*;
 import com.admin.mapper.TunnelEntryNodeMapper;
 import com.admin.service.*;
@@ -586,13 +587,18 @@ public class CheckGostConfigAsync {
 
     private boolean isDuplicateInventory(Long nodeId, GostConfigDto config) {
         if (nodeId == null) return false;
+        String connectionId = WebSocketServer.nodeConnectionIdentity(nodeId);
+        if (connectionId == null) {
+            recentInventories.remove(nodeId);
+            return false;
+        }
         long now = System.currentTimeMillis();
-        InventoryFingerprint previous = recentInventories.put(nodeId,
-                new InventoryFingerprint(configSignature(config.getServices()), configSignature(config.getChains()),
-                        configSignature(config.getLimiters()), now));
+        InventoryFingerprint current = new InventoryFingerprint(connectionId, configSignature(config.getServices()),
+                configSignature(config.getChains()), configSignature(config.getLimiters()), now);
+        InventoryFingerprint previous = recentInventories.put(nodeId, current);
         return previous != null
                 && now - previous.receivedAt < DUPLICATE_INVENTORY_WINDOW_MILLIS
-                && previous.sameContents(recentInventories.get(nodeId));
+                && previous.sameContents(current);
     }
 
     private String configSignature(List<ConfigItem> items) {
@@ -609,12 +615,14 @@ public class CheckGostConfigAsync {
     }
 
     private static final class InventoryFingerprint {
+        private final String connectionId;
         private final String services;
         private final String chains;
         private final String limiters;
         private final long receivedAt;
 
-        private InventoryFingerprint(String services, String chains, String limiters, long receivedAt) {
+        private InventoryFingerprint(String connectionId, String services, String chains, String limiters, long receivedAt) {
+            this.connectionId = connectionId;
             this.services = services;
             this.chains = chains;
             this.limiters = limiters;
@@ -622,7 +630,7 @@ public class CheckGostConfigAsync {
         }
 
         private boolean sameContents(InventoryFingerprint other) {
-            return other != null && Objects.equals(services, other.services)
+            return other != null && Objects.equals(connectionId, other.connectionId) && Objects.equals(services, other.services)
                     && Objects.equals(chains, other.chains) && Objects.equals(limiters, other.limiters);
         }
     }

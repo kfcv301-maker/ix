@@ -9,6 +9,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.RequestParam;
 
 /** The single-use capability is the only credential accepted by this endpoint. */
 @RestController
@@ -29,6 +30,17 @@ public class NodeInstallBootstrapController {
         return script == null
                 ? response(HttpStatus.GONE, "安装命令已失效，请在面板重新获取\n")
                 : response(HttpStatus.OK, script);
+    }
+
+    @GetMapping(value = "/api/v1/node/install-script/{nodeId:[0-9]+}", produces = MediaType.TEXT_PLAIN_VALUE)
+    public ResponseEntity<String> reusable(@PathVariable("nodeId") Long nodeId,
+            @RequestParam("issuerId") Long issuerId, @RequestParam("panelUrl") String panelUrl,
+            HttpServletRequest request) {
+        if (!"GET".equals(request.getMethod())) return response(HttpStatus.METHOD_NOT_ALLOWED, "GET required\n");
+        String authorization = request.getHeader(HttpHeaders.AUTHORIZATION);
+        String token = authorization != null && authorization.startsWith("Bearer ") ? authorization.substring(7) : null;
+        String script = nodeService.getReusableInstallScript(nodeId, issuerId, panelUrl, token);
+        return script == null ? response(HttpStatus.FORBIDDEN, "安装授权无效\n") : response(HttpStatus.OK, script);
     }
 
     private ResponseEntity<String> response(HttpStatus status, String body) {

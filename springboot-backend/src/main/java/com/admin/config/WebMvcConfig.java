@@ -68,6 +68,7 @@ public class WebMvcConfig implements WebMvcConfigurer {
                 .excludePathPatterns("/api/v1/config/get")
                 .excludePathPatterns("/api/v1/user/login")
                 .excludePathPatterns("/api/v1/node/bootstrap/*")
+                .excludePathPatterns("/api/v1/node/install-script/*")
                 .excludePathPatterns("/api/v1/captcha/**");
     }
 }

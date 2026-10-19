@@ -44,4 +44,27 @@ class NodeInstallBootstrapControllerTest {
         mvc.perform(post("/api/v1/node/bootstrap/" + TOKEN)).andExpect(status().isMethodNotAllowed());
         verifyNoInteractions(service);
     }
+
+    @Test
+    void permanentCommandUsesHeaderCredentialAndSupportsRepeatedDownloads() throws Exception {
+        String capability = "A".repeat(43);
+        when(service.getReusableInstallScript(1L, 2L, "https://panel.example.com", capability))
+                .thenReturn("#!/usr/bin/env bash\nset -eu\n");
+        for (int i = 0; i < 2; i++) {
+            mvc.perform(get("/api/v1/node/install-script/1")
+                    .param("issuerId", "2").param("panelUrl", "https://panel.example.com")
+                    .header("Authorization", "Bearer " + capability))
+                    .andExpect(status().isOk())
+                    .andExpect(header().string("Cache-Control", "no-store, private, max-age=0"));
+        }
+        verify(service, times(2)).getReusableInstallScript(1L, 2L, "https://panel.example.com", capability);
+    }
+
+    @Test
+    void permanentEndpointRejectsMissingCredentialAndHead() throws Exception {
+        mvc.perform(get("/api/v1/node/install-script/1").param("issuerId", "2").param("panelUrl", "https://panel.example.com"))
+                .andExpect(status().isForbidden());
+        mvc.perform(head("/api/v1/node/install-script/1").param("issuerId", "2").param("panelUrl", "https://panel.example.com"))
+                .andExpect(status().isMethodNotAllowed());
+    }
 }

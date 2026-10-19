@@ -31,6 +31,13 @@ import org.springframework.beans.factory.annotation.Value;
 import jakarta.annotation.Resource;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.GeneralSecurityException;
+import java.util.Base64;
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
 import java.util.List;
 import java.util.Objects;
 import java.util.stream.Collectors;
@@ -92,7 +99,7 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
     @Value("${jwt-secret}")
     private String jwtSecret;
 
-    @Value("${agent.install.release:1.4.12}")
+    @Value("${agent.install.release:1.4.13}")
     private String agentInstallRelease;
 
     private volatile AESCrypto ddnsCrypto;
@@ -478,7 +485,7 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
         }
         if (!canManage(node)) return R.err(403, "只能获取自己创建的节点安装命令");
 
-        // Validate the complete configuration before issuing a short-lived capability.
+        // Validate settings before issuing a reusable, install-only capability.
         R installation = buildInstallCommand(node, commandDto);
         if (installation.getCode() != 0) return installation;
         if (StrUtil.isBlank(node.getSecret())) return R.err("该节点密钥无效，请重新创建节点");
@@ -487,16 +494,45 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
             return R.err(403, "当前账号无法获取安装命令");
         }
         String origin = normalizePanelUrl(commandDto.getPanelUrl());
+        String token = reusableInstallToken(node, issuer, origin);
+        String url = origin + "/api/v1/node/install-script/" + node.getId()
+                + "?issuerId=" + issuer.getId() + "&panelUrl=" + URLEncoder.encode(origin, StandardCharsets.UTF_8);
+        // Carry the credential in a header, never in an access-log URL. No clock,
+        // in-memory ticket or single-use claim: this survives backend restarts.
+        return R.ok("(f=$(mktemp) || exit; trap 'rm -f \"$f\"' EXIT; curl -fsS --retry 3 -H "
+                + shellQuote("Authorization: Bearer " + token) + " " + shellQuote(url)
+                + " -o \"$f\" && bash \"$f\")");
+    }
+
+    @Override
+    public String getReusableInstallScript(Long nodeId, Long issuerId, String panelUrl, String installToken) {
+        if (nodeId == null || issuerId == null || installToken == null
+                || !installToken.matches("[A-Za-z0-9_-]{43}")) return null;
+        String origin = normalizePanelUrl(panelUrl);
+        if (origin == null) return null;
+        Node node = this.getById(nodeId);
+        User issuer = userMapper.selectById(issuerId);
+        if (node == null || StrUtil.isBlank(node.getSecret()) || issuer == null
+                || !Objects.equals(issuer.getStatus(), 1)
+                || !(Objects.equals(issuer.getRoleId(), 0) || Objects.equals(node.getOwnerUserId(), issuer.getId()))) return null;
+        String expected = reusableInstallToken(node, issuer, origin);
+        if (!MessageDigest.isEqual(expected.getBytes(StandardCharsets.US_ASCII),
+                installToken.getBytes(StandardCharsets.US_ASCII))) return null;
+        NodeInstallCommandDto request = new NodeInstallCommandDto();
+        request.setId(nodeId); request.setPanelUrl(origin);
+        R result = buildInstallCommand(node, request);
+        return result.getCode() == 0 ? "#!/usr/bin/env bash\n" + result.getData() + "\n" : null;
+    }
+
+    private String reusableInstallToken(Node node, User issuer, String origin) {
+        String message = "node-install:v1:" + node.getId() + ":" + node.getSecret() + ":" + issuer.getId()
+                + ":" + (issuer.getTokenVersion() == null ? 0 : issuer.getTokenVersion()) + ":" + origin;
         try {
-            String token = installBootstrapService.issue(node.getId(), issuer.getId(),
-                    issuer.getTokenVersion() == null ? 0 : issuer.getTokenVersion(), origin, node.getSecret());
-            String url = origin + "/api/v1/node/bootstrap/" + token;
-            // Download completely before execution. The subshell trap cleans up on
-            // curl/bash failure and preserves the command's nonzero exit status.
-            return R.ok("(f=$(mktemp) || exit; trap 'rm -f \"$f\"' EXIT; curl -fsS "
-                    + shellQuote(url) + " -o \"$f\" && bash \"$f\")");
-        } catch (IllegalStateException exception) {
-            return R.err("安装命令请求过多，请稍后重试");
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec(jwtSecret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+            return Base64.getUrlEncoder().withoutPadding().encodeToString(mac.doFinal(message.getBytes(StandardCharsets.UTF_8)));
+        } catch (GeneralSecurityException exception) {
+            throw new IllegalStateException("Cannot generate node install capability", exception);
         }
     }
 
