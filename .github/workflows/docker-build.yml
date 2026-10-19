@@ -340,6 +340,7 @@ jobs:
           python3 tests/release_decision_test.py
           python3 tests/backend_installer_contract_test.py
           python3 tests/release_version_contract_test.py
+          python3 tests/ddns_install_recovery_test.py
           python3 tests/realtime_node_access_test.py
           bash tests/install_tuning_test.sh
 
