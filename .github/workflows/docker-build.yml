@@ -2,7 +2,7 @@ name: Build, Verify, and Release
 
 # Source-based Compose installs do not require Docker Hub. Releases are immutable.
 env:
-  VERSION: "1.4.13"
+  VERSION: "1.4.14"
 
 on:
   workflow_dispatch:
@@ -85,7 +85,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: "1.23.4"
+          go-version: "1.26.10"
           cache-dependency-path: |
             go-gost/go.sum
             go-gost/x/go.sum
@@ -174,7 +174,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.23.4"
+          go-version: "1.26.10"
           cache-dependency-path: |
             go-gost/go.sum
             go-gost/x/go.sum
@@ -245,7 +245,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.23.4"
+          go-version: "1.26.10"
           cache-dependency-path: go-gost/x/go.sum
       - name: Compare original and proposed UDP listeners
         env:

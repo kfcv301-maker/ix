@@ -86,7 +86,7 @@ func worker(id int, args []string, ctx *context.Context, ret *int) {
 
 var printVersion bool
 
-const panelAgentVersion = "1.4.13-enhanced"
+const panelAgentVersion = "1.4.14-enhanced"
 
 func init() {
 	flag.Var(&services, "L", "service list")

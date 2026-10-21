@@ -15,18 +15,24 @@ import org.springframework.stereotype.Component;
 
 import jakarta.servlet.http.HttpServletRequest;
 import java.lang.reflect.Method;
-import java.util.Arrays;
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
-import java.util.regex.Pattern;
+import java.util.Set;
 
 @Component
 @Aspect
 @Slf4j
 public class LogAspect {
 
-    private static final Pattern SENSITIVE_JSON_VALUE = Pattern.compile(
-            "(?i)(\\\"(?:cfApiToken|ddnsToken|secret|password|pwd|currentPassword|newPassword|confirmPassword|sshPassword|sshPrivateKey|sshPassphrase|terminalTicket|ticket|token|authorization)\\\"\\s*:\\s*\\\")[^\\\"]*(\\\")");
+    private static final Set<String> SENSITIVE_FIELDS = Set.of(
+            "cfapitoken", "ddnstoken", "secret", "password", "pwd", "currentpassword",
+            "newpassword", "confirmpassword", "sshpassword", "sshprivatekey", "sshpassphrase",
+            "terminalticket", "ticket", "token", "authorization", "apikey", "accesstoken",
+            "refreshtoken", "privatekey", "passphrase", "credential", "credentials");
 
     @Pointcut("@annotation(com.admin.common.aop.LogAnnotation)")
     public void pt() {
@@ -58,7 +64,8 @@ public class LogAspect {
         String authorization = request.getHeader("Authorization") + "";
         Object user_id = "未登录"; // 请求用户的id
         if (!authorization.equals("null")) {
-            user_id = JwtUtil.getUserIdFromToken(authorization);
+            try { user_id = JwtUtil.getUserIdFromToken(authorization); }
+            catch (RuntimeException ignored) { /* An invalid public-endpoint header has no audit identity. */ }
         }
         
         // 获取请求IP
@@ -112,7 +119,8 @@ public class LogAspect {
             String authorization = request.getHeader("Authorization") + "";
             Object user_id = "未登录"; // 请求用户的id
             if (!authorization.equals("null")) {
-                user_id = JwtUtil.getUserIdFromToken(authorization);
+                try { user_id = JwtUtil.getUserIdFromToken(authorization); }
+                catch (RuntimeException ignored) { /* Keep malformed headers out of audit failures. */ }
             }
             
             // 获取请求IP
@@ -133,7 +141,9 @@ public class LogAspect {
             String requestParams = getRequestParams(joinPoint);
             
             // 获取异常信息
-            String exceptionMsg = ex != null ? ex.getMessage() : "未知异常";
+            // Exception messages and Throwable rendering can contain unredacted
+            // input or connection credentials. Keep only the failure type here.
+            String exceptionMsg = ex != null ? ex.getClass().getName() : "未知异常";
             
             // 合并为一条完整的异常日志信息
             String errorMessage = String.format(
@@ -141,9 +151,9 @@ public class LogAspect {
             );
             
             // 打印单条完整异常日志
-            log.info(errorMessage, ex);
+            log.info(errorMessage);
         } catch (Exception e) {
-            log.info("记录异常日志时出错: {}", e.getMessage());
+            log.info("记录异常日志时出错: {}", e.getClass().getName());
         }
     }
     
@@ -156,7 +166,7 @@ public class LogAspect {
             if (args.length == 0) {
                 return "无参数";
             } else if (args[0] != null && args[0].toString().contains("SecurityContextHolderAwareRequestWrapper")) {
-                return redactSensitiveValues(JSON.toJSONString(Arrays.toString(ArrayUtil.remove(args, 0))));
+                return redactSensitiveValues(JSON.toJSONString(ArrayUtil.remove(args, 0)));
             } else {
                 // 检查是否只有一个参数且已经是JSON字符串格式
                 if (args.length == 1 && args[0] != null) {
@@ -191,11 +201,39 @@ public class LogAspect {
                 }
             }
         } catch (Exception e) {
-            return "获取参数失败: " + e.getMessage();
+            return "获取参数失败";
         }
     }
 
     private String redactSensitiveValues(String value) {
-        return SENSITIVE_JSON_VALUE.matcher(value).replaceAll("$1***$2");
+        try {
+            return JSON.toJSONString(redactValue(JSON.parse(value), 0));
+        } catch (Exception ignored) {
+            // Never return the original when serialization is incomplete.
+            return "[已省略无法脱敏的参数]";
+        }
+    }
+
+    private Object redactValue(Object value, int depth) {
+        if (depth > 32) return "[已省略深层参数]";
+        if (value instanceof Map<?, ?> entries) {
+            Map<String, Object> result = new LinkedHashMap<>();
+            entries.forEach((key, item) -> {
+                String name = String.valueOf(key);
+                String normalized = name.replace("_", "").replace("-", "").toLowerCase(Locale.ROOT);
+                result.put(name, SENSITIVE_FIELDS.contains(normalized) ? "***" : redactValue(item, depth + 1));
+            });
+            return result;
+        }
+        if (value instanceof Collection<?> items) {
+            Collection<Object> result = new ArrayList<>();
+            items.forEach(item -> result.add(redactValue(item, depth + 1)));
+            return result;
+        }
+        if (value instanceof String text && (text.stripLeading().startsWith("{") || text.stripLeading().startsWith("["))) {
+            try { return JSON.toJSONString(redactValue(JSON.parse(text), depth + 1)); }
+            catch (Exception ignored) { return "[已省略无法脱敏的参数]"; }
+        }
+        return value;
     }
 }

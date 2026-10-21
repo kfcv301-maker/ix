@@ -3,7 +3,7 @@ name: Refresh verified Agent installer assets
 on:
   workflow_dispatch:
   push:
-    branches: [fix/agent-reinstall-inventory-20261019]
+    branches: [fix/agent-reinstall-inventory-20261019, fix/security-audit-20261022]
     paths: [go-gost/**, .github/workflows/refresh-agent-assets.yml]
 
 permissions:
@@ -22,7 +22,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.23.4"
+          go-version: "1.26.10"
           cache-dependency-path: |
             go-gost/go.sum
             go-gost/x/go.sum

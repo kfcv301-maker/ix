@@ -63,7 +63,7 @@ IPv4/IPv6 Compose 示例也从本仓库源码构建，请在完整的发布源�
 ### 安装面板
 
 ```bash
-curl -fsSL https://github.com/kfcv301-maker/ix/releases/download/1.4.13/panel_install.sh | sudo bash
+curl -fsSL https://github.com/kfcv301-maker/ix/releases/download/1.4.14/panel_install.sh | sudo bash
 ```
 
 默认使用前端端口 `6366`、后端端口 `6365`，数据库密码与 JWT 密钥在服务器本机的 `/opt/flux-panel-enhanced/.env` 自动生成，脚本不会把它们上传到 GitHub。需要自定义端口时：
@@ -73,13 +73,13 @@ curl -fsSL https://github.com/kfcv301-maker/ix/releases/download/1.4.13/panel_in
 网页终端默认只接受与面板同源的浏览器请求。若在前端容器前另设 HTTPS 反向代理，需将原始 `Host` 和 `X-Forwarded-Proto` 传给前端，并对 `/vps-terminal` 关闭访问日志（URL 中包含短时一次性票据）；内置 Nginx 会继续将公网协议传给后端。若前端和 API 刻意部署在不同域名，需在服务器 `.env` 设置 `VPS_TERMINAL_ALLOWED_ORIGINS=https://你的前端域名`；普通用户托管的 SSH 地址始终只允许公网地址。管理员确有内网库存 VPS 需求时，才可显式设置 `VPS_ALLOW_PRIVATE_ADMIN_TARGETS=true`。
 
 ```bash
-curl -fsSL https://github.com/kfcv301-maker/ix/releases/download/1.4.13/panel_install.sh | sudo env FRONTEND_PORT=8080 BACKEND_PORT=6365 bash
+curl -fsSL https://github.com/kfcv301-maker/ix/releases/download/1.4.14/panel_install.sh | sudo env FRONTEND_PORT=8080 BACKEND_PORT=6365 bash
 ```
 
 更新面板（保留数据库卷与 `.env`）：
 
 ```bash
-curl -fsSL https://github.com/kfcv301-maker/ix/releases/download/1.4.13/panel_install.sh | sudo bash -s -- update
+curl -fsSL https://github.com/kfcv301-maker/ix/releases/download/1.4.14/panel_install.sh | sudo bash -s -- update
 ```
 
 完成一次上述更新后，管理员也可以在面板的“网站配置”页面使用“检查并更新”。它会先在服务器本机导出 MySQL 备份，再拉取已固定的 Release 标签并重建面板；不会删除数据库卷、节点、转发、账号、设置或 `.env`。更新器不开放公网端口，仅接受面板内部的带随机密钥请求。
@@ -91,13 +91,13 @@ curl -fsSL https://github.com/kfcv301-maker/ix/releases/download/1.4.13/panel_in
 在原版面板的安装目录运行：
 
 ```bash
-curl -fsSL https://github.com/kfcv301-maker/ix/releases/download/1.4.13/upgrade_from_original.sh | sudo bash
+curl -fsSL https://github.com/kfcv301-maker/ix/releases/download/1.4.14/upgrade_from_original.sh | sudo bash
 ```
 
 原版不在当前目录时，填写其目录：
 
 ```bash
-curl -fsSL https://github.com/kfcv301-maker/ix/releases/download/1.4.13/upgrade_from_original.sh | sudo bash -s -- --source-dir /path/to/original-panel
+curl -fsSL https://github.com/kfcv301-maker/ix/releases/download/1.4.14/upgrade_from_original.sh | sudo bash -s -- --source-dir /path/to/original-panel
 ```
 
 先只检查兼容性、不做任何修改可加 `--dry-run`。迁移完成后，后续更新仍使用上面的 `panel_install.sh ... update` 命令；它会保留原数据库卷和 `.env`。
@@ -115,7 +115,7 @@ curl -fsSL https://github.com/kfcv301-maker/ix/releases/download/1.4.13/upgrade_
 在面板的节点管理页面复制安装命令即可。安装命令会自动带入当前面板域名和该节点独立密钥，无须设置或暴露后端固定端口：
 
 ```bash
-curl -fsSL https://github.com/kfcv301-maker/ix/releases/download/1.4.13/install.sh | sudo bash -s -- --panel 'https://panel.example.com' --token '节点独立密钥'
+curl -fsSL https://github.com/kfcv301-maker/ix/releases/download/1.4.14/install.sh | sudo bash -s -- --panel 'https://panel.example.com' --token '节点独立密钥'
 ```
 
 脚本会根据服务器架构从固定 Release 下载 `amd64` 或 `arm64` Agent，并在写入 `/etc/flux-panel-agent/gost` 前校验 SHA-256；校验资源不可用或不匹配时会安全失败，不会执行仓库分支上的回退代码。它会创建 `flux-panel-agent.service` 并立即启动；重新安装 Agent 会短暂重启该节点进程，但不会修改面板数据库中的节点与转发记录。
@@ -134,7 +134,7 @@ curl -fsSL https://github.com/kfcv301-maker/ix/releases/download/1.4.13/install.
 所有档位都会开启接收缓存自动调节、MTU 探测、TCP Fast Open，并关闭空闲慢启动。`standard` 正好使用你给出的最大参数，其余档位只会往下收缩，不会超出 16 MB、16384、8192 的上限。支持 BBR/FQ 的节点启用 BBR/FQ；旧内核缺少其中某项时脚本会自动保留可用算法、跳过不支持的参数，Agent 仍会继续安装。需要跳过调优可加 `--skip-tcp-tuning`：
 
 ```bash
-curl -fsSL https://github.com/kfcv301-maker/ix/releases/download/1.4.13/install.sh | sudo bash -s -- --panel 'https://panel.example.com' --token '节点独立密钥' --skip-tcp-tuning
+curl -fsSL https://github.com/kfcv301-maker/ix/releases/download/1.4.14/install.sh | sudo bash -s -- --panel 'https://panel.example.com' --token '节点独立密钥' --skip-tcp-tuning
 ```
 
 启用动态 TCP 内存保护后，节点本机每分钟读取一次 Linux 的 `MemAvailable`（不会把文件缓存误判为不可用内存）。可用内存处于紧急区间时立即降一档；处于压力区间连续三次采样才降档；资源稳定十分钟后才逐级恢复，且永远不会超过管理员设定的最高档位或低于最低档位。它只限制后续 TCP socket 的缓存增长与队列上限，不会重启 Agent、删除规则或主动断开现有转发。低内存机器还会自动把可用最高档位压到安全范围。运行状态会随节点监控上报；旧 Agent 和固定档位节点显示为 `--`。
@@ -162,14 +162,14 @@ curl -fsSL https://raw.githubusercontent.com/kfcv301-maker/ix/main/backend_insta
 
 节点每次连接或重连面板后都会立即上报当前 GOST 配置，面板据此补回重装/重启后确实缺失的转发服务；十分钟一次的周期上报仍保留作漂移校验。这样无需为了恢复规则而手工编辑保存转发。
 
-1.4.13 修复全新或清空配置的节点无法自动恢复的问题：Agent 在加载已保存服务之后才连接面板，并明确上报空的服务、链和限速器数组。后端也兼容旧版 `Config-Reporter/1.0` 将空服务编码为 `null`、省略空链和限速器的完整清单；其他不完整清单仍不会触发恢复。恢复继续遵守转发暂停状态、用户到期和流量额度，不修改已保存的入口端口与目标。DDNS 首次创建不存在的 A/AAAA 记录也已修复。
+1.4.14 修复全新或清空配置的节点无法自动恢复的问题：Agent 在加载已保存服务之后才连接面板，并明确上报空的服务、链和限速器数组。后端也兼容旧版 `Config-Reporter/1.0` 将空服务编码为 `null`、省略空链和限速器的完整清单；其他不完整清单仍不会触发恢复。恢复继续遵守转发暂停状态、用户到期和流量额度，不修改已保存的入口端口与目标。DDNS 首次创建不存在的 A/AAAA 记录也已修复。
 
 面板“安装”按钮生成永久、可重复执行的命令，适合保存在云平台的自动换机脚本中。它通过请求头中的节点安装专用凭据获取当前保存的安装设置，不受十分钟或单次领取限制，面板后端重启后也仍可用；节点令牌与 Cloudflare 凭据不会出现在命令中。删除节点、轮换节点密钥，或撤销签发账号权限/凭据会撤销对应安装授权。旧版已保存的完整安装命令也继续兼容。
 
 手动命令格式：
 
 ```bash
-curl -fsSL https://github.com/kfcv301-maker/ix/releases/download/1.4.13/install.sh | sudo bash -s -- --panel 'https://panel.example.com' --token '节点独立密钥' --cf-api-token 'Cloudflare_API_Token' --cf-record 'node.example.com'
+curl -fsSL https://github.com/kfcv301-maker/ix/releases/download/1.4.14/install.sh | sudo bash -s -- --panel 'https://panel.example.com' --token '节点独立密钥' --cf-api-token 'Cloudflare_API_Token' --cf-record 'node.example.com'
 ```
 
 ## 节点硬件信息说明
