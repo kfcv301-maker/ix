@@ -7,11 +7,13 @@ import com.admin.common.dto.ForwardSyncSummary;
 import com.admin.common.dto.GostDto;
 import com.admin.common.lang.R;
 import com.admin.common.service.ForwardPortReservationService;
+import com.admin.common.service.UserIngressAddressService;
 import com.admin.common.task.ForwardSyncTaskService;
 import com.admin.common.utils.GostUtil;
 import com.admin.common.utils.JwtUtil;
 import com.admin.common.utils.TcpPingDiagnosisParser;
 import com.admin.common.utils.WebSocketServer;
+import com.admin.common.utils.UserDiagnosisView;
 import com.admin.entity.*;
 import com.admin.mapper.ForwardMapper;
 import com.admin.mapper.TunnelEntryNodeMapper;
@@ -85,6 +87,9 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
     private ForwardPortReservationService forwardPortReservationService;
 
     @Resource
+    private UserIngressAddressService userIngressAddressService;
+
+    @Resource
     private VpsHostService vpsHostService;
 
     @Resource
@@ -156,7 +161,7 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
             if (gostResult.getCode() != 0) {
                 forwardPortReservationService.rollback(reservation);
                 this.removeById(forward.getId());
-                return gostResult;
+                return nodeOperationView(gostResult, tunnel);
             }
 
             if (this.getById(forward.getId()) == null) {
@@ -191,6 +196,20 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
             forward.setSyncState(summary.getRetriedTasks() != null && summary.getRetriedTasks() > 0
                     ? "partial" : "syncing");
             forward.setSyncError(summary.getLastError());
+        }
+
+        if (currentUser.getRoleId() != ADMIN_ROLE_ID) {
+            Map<Integer, UserIngressAddressService.Address> addresses = userIngressAddressService.forUser(currentUser.getUserId());
+            for (ForwardWithTunnelDto forward : forwardList) {
+                UserIngressAddressService.Address address = addresses.getOrDefault(
+                        forward.getTunnelId(), UserIngressAddressService.UNASSIGNED);
+                forward.setInIp(address.address());
+                forward.setEntryDomain(address.domain());
+                forward.setEntryAddressMode(address.mode());
+                forward.setInterfaceName(null);
+                // Agent errors can embed private node addresses or credentials.
+                if (forward.getSyncError() != null) forward.setSyncError("节点同步尚未完成，请联系管理员检查");
+            }
         }
 
         return R.ok(forwardList);
@@ -283,7 +302,7 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
 
         if (gostResult.getCode() != 0) {
             forwardPortReservationService.rollback(reservation);
-            return gostResult;
+            return nodeOperationView(gostResult, tunnel);
         }
         updatedForward.setStatus(1);
         // 9. 保存更新
@@ -368,7 +387,11 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
             return R.err("转发不存在");
         }
 
-        return diagnoseForwardInternal(forward);
+        R diagnosis = diagnoseForwardInternal(forward);
+        Tunnel tunnel = tunnelService.getById(forward.getTunnelId());
+        return currentUser.getRoleId() == ADMIN_ROLE_ID
+                || (tunnel != null && Objects.equals(tunnel.getOwnerUserId(), currentUser.getUserId().longValue()))
+                ? diagnosis : UserDiagnosisView.restrict(diagnosis);
     }
 
     @Override
@@ -524,8 +547,16 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
 
         } catch (Exception e) {
             log.error("更新转发排序失败", e);
-            return R.err("更新排序时发生错误: " + e.getMessage());
+            return R.err("更新排序时发生错误，请稍后重试");
         }
+    }
+
+    /** Node error text is an administrator diagnostic, not a tenant-facing address source. */
+    private R nodeOperationView(R result, Tunnel tunnel) {
+        if (result == null || result.getCode() == 0 || Objects.equals(JwtUtil.getRoleIdFromToken(), ADMIN_ROLE_ID)) return result;
+        Integer userId = JwtUtil.getUserIdFromToken();
+        if (userId != null && tunnel != null && Objects.equals(tunnel.getOwnerUserId(), userId.longValue())) return result;
+        return R.err(result.getCode(), "节点不支持该配置或执行失败，请联系管理员检查节点状态");
     }
 
     /**

@@ -81,6 +81,8 @@ public class UserPackageDto {
         private Integer tunnelId;
         private String tunnelName;
         private String inIp;
+        private String entryDomain;
+        private String entryAddressMode;
         private Integer inPort;
         private String remoteAddr;
         private Long inFlow;         // 转发入站流量(字节)
@@ -88,4 +90,4 @@ public class UserPackageDto {
         private Integer status;
         private Long createdTime;
     }
-} 
+}

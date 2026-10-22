@@ -49,6 +49,7 @@ import {
   getVpsHosts
 } from "@/api";
 import { JwtUtil } from "@/utils/jwt";
+import { assignedEntryAddress, UNASSIGNED_ENTRY_ADDRESS, type EntryAddressMode } from '@/utils/entry-address';
 import { useTunnelDiagnosis } from '@/hooks/use-tunnel-diagnosis';
 import { diagnosisProgressText, TCP_DIAGNOSIS_NOTICE } from '@/utils/tunnel-diagnosis';
 import { parseProxyProtocol, proxyProtocolLabel, proxyProtocolDiagnosisNotice, PROXY_PROTOCOL_DESCRIPTION, type ProxyProtocolVersion } from '@/utils/forward-proxy-protocol';
@@ -81,6 +82,7 @@ interface Forward {
   vpsHostStatus?: number;
   /** User-specific ingress domain supplied by the forward query. */
   entryDomain?: string;
+  entryAddressMode?: EntryAddressMode;
   inx?: number;
   syncOperation?: 'pause' | 'resume' | 'delete';
   syncState?: 'syncing' | 'partial';
@@ -92,8 +94,7 @@ interface Tunnel {
   name: string;
   /** Effective address returned for the current user, or the raw address for admins. */
   ip?: string;
-  originalIp?: string;
-  entryAddressMode?: 'NONE' | 'DEFAULT' | 'CUSTOM';
+  entryAddressMode?: EntryAddressMode;
   entryDomain?: string;
   inNodePortSta?: number;
   inNodePortEnd?: number;
@@ -375,9 +376,7 @@ export default function ForwardPage() {
    * administrator sees the same domain assigned to that particular owner.
    */
   const getForwardEntryAddress = (forward: Forward): string => {
-    if (forward.entryDomain) return forward.entryDomain;
-    if (isAdministrator) return forward.inIp;
-    return tunnels.find(tunnel => tunnel.id === forward.tunnelId)?.ip || forward.inIp;
+    return assignedEntryAddress(forward, isAdministrator);
   };
 
   useEffect(() => {
@@ -1394,7 +1393,7 @@ export default function ForwardPage() {
     const filteredForwards = (viewMode === 'direct' ? getDirectVisibleForwards(forwards) : forwards).filter(forward => {
       if (applyFilters && tunnelFilter !== 'all' && String(forward.tunnelId) !== tunnelFilter) return false;
       if (applyFilters && (statusFilter === 'pending' ? ![2, 3].includes(forward.status) : statusFilter !== 'all' && String(forward.status) !== statusFilter)) return false;
-      return !keyword || [forward.name, forward.id, forward.tunnelName, forward.inIp, forward.entryDomain, forward.inPort, forward.remoteAddr, forward.userName, forward.vpsHostName].join(' ').toLowerCase().includes(keyword);
+      return !keyword || [forward.name, forward.id, forward.tunnelName, getForwardEntryAddress(forward), forward.inPort, forward.remoteAddr, forward.userName, forward.vpsHostName].join(' ').toLowerCase().includes(keyword);
     });
     
     // 确保过滤后的转发列表有效
@@ -1551,7 +1550,7 @@ export default function ForwardPage() {
                   <div className="flex items-center gap-1.5 min-w-0 flex-1">
                     <span className="text-xs font-medium text-default-600 flex-shrink-0">入口:</span>
                     <code className="text-xs font-mono text-foreground truncate min-w-0">
-                      {formatInAddress(entryAddress, forward.inPort)}
+                      {formatInAddress(entryAddress, forward.inPort) || UNASSIGNED_ENTRY_ADDRESS}
                     </code>
                   </div>
                   {hasMultipleAddresses(entryAddress) && (
@@ -1819,7 +1818,7 @@ export default function ForwardPage() {
                 return <tr key={forward.id}>
                   {bulkSelectionMode && <td><input type="checkbox" aria-label={`选择规则 ${forward.name}`} checked={bulkSelectedIds.has(forward.id)} disabled={bulkApplying || bulkModalOpen || operatingForwardIds.has(forward.id)} onChange={event => { const checked = event.target.checked; setBulkSelectedIds(previous => { const next = new Set(previous); if (checked) next.add(forward.id); else next.delete(forward.id); return next; }); }}/></td>}
                   <td className="console-cell-name"><span className="console-table-name" title={forward.name}>{forward.name}</span><span className="console-table-secondary">#{forward.id} · {forward.userName || '我的账号'}{forward.vpsHostName ? ` · ${forward.vpsHostName}` : ''}</span></td>
-                  <td data-label="入口地址"><button type="button" className="console-address-button" title={formatInAddress(entry, forward.inPort)} onClick={() => showAddressModal(entry, forward.inPort, '入口端口')}>{formatInAddress(entry, forward.inPort)}</button><span className="console-table-secondary">{forward.tunnelName}</span></td>
+                  <td data-label="入口地址"><button type="button" className="console-address-button" disabled={!entry} title={formatInAddress(entry, forward.inPort)} onClick={() => showAddressModal(entry, forward.inPort, '入口端口')}>{formatInAddress(entry, forward.inPort) || UNASSIGNED_ENTRY_ADDRESS}</button><span className="console-table-secondary">{forward.tunnelName}</span></td>
                   <td data-label="目标地址"><button type="button" className="console-address-button" title={forward.remoteAddr} onClick={() => showAddressModal(forward.remoteAddr, null, '目标地址')}>{formatRemoteAddress(forward.remoteAddr)}</button>{(forward.proxyProtocol === 1 || forward.proxyProtocol === 2) && <span className="console-table-secondary">{proxyProtocolLabel(forward.proxyProtocol)} · TCP</span>}</td>
                   <td data-label="状态"><div className="flex items-center gap-2"><span className={`console-status-dot status-${status.color}`}/><span>{status.text}</span></div>{forward.syncError && <span className="console-table-secondary text-warning" title={forward.syncError}>{forward.syncError}</span>}</td>
                   <td data-label="流量" className="whitespace-nowrap"><span>↑ {formatFlow(forward.outFlow || 0)}</span><span className="console-table-secondary">↓ {formatFlow(forward.inFlow || 0)}</span></td>
@@ -2182,8 +2181,8 @@ export default function ForwardPage() {
                       }
                     >
                       {tunnels.map((tunnel) => (
-                        <SelectItem key={String(tunnel.id)} textValue={`${tunnel.name}${tunnel.ip ? ` · ${tunnel.ip}` : ''}`}>
-                          {tunnel.name}{tunnel.ip ? ` · ${tunnel.ip}` : ''}
+                        <SelectItem key={String(tunnel.id)} textValue={`${tunnel.name} · ${assignedEntryAddress(tunnel, isAdministrator) || UNASSIGNED_ENTRY_ADDRESS}`}>
+                          {tunnel.name} · {assignedEntryAddress(tunnel, isAdministrator) || UNASSIGNED_ENTRY_ADDRESS}
                         </SelectItem>
                       ))}
                     </Select>
@@ -2191,15 +2190,17 @@ export default function ForwardPage() {
                     {selectedTunnel && (
                       <Input
                         label="你的入口地址"
-                        value={selectedTunnel.ip || '原始入口地址'}
+                        value={assignedEntryAddress(selectedTunnel, isAdministrator) || UNASSIGNED_ENTRY_ADDRESS}
                         isReadOnly
                         variant="flat"
                         description={
-                          selectedTunnel.entryAddressMode === 'CUSTOM'
+                          !assignedEntryAddress(selectedTunnel, isAdministrator)
+                            ? '请联系管理员检查该隧道的入口域名分配。'
+                            : selectedTunnel.entryAddressMode === 'CUSTOM'
                             ? '管理员为你指定的解析域名；新建后的转发会使用同一入口端口。'
                             : selectedTunnel.entryAddressMode === 'DEFAULT'
                               ? '该隧道的默认解析域名；新建后的转发会使用同一入口端口。'
-                              : '管理员未分配解析域名，使用隧道原始入口地址。'
+                              : '使用当前授权允许的入口地址。'
                         }
                       />
                     )}

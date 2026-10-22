@@ -85,14 +85,16 @@ func worker(id int, args []string, ctx *context.Context, ret *int) {
 }
 
 var printVersion bool
+var printPanelAgentVersion bool
 
-const panelAgentVersion = "1.4.14-enhanced"
+const panelAgentVersion = "1.4.15-enhanced"
 
 func init() {
 	flag.Var(&services, "L", "service list")
 	flag.Var(&nodes, "F", "chain node list")
 	flag.StringVar(&cfgFile, "C", "", "configuration file")
 	flag.BoolVar(&printVersion, "V", false, "print version")
+	flag.BoolVar(&printPanelAgentVersion, "panel-agent-version", false, "print panel Agent version without loading configuration")
 	flag.StringVar(&outputFormat, "O", "", "output format, one of yaml|json format")
 	flag.BoolVar(&debug, "D", false, "debug mode")
 	flag.BoolVar(&trace, "DD", false, "trace mode")
@@ -102,6 +104,10 @@ func init() {
 
 func main() {
 	flag.Parse()
+	if printPanelAgentVersion {
+		fmt.Fprintln(os.Stdout, panelAgentVersion)
+		return
+	}
 
 	if printVersion {
 		fmt.Fprintf(os.Stdout, "gost %s (%s %s/%s)\n",

@@ -34,6 +34,7 @@
                 WHEN ut.entry_address_mode = 'DEFAULT' THEN default_domain.domain
                 ELSE NULL
             END AS entryDomain,
+            COALESCE(ut.entry_address_mode, 'NONE') AS entryAddressMode,
             t.type,
             t.protocol
         FROM
@@ -92,6 +93,7 @@
                 WHEN ut.entry_address_mode = 'DEFAULT' THEN default_domain.domain
                 ELSE NULL
             END AS entryDomain,
+            COALESCE(ut.entry_address_mode, 'NONE') AS entryAddressMode,
             t.type,
             t.protocol
         FROM

@@ -32,6 +32,12 @@ public class Tunnel extends BaseEntity {
     @TableField(exist = false)
     private Boolean canManage;
 
+    /** Viewer-specific address metadata, never persisted as routing configuration. */
+    @TableField(exist = false)
+    private String entryAddressMode;
+    @TableField(exist = false)
+    private String entryDomain;
+
     /**
      * 入口节点ID
      */

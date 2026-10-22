@@ -12,6 +12,7 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { createRealtimeTicket, getRealtimeNodes, getSubscriptionToken, getUserPackageInfo } from "@/api";
 import { getRealtimeSocketUrl } from "@/utils/realtime-socket";
 import { acceptRealtimeMetric, createRealtimeConnectionGate } from "@/utils/realtime-state";
+import { assignedEntryAddress, UNASSIGNED_ENTRY_ADDRESS, type EntryAddressMode } from '@/utils/entry-address';
 
 interface UserInfo {
   user?: string;
@@ -42,6 +43,8 @@ interface Forward {
   tunnelId: number;
   tunnelName: string;
   inIp: string;
+  entryDomain?: string;
+  entryAddressMode?: EntryAddressMode;
   inPort: number;
   remoteAddr: string;
   inFlow: number;
@@ -1236,11 +1239,11 @@ export default function DashboardPage() {
                               <h4 className="font-medium text-foreground text-sm mb-2 truncate">{forward.name}</h4>
                               <div className="space-y-1">
                                 <code 
-                                  className={`block px-2 py-1 bg-green-100 dark:bg-green-500/20 text-green-700 dark:text-green-300 rounded font-mono text-xs truncate ${hasMultipleIps(forward.inIp) ? 'cursor-pointer hover:bg-green-200 dark:hover:bg-green-500/30' : ''}`}
-                                  onClick={() => hasMultipleIps(forward.inIp) && showAddressModal(forward.inIp, forward.inPort, '入口地址')}
-                                  title={formatInAddress(forward.inIp, forward.inPort)}
+                                  className={`block px-2 py-1 bg-green-100 dark:bg-green-500/20 text-green-700 dark:text-green-300 rounded font-mono text-xs truncate ${hasMultipleIps(assignedEntryAddress(forward, isAdmin)) ? 'cursor-pointer hover:bg-green-200 dark:hover:bg-green-500/30' : ''}`}
+                                  onClick={() => hasMultipleIps(assignedEntryAddress(forward, isAdmin)) && showAddressModal(assignedEntryAddress(forward, isAdmin), forward.inPort, '入口地址')}
+                                  title={formatInAddress(assignedEntryAddress(forward, isAdmin), forward.inPort)}
                                 >
-                                  {formatInAddress(forward.inIp, forward.inPort)}
+                                  {formatInAddress(assignedEntryAddress(forward, isAdmin), forward.inPort) || UNASSIGNED_ENTRY_ADDRESS}
                                 </code>
                                 <div className="text-center text-default-400 text-xs">↓</div>
                                 <code 

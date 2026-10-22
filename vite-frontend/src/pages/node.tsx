@@ -25,6 +25,7 @@ import {
 } from "@/api";
 import { getRealtimeSocketUrl } from "@/utils/realtime-socket";
 import { acceptRealtimeMetric, createRealtimeConnectionGate, mergeRealtimeNodes, shouldResetRealtimeMetrics } from "@/utils/realtime-state";
+import { JwtUtil } from '@/utils/jwt';
 
 interface Node {
   id: number;
@@ -160,10 +161,12 @@ export default function NodePage() {
   const [nodeList, setNodeList] = useState<Node[]>([]);
   const [nodeSearch, setNodeSearch] = useState('');
   const [nodeFilter, setNodeFilter] = useState('all');
+  const isAdministrator = JwtUtil.getRoleIdFromToken() === 0;
+  const canManageNode = (node: Node) => isAdministrator || node.canManage === true;
   const visibleNodes = nodeList.filter(node => {
     const online = node.connectionStatus === 'online';
     if (nodeFilter === 'online' && !online || nodeFilter === 'offline' && online) return false;
-    return [node.name, node.serverIp, node.ip, node.version].join(' ').toLowerCase().includes(nodeSearch.trim().toLowerCase());
+    return [node.name, canManageNode(node) ? node.serverIp : '', canManageNode(node) ? node.ip : '', node.version].join(' ').toLowerCase().includes(nodeSearch.trim().toLowerCase());
   });
   const clearNodeFilters = () => { setNodeSearch(''); setNodeFilter('all'); };
 
@@ -954,7 +957,7 @@ export default function NodePage() {
             {label: '全部节点', value: nodeList.length, tone: ''},
             {label: '在线节点', value: nodeList.filter(node => node.connectionStatus === 'online').length, tone: 'success'},
             {label: '离线节点', value: nodeList.filter(node => node.connectionStatus !== 'online').length, tone: 'warning'},
-            {label: '可管理', value: nodeList.filter(node => node.canManage !== false).length, tone: ''},
+            {label: '可管理', value: nodeList.filter(canManageNode).length, tone: ''},
           ].map(item => <div key={item.label}><span>{item.label}</span><strong className={`console-tone-${item.tone}`}>{item.value}</strong></div>)}
         </div>
         <div className={`monitor-connection ${socketStatus === 'connected' ? '' : 'is-pending'}`} role="status" aria-live="polite">
@@ -982,7 +985,7 @@ export default function NodePage() {
               return <div className="monitor-row" role="row" key={node.id}>
                 <div className="monitor-identity" role="cell">
                   <div className="monitor-name-line"><button onClick={() => setMonitorNodeId(node.id)} title={node.name}>{node.name}</button><span className={`monitor-status ${online ? 'is-online' : ''}`}><span className={`console-status-dot ${online ? 'status-success' : ''}`}/>{online ? '在线' : '离线'}</span></div>
-                  <span className="monitor-address" title={node.serverIp}>{node.serverIp || '未设置服务器地址'}</span>
+                  {canManageNode(node) && <span className="monitor-address" title={node.serverIp}>{node.serverIp || '未设置服务器地址'}</span>}
                   <span className="monitor-version">{node.version ? `v${node.version.replace(/^v/, '')}` : '版本未知'}{online && !info ? ' · 等待上报' : ''}</span>
                 </div>
                 <div className="monitor-resource" role="cell" data-label="CPU"><strong>{info ? `${info.cpuUsage.toFixed(1)}%` : '—'}</strong><Progress aria-label={`${node.name} CPU 使用率`} value={info?.cpuUsage || 0} color={getProgressColor(info?.cpuUsage || 0, !info)} size="sm" className="monitor-progress"/><small>{info?.cpuCores ? `${info.cpuCores} 核` : '—'}</small></div>
@@ -992,7 +995,7 @@ export default function NodePage() {
                 <div className="monitor-trend" role="cell" data-label="网络趋势">{info && (metricHistory[node.id]?.length || 0) >= 2 ? <><MetricSparkline data={metricHistory[node.id]} dataKey="uploadSpeed" stroke="#397bf6" ariaLabel={`${node.name} 上传速率趋势`}/><MetricSparkline data={metricHistory[node.id]} dataKey="downloadSpeed" stroke="#16a36b" ariaLabel={`${node.name} 下载速率趋势`}/></> : <span>{online ? '等待采样' : '暂无实时数据'}</span>}</div>
                 <div className="monitor-actions" role="cell">
                   <Button size="sm" variant="light" color="primary" onPress={() => setMonitorNodeId(node.id)} aria-label={`监控 ${node.name}`} startContent={<ConsoleIcon name="activity" size={16}/>}>监控</Button>
-                  {node.canManage !== false && <Dropdown><DropdownTrigger><Button isIconOnly size="sm" variant="light" aria-label={`管理 ${node.name}`}><ConsoleIcon name="more"/></Button></DropdownTrigger><DropdownMenu aria-label={`${node.name} 节点管理`} onAction={key => { if (key === 'install') openInstallCommand(node); if (key === 'edit') handleEdit(node); if (key === 'delete') handleDelete(node); }}><DropdownItem key="install" startContent={<ConsoleIcon name="vps" size={16}/>}>安装</DropdownItem><DropdownItem key="edit" startContent={<ConsoleIcon name="edit" size={16}/>}>编辑</DropdownItem><DropdownItem key="delete" color="danger" className="text-danger" startContent={<ConsoleIcon name="close" size={16}/>}>删除</DropdownItem></DropdownMenu></Dropdown>}
+                  {canManageNode(node) && <Dropdown><DropdownTrigger><Button isIconOnly size="sm" variant="light" aria-label={`管理 ${node.name}`}><ConsoleIcon name="more"/></Button></DropdownTrigger><DropdownMenu aria-label={`${node.name} 节点管理`} onAction={key => { if (key === 'install') openInstallCommand(node); if (key === 'edit') handleEdit(node); if (key === 'delete') handleDelete(node); }}><DropdownItem key="install" startContent={<ConsoleIcon name="vps" size={16}/>}>安装</DropdownItem><DropdownItem key="edit" startContent={<ConsoleIcon name="edit" size={16}/>}>编辑</DropdownItem><DropdownItem key="delete" color="danger" className="text-danger" startContent={<ConsoleIcon name="close" size={16}/>}>删除</DropdownItem></DropdownMenu></Dropdown>}
                 </div>
               </div>;
             })}</div>
@@ -1010,8 +1013,8 @@ export default function NodePage() {
             <ModalHeader>{monitorNode ? `${monitorNode.name} · 实时监控` : '实时监控'}</ModalHeader>
             <ModalBody>
               {monitorNode && <div className="monitor-detail-facts">
-                <div><span>服务器地址</span><strong>{monitorNode.serverIp || '—'}</strong></div>
-                <div><span>入口 IP</span><strong>{monitorNode.ip || '—'}</strong></div>
+                {canManageNode(monitorNode) && <><div><span>服务器地址</span><strong>{monitorNode.serverIp || '—'}</strong></div>
+                <div><span>入口 IP</span><strong>{monitorNode.ip || '—'}</strong></div></>}
                 <div><span>端口范围</span><strong>{monitorNode.portSta} – {monitorNode.portEnd}</strong></div>
                 <div><span>Agent 版本</span><strong>{monitorNode.version || '未知'}</strong></div>
                 <div><span>运行时长</span><strong>{monitorNode.systemInfo ? formatUptime(monitorNode.systemInfo.uptime) : '—'}</strong></div>
@@ -1291,6 +1294,7 @@ export default function NodePage() {
                   <p className="mt-2 text-xs text-default-500">
                     安装脚本会按本机 CPU、内存和内核能力限制最高档位。1 GB 节点若最低档设为“小型”，实际可能只剩单一档位；选“轻量”才能在压力下继续降档。BBR/FQ 不参与动态切换。
                   </p>
+                  <p className="mt-2 text-xs text-warning-600">修改 TCP 档位或动态保护范围后，请在节点服务器上重新执行同一固定安装命令，使新的系统参数生效。</p>
                   {errors.tcpTuning && <p className="mt-1 text-xs text-danger">{errors.tcpTuning}</p>}
                 </div>
 
@@ -1302,7 +1306,7 @@ export default function NodePage() {
                     <span className="font-medium">启用 Cloudflare DDNS</span>
                   </Switch>
                   <p className="mt-1 text-xs text-default-500">
-                    配置会随节点保存。安装、重装或自动换机时直接执行同一安装命令即可恢复 DDNS；运行中每分钟仅在本机公网 IP 改变时才调用 Cloudflare。
+                    配置保存在面板中。1.4.15 及以上节点会在保存后同步域名和 API Token，无需重装或替换安装命令；离线节点恢复连接后同步。旧版节点需先执行固定安装命令升级一次。
                   </p>
 
                   {form.ddnsEnabled && (
@@ -1413,7 +1417,8 @@ export default function NodePage() {
                 <p className="text-sm text-default-600">
                   请复制以下安装命令到服务器上执行：
                 </p>
-                <p className="text-sm text-warning-600">命令永久有效，可保存到自动换机脚本并重复执行；每次执行都会使用节点当前保存的安装设置。</p>
+                <p className="text-sm text-default-600">这是该节点的固定安装命令，可永久保存并重复执行。它从 Git 下载后端安装程序，再从面板获取最新配置并保存在服务器上；修改 DDNS 域名、API Token 或安装设置无需更换命令。</p>
+                <p className="text-xs text-default-500">1.4.15 及以上节点会自动同步 DDNS 修改；TCP 调优参数需重新执行同一命令才生效。命令中的密钥请妥善保管；删除节点或主动轮换节点密钥后，旧命令失效。</p>
                 <div className="relative">
                   <Textarea
                     value={installCommand}

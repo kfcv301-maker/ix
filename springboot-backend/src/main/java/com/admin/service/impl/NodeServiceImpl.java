@@ -8,6 +8,7 @@ import com.admin.common.dto.NodeInstallCommandDto;
 import com.admin.common.dto.NodeUpdateDto;
 import com.admin.common.lang.R;
 import com.admin.common.service.NodeInstallBootstrapService;
+import com.admin.common.service.NodeAgentConfigService;
 import com.admin.common.utils.AESCrypto;
 import com.admin.common.utils.WebSocketServer;
 import com.admin.common.utils.JwtUtil;
@@ -86,6 +87,9 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
     private NodeInstallBootstrapService installBootstrapService;
 
     @Resource
+    private NodeAgentConfigService agentConfigService;
+
+    @Resource
     private TunnelEntryNodeMapper tunnelEntryNodeMapper;
 
     @Resource
@@ -99,7 +103,7 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
     @Value("${jwt-secret}")
     private String jwtSecret;
 
-    @Value("${agent.install.release:1.4.14}")
+    @Value("${agent.install.release:1.4.15}")
     private String agentInstallRelease;
 
     private volatile AESCrypto ddnsCrypto;
@@ -149,6 +153,16 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
         }
         nodeList.forEach(node -> node.setCanManage(administrator || Objects.equals(node.getOwnerUserId(), userId)));
         hideNodeSecrets(nodeList);
+        nodeList.stream().filter(node -> !Boolean.TRUE.equals(node.getCanManage())).forEach(node -> {
+            node.setIp(null);
+            node.setServerIp(null);
+            node.setDdnsRecordName(null);
+            node.setDdnsEnabled(null);
+            node.setTcpTuningProfile(null);
+            node.setTcpTuningAutoEnabled(null);
+            node.setTcpTuningProfileMin(null);
+            node.setTcpTuningProfileMax(null);
+        });
         return R.ok(nodeList);
     }
 
@@ -223,6 +237,7 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
             tunnelService.updateBatchById(outNodeId);
         }
 
+        if (result) agentConfigService.requestSync(node.getId());
         return result ? R.ok(SUCCESS_UPDATE_MSG) : R.err(ERROR_UPDATE_MSG);
     }
 
@@ -494,14 +509,14 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
             return R.err(403, "当前账号无法获取安装命令");
         }
         String origin = normalizePanelUrl(commandDto.getPanelUrl());
-        String token = reusableInstallToken(node, issuer, origin);
-        String url = origin + "/api/v1/node/install-script/" + node.getId()
-                + "?issuerId=" + issuer.getId() + "&panelUrl=" + URLEncoder.encode(origin, StandardCharsets.UTF_8);
-        // Carry the credential in a header, never in an access-log URL. No clock,
-        // in-memory ticket or single-use claim: this survives backend restarts.
-        return R.ok("(f=$(mktemp) || exit; trap 'rm -f \"$f\"' EXIT; curl -fsS --retry 3 -H "
-                + shellQuote("Authorization: Bearer " + token) + " " + shellQuote(url)
-                + " -o \"$f\" && bash \"$f\")");
+        String token = NodeAgentConfigService.installKey(node);
+        // A fixed Git bootstrap entry fetches the currently pinned release and
+        // node configuration from the panel. No user session or configuration
+        // value participates in the installation identity.
+        return R.ok("(f=$(mktemp) || exit; trap 'rm -f \"$f\"' EXIT; curl -fsSL --retry 3 "
+                + "https://raw.githubusercontent.com/kfcv301-maker/ix/main/node_install.sh"
+                + " -o \"$f\" && bash \"$f\" --panel " + shellQuote(origin)
+                + " --node-id " + node.getId() + " --install-key " + shellQuote(token) + ")");
     }
 
     @Override
