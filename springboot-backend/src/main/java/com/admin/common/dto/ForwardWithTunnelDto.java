@@ -75,6 +75,8 @@ public class ForwardWithTunnelDto {
      */
     private String entryDomain;
 
+    private String entryAddressMode;
+
     private String userName;
 
 

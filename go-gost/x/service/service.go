@@ -65,6 +65,11 @@ func SetProtocolBlock(httpOn int, tlsOn int, socksOn int) {
 type Option func(opts *options)
 
 func init() {
+	for _, arg := range os.Args[1:] {
+		if arg == "--panel-agent-version" || arg == "-panel-agent-version" || arg == "--panel-agent-version=true" || arg == "-panel-agent-version=true" {
+			return
+		}
+	}
 	// The Agent executable loads config.json before it starts services.  This
 	// package is also imported by utilities and tests, where the caller's
 	// working directory legitimately has no Agent configuration.  A library

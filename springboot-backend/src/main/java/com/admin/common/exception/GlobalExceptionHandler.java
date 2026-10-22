@@ -35,7 +35,10 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(value = Exception.class)
     public R Exception(Exception e){
         log.info("异常：----------------{}", e.getMessage());
-        return R.err(-2, e.getMessage());
+        // Unhandled SQL/transport errors can contain private node addresses,
+        // connection strings or credentials. Explicit business handlers above
+        // retain their safe validation/authorization messages.
+        return R.err(-2, "服务暂时不可用，请稍后重试或联系管理员");
     }
 
 }

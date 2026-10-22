@@ -6,6 +6,7 @@ import cn.hutool.core.map.MapUtil;
 import cn.hutool.core.util.StrUtil;
 import com.admin.common.dto.*;
 import com.admin.common.lang.R;
+import com.admin.common.service.UserIngressAddressService;
 import com.admin.common.task.ForwardPauseTaskService;
 import com.admin.common.utils.JwtUtil;
 import com.admin.common.utils.PasswordHashes;
@@ -98,6 +99,9 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     
     @Resource
     private UserTunnelMapper userTunnelMapper;
+
+    @Resource
+    private UserIngressAddressService userIngressAddressService;
     
     @Resource
     UserTunnelService userTunnelService;
@@ -704,6 +708,16 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         
         // 3. 获取转发详情
         List<UserPackageDto.UserForwardDetailDto> forwards = userMapper.getUserForwardDetails(user.getId().intValue());
+        if (!Objects.equals(roleId, ADMIN_ROLE_ID)) {
+            Map<Integer, UserIngressAddressService.Address> addresses = userIngressAddressService.forUser(user.getId().intValue());
+            for (UserPackageDto.UserForwardDetailDto forward : forwards) {
+                UserIngressAddressService.Address address = addresses.getOrDefault(
+                        forward.getTunnelId(), UserIngressAddressService.UNASSIGNED);
+                forward.setInIp(address.address());
+                forward.setEntryDomain(address.domain());
+                forward.setEntryAddressMode(address.mode());
+            }
+        }
 
         // 4. 查询最近24小时流量信息，没有的补0
         List<StatisticsFlow> statisticsFlows = getLast24HoursFlowStatistics(user.getId());

@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 
 # Keep fresh installs on the reviewed TCP buffer fix after a node OS reinstall.
-AGENT_RELEASE="${AGENT_RELEASE:-1.4.14}"
+AGENT_RELEASE="${AGENT_RELEASE:-1.4.15}"
 [[ "$AGENT_RELEASE" =~ ^[0-9]+(\.[0-9]+){1,3}$ ]] || { printf '无效的 Agent 发布版本：%s\n' "$AGENT_RELEASE" >&2; exit 1; }
 AGENT_RELEASE_BASE="${AGENT_RELEASE_BASE:-https://github.com/kfcv301-maker/ix/releases/download/${AGENT_RELEASE}}"
 INSTALL_DIR="${INSTALL_DIR:-/etc/flux-panel-agent}"
@@ -18,6 +18,7 @@ NODE_SECRET=""
 DDNS_MODE="unchanged"
 CF_API_TOKEN=""
 CF_RECORD_NAME=""
+NODE_CONFIG_FILE=""
 TUNE_TCP=1
 TCP_PROFILE_OVERRIDE=""
 TCP_PROFILE_MIN=""
@@ -57,11 +58,12 @@ Lunaris Relay 节点 Agent 安装脚本
   install.sh --panel https://panel.example.com --token 节点独立密钥 --tcp-auto-tune --tcp-profile-min small --tcp-profile-max standard
   install.sh --panel https://panel.example.com --token 节点独立密钥 --cf-api-token Cloudflare令牌 --cf-record node.example.com
   install.sh --panel https://panel.example.com --token 节点独立密钥 --disable-ddns
+  install.sh --config-file /root/private-node-config.json
   install.sh --uninstall
 
 可选环境变量：
-  AGENT_RELEASE=1.4.14
-  AGENT_RELEASE_BASE=https://github.com/kfcv301-maker/ix/releases/download/1.4.14
+  AGENT_RELEASE=1.4.15
+  AGENT_RELEASE_BASE=https://github.com/kfcv301-maker/ix/releases/download/1.4.15
   INSTALL_DIR=/etc/flux-panel-agent
 EOF
 }
@@ -588,6 +590,34 @@ download_agent() {
 
 write_config() {
   umask 077
+  if [[ -n "$NODE_CONFIG_FILE" ]]; then
+    # Build and atomically replace private JSON without putting credentials in
+    # argv, environment variables, shell interpolation, or log output.
+    python3 - "$NODE_CONFIG_FILE" "$INSTALL_DIR/config.json" <<'PY'
+import json,os,sys,tempfile
+source,target=sys.argv[1:]
+data=json.load(open(source))
+try:
+    existing=json.load(open(target))
+except FileNotFoundError:
+    existing={}
+runtime={k:v for k,v in data.items() if k in ('schemaVersion','revision','ddns','tcpTuningProfile','tcpTuningAutoEnabled','tcpTuningProfileMin','tcpTuningProfileMax')}
+existing.update(addr=data['panelUrl'],secret=data['secret'],runtime=runtime)
+for flag in ('http','tls','socks'):
+    existing[flag]=existing.get(flag) if existing.get(flag) in (0,1) else 1
+fd,temp=tempfile.mkstemp(prefix='.node-config-',dir=os.path.dirname(target))
+try:
+    os.fchmod(fd,0o600)
+    with os.fdopen(fd,'w') as out:
+        json.dump(existing,out,indent=2);out.flush();os.fsync(out.fileno())
+    os.replace(temp,target)
+finally:
+    if os.path.exists(temp):os.unlink(temp)
+PY
+    [[ -f "$INSTALL_DIR/gost.json" ]] || printf '{"services":[],"chains":[],"limiters":[]}\n' > "$INSTALL_DIR/gost.json"
+    chmod 600 "$INSTALL_DIR/gost.json"
+    return
+  fi
   # Reinstalling the Agent must not silently enable protocols that the panel
   # administrator has disabled on this node.
   local current_config="$INSTALL_DIR/config.json" http tls socks
@@ -606,6 +636,51 @@ EOF
   chmod 600 "$INSTALL_DIR/config.json"
   [[ -f "$INSTALL_DIR/gost.json" ]] || printf '{"services":[],"chains":[],"limiters":[]}\n' > "$INSTALL_DIR/gost.json"
   chmod 600 "$INSTALL_DIR/gost.json"
+}
+
+load_node_config() {
+  [[ -n "$NODE_CONFIG_FILE" ]] || return 0
+  command -v python3 >/dev/null || fail "--config-file 需要 python3"
+  local values
+  values="$(mktemp)"
+  chmod 600 "$values"
+  if ! python3 - "$NODE_CONFIG_FILE" > "$values" <<'PY'
+import json,os,re,stat,sys
+from urllib.parse import urlsplit
+try:
+    path=sys.argv[1]
+    st=os.stat(path,follow_symlinks=False)
+    if not stat.S_ISREG(st.st_mode) or st.st_uid!=os.geteuid() or st.st_mode & 0o077 or st.st_size>65536:raise ValueError()
+    d=json.load(open(path))
+    if d.get('schemaVersion')!=1:raise ValueError()
+    panel=d['panelUrl'];secret=d['secret'];u=urlsplit(panel)
+    if u.scheme not in ('http','https') or not u.hostname or u.username or u.password or u.query or u.fragment or u.path not in ('','/'):raise ValueError()
+    if not isinstance(secret,str) or not secret or any(c in secret for c in '\r\n\x00'):raise ValueError()
+    ddns=d['ddns']
+    if not isinstance(ddns.get('enabled'),bool):raise ValueError()
+    if ddns['enabled']:
+        if ddns.get('provider')!='cloudflare' or not isinstance(ddns.get('apiToken'),str) or not ddns['apiToken'] or any(c in ddns['apiToken'] for c in '\r\n\x00'):raise ValueError()
+        if not re.fullmatch(r'([a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z0-9-]{1,63}',ddns.get('recordName','')):raise ValueError()
+    allowed=('auto','tiny','small','balanced','standard')
+    profile=d.get('tcpTuningProfile') or 'auto'
+    minimum=d.get('tcpTuningProfileMin') or 'tiny';maximum=d.get('tcpTuningProfileMax') or 'standard'
+    if profile not in allowed or minimum not in allowed[1:] or maximum not in allowed[1:]:raise ValueError()
+    auto=d.get('tcpTuningAutoEnabled',False)
+    if not isinstance(auto,bool):raise ValueError()
+    for value in (panel,secret,'' if profile=='auto' or auto else profile,'1' if auto else '0',minimum if auto else '',maximum if auto else ''):
+        sys.stdout.buffer.write(value.encode()+b'\0')
+except Exception:
+    sys.exit('Invalid private node configuration')
+PY
+  then rm -f "$values"; fail "节点配置校验失败"; fi
+  local -a config_values=()
+  mapfile -d '' -t config_values < "$values"
+  rm -f "$values"
+  [[ "${#config_values[@]}" -eq 6 ]] || fail "节点配置不完整"
+  SERVER_ADDR="${config_values[0]}" NODE_SECRET="${config_values[1]}"
+  TCP_PROFILE_OVERRIDE="${config_values[2]}" TCP_AUTO_TUNE="${config_values[3]}"
+  TCP_PROFILE_MIN="${config_values[4]}" TCP_PROFILE_MAX="${config_values[5]}"
+  DDNS_MODE="managed"
 }
 
 existing_protocol_flag() {
@@ -877,6 +952,11 @@ EOF
 }
 
 configure_ddns() {
+  if [[ "$DDNS_MODE" == "managed" ]]; then
+    # Agent owns DDNS now and can hot-apply future panel changes. Never recreate
+    # the legacy timer after the Agent has already disabled it during startup.
+    return 0
+  fi
   if [[ "$DDNS_MODE" == "disabled" ]]; then
     if [[ "$INIT_SYSTEM" == "systemd" ]]; then
       systemctl disable --now "$DDNS_TIMER_NAME" 2>/dev/null || true
@@ -932,6 +1012,7 @@ EOF
 
 install_agent() {
   require_root
+  load_node_config
   detect_init_system
   [[ -n "$SERVER_ADDR" ]] || fail "缺少 --panel 参数。"
   [[ -n "$NODE_SECRET" ]] || fail "缺少 --token 参数。"
@@ -954,6 +1035,9 @@ install_agent() {
   write_config
   configure_tcp_tuning_guard
   write_service
+  # Complete legacy DDNS setup before the new Agent starts and takes ownership.
+  # Running this afterwards would resurrect a stopped legacy timer.
+  configure_ddns
 
   sleep 1
   start_agent_service || {
@@ -965,7 +1049,6 @@ install_agent() {
     fail "Agent 启动失败，已保留配置以便排查。"
   }
   ok "节点 Agent 已启动并设为开机自启"
-  configure_ddns
   if [[ "$INIT_SYSTEM" == "systemd" ]]; then
     printf '状态查看：systemctl status %s\n' "$SERVICE_NAME"
   else
@@ -1006,6 +1089,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --panel|-p|--server|-a) SERVER_ADDR="${2:-}"; shift 2 ;;
     --token|-t|--secret|-s) NODE_SECRET="${2:-}"; shift 2 ;;
+    --config-file) NODE_CONFIG_FILE="${2:-}"; shift 2 ;;
     --cf-api-token) CF_API_TOKEN="${2:-}"; DDNS_MODE="enabled"; shift 2 ;;
     --cf-record) CF_RECORD_NAME="${2:-}"; DDNS_MODE="enabled"; shift 2 ;;
     --disable-ddns) DDNS_MODE="disabled"; shift ;;

@@ -14,7 +14,7 @@ public class TunnelListDto {
      */
     private String ip;
 
-    /** The original tunnel ingress, retained when a user receives a domain. */
+    /** Administrative view only; never returned to a shared tunnel consumer. */
     private String originalIp;
 
     /** A normal user only receives their own NONE / DEFAULT / CUSTOM choice. */
@@ -22,7 +22,7 @@ public class TunnelListDto {
 
     private Long entryDomainId;
 
-    /** The effective assigned domain; null means the raw ingress is used. */
+    /** Effective assigned domain; missing CUSTOM/DEFAULT means no usable address. */
     private String entryDomain;
     
     /**

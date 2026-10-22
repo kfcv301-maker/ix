@@ -4,11 +4,13 @@ import cn.hutool.core.util.StrUtil;
 import com.admin.common.dto.*;
 
 import com.admin.common.lang.R;
+import com.admin.common.service.UserIngressAddressService;
 import com.admin.common.task.TunnelForwardDiagnosisTaskService;
 import com.admin.common.utils.GostUtil;
 import com.admin.common.utils.JwtUtil;
 import com.admin.common.utils.TcpPingDiagnosisParser;
 import com.admin.common.utils.WebSocketServer;
+import com.admin.common.utils.UserDiagnosisView;
 import com.admin.entity.Forward;
 import com.admin.entity.Node;
 import com.admin.entity.Tunnel;
@@ -109,6 +111,9 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
 
     @Resource
     private TunnelEntryDomainService tunnelEntryDomainService;
+
+    @Resource
+    private UserIngressAddressService userIngressAddressService;
 
     @Resource
     NodeService nodeService;
@@ -269,6 +274,22 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
         }
         tunnelList.forEach(tunnel -> tunnel.setCanManage(administrator || Objects.equals(tunnel.getOwnerUserId(), userId)));
         tunnelList.forEach(this::populateEntryNodeIds);
+        if (!administrator) {
+            Map<Integer, UserIngressAddressService.Address> addresses = userIngressAddressService.forUser(userId.intValue());
+            tunnelList.removeIf(tunnel -> !Boolean.TRUE.equals(tunnel.getCanManage())
+                    && !addresses.containsKey(tunnel.getId().intValue()));
+            for (Tunnel tunnel : tunnelList) {
+                if (Boolean.TRUE.equals(tunnel.getCanManage())) continue;
+                UserIngressAddressService.Address address = addresses.get(tunnel.getId().intValue());
+                tunnel.setInIp(address.address());
+                tunnel.setEntryDomain(address.domain());
+                tunnel.setEntryAddressMode(address.mode());
+                tunnel.setOutIp(null);
+                tunnel.setInterfaceName(null);
+                tunnel.setTcpListenAddr(null);
+                tunnel.setUdpListenAddr(null);
+            }
+        }
         return R.ok(tunnelList);
     }
 
@@ -919,26 +940,15 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
         if (tunnelDtos.isEmpty()) {
             return;
         }
-        Map<Integer, UserTunnel> assignments = userTunnelMapper.selectList(
-                        new QueryWrapper<UserTunnel>().eq("user_id", userId))
-                .stream()
-                .collect(Collectors.toMap(UserTunnel::getTunnelId, value -> value, (first, ignored) -> first));
-
+        Map<Integer, UserIngressAddressService.Address> addresses = userIngressAddressService.forUser(userId);
+        tunnelDtos.removeIf(tunnel -> !addresses.containsKey(tunnel.getId()));
         for (TunnelListDto tunnelDto : tunnelDtos) {
-            UserTunnel assignment = assignments.get(tunnelDto.getId());
-            if (assignment == null) {
-                continue;
-            }
-            String mode = StringUtils.isBlank(assignment.getEntryAddressMode())
-                    ? TunnelEntryDomainService.ENTRY_ADDRESS_MODE_NONE
-                    : assignment.getEntryAddressMode().trim().toUpperCase(Locale.ROOT);
-            tunnelDto.setEntryAddressMode(mode);
-            tunnelDto.setEntryDomainId(assignment.getEntryDomainId());
-            String assignedDomain = tunnelEntryDomainService.resolveAssignedDomain(assignment);
-            if (StringUtils.isNotBlank(assignedDomain)) {
-                tunnelDto.setEntryDomain(assignedDomain);
-                tunnelDto.setIp(assignedDomain);
-            }
+            UserIngressAddressService.Address address = addresses.get(tunnelDto.getId());
+            tunnelDto.setOriginalIp(null);
+            tunnelDto.setEntryAddressMode(address.mode());
+            tunnelDto.setEntryDomainId(address.domainId());
+            tunnelDto.setEntryDomain(address.domain());
+            tunnelDto.setIp(address.address());
         }
     }
 
@@ -1031,21 +1041,29 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
         }
 
         List<Forward> forwards = forwardService.list(forwardQuery);
-        return tunnelForwardDiagnosisTaskService.start(tunnel, currentUser.getUserId(), forwards);
+        return diagnosisView(tunnelForwardDiagnosisTaskService.start(tunnel, currentUser.getUserId(), forwards));
     }
 
     @Override
     public R getTunnelForwardDiagnosisTask(String taskId) {
         UserInfo currentUser = getCurrentUserInfo();
-        return tunnelForwardDiagnosisTaskService.get(taskId, currentUser.getUserId(),
-                Objects.equals(currentUser.getRoleId(), ADMIN_ROLE_ID));
+        return diagnosisView(tunnelForwardDiagnosisTaskService.get(taskId, currentUser.getUserId(),
+                Objects.equals(currentUser.getRoleId(), ADMIN_ROLE_ID)));
     }
 
     @Override
     public R cancelTunnelForwardDiagnosisTask(String taskId) {
         UserInfo currentUser = getCurrentUserInfo();
-        return tunnelForwardDiagnosisTaskService.cancel(taskId, currentUser.getUserId(),
-                Objects.equals(currentUser.getRoleId(), ADMIN_ROLE_ID));
+        return diagnosisView(tunnelForwardDiagnosisTaskService.cancel(taskId, currentUser.getUserId(),
+                Objects.equals(currentUser.getRoleId(), ADMIN_ROLE_ID)));
+    }
+
+    private R diagnosisView(R result) {
+        if (isAdministrator() || result == null || result.getCode() != 0 || !(result.getData() instanceof Map<?, ?> data)) return result;
+        Object tunnelId = data.get("tunnelId");
+        Tunnel tunnel = tunnelId instanceof Number ? this.getById(((Number) tunnelId).longValue()) : null;
+        return tunnel != null && Objects.equals(tunnel.getOwnerUserId(), currentUserId())
+                ? result : UserDiagnosisView.restrict(result);
     }
 
     /**

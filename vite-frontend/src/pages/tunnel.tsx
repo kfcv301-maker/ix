@@ -29,6 +29,8 @@ import type { TunnelEntryDomain } from "@/types";
 import { useTunnelDiagnosis } from '@/hooks/use-tunnel-diagnosis';
 import { diagnosisProgressText, TCP_DIAGNOSIS_NOTICE } from '@/utils/tunnel-diagnosis';
 import { proxyProtocolDiagnosisNotice } from '@/utils/forward-proxy-protocol';
+import { assignedEntryAddress, UNASSIGNED_ENTRY_ADDRESS, type EntryAddressMode } from '@/utils/entry-address';
+import { JwtUtil } from '@/utils/jwt';
 
 interface Tunnel {
   id: number;
@@ -39,6 +41,8 @@ interface Tunnel {
   entryNodeIds?: number[];
   outNodeId?: number;
   inIp: string;
+  entryAddressMode?: EntryAddressMode;
+  entryDomain?: string;
   outIp?: string;
   protocol?: string;
   tcpListenAddr: string;
@@ -100,7 +104,10 @@ export default function TunnelPage() {
   const [tunnels, setTunnels] = useState<Tunnel[]>([]);
   const [tunnelSearch, setTunnelSearch] = useState('');
   const [tunnelTypeFilter, setTunnelTypeFilter] = useState('all');
-  const visibleTunnels = tunnels.filter(tunnel => (tunnelTypeFilter === 'all' || String(tunnel.type) === tunnelTypeFilter) && [tunnel.name, tunnel.inIp, tunnel.outIp, tunnel.protocol].join(' ').toLowerCase().includes(tunnelSearch.trim().toLowerCase()));
+  const isAdministrator = JwtUtil.getRoleIdFromToken() === 0;
+  const canManageTunnel = (tunnel: Tunnel) => isAdministrator || tunnel.canManage === true;
+  const getTunnelEntryAddress = (tunnel: Tunnel) => assignedEntryAddress(tunnel, canManageTunnel(tunnel));
+  const visibleTunnels = tunnels.filter(tunnel => (tunnelTypeFilter === 'all' || String(tunnel.type) === tunnelTypeFilter) && [tunnel.name, getTunnelEntryAddress(tunnel), canManageTunnel(tunnel) ? tunnel.outIp : '', tunnel.protocol].join(' ').toLowerCase().includes(tunnelSearch.trim().toLowerCase()));
   const clearTunnelFilters = () => { setTunnelSearch(''); setTunnelTypeFilter('all'); };
 
   const [nodes, setNodes] = useState<Node[]>([]);
@@ -633,7 +640,7 @@ export default function TunnelPage() {
     );
   }
 
-  const manageableNodes = nodes.filter(node => node.canManage !== false);
+  const manageableNodes = nodes.filter(node => isAdministrator || node.canManage === true);
   const onlineManageableNodes = manageableNodes.filter(node => node.status === 1);
 
   return (
@@ -664,7 +671,7 @@ export default function TunnelPage() {
         )}
 
         <ConsoleStats items={[
-          {label:'全部隧道',value:tunnels.length,detail:'当前账户可管理的隧道'},
+          {label:'全部隧道',value:tunnels.length,detail:'当前账户可用的隧道'},
           {label:'端口转发',value:tunnels.filter(t=>t.type === 1).length,detail:'入口直接连接落地'},
           {label:'隧道转发',value:tunnels.filter(t=>t.type === 2).length,detail:'通过出口节点连接落地'},
           {label:'多入口隧道',value:tunnels.filter(t=>(t.entryNodeIds?.length || 0)>1).length,detail:'同一规则同步至多个入口'},
@@ -677,6 +684,7 @@ export default function TunnelPage() {
             {visibleTunnels.map((tunnel) => {
               const statusDisplay = getStatusDisplay(tunnel.status);
               const typeDisplay = getTypeDisplay(tunnel.type);
+              const entryAddress = getTunnelEntryAddress(tunnel);
               
               return (
                 <Card key={tunnel.id} className="shadow-sm border border-divider hover:shadow-md transition-shadow duration-200">
@@ -712,17 +720,17 @@ export default function TunnelPage() {
                       <div className="space-y-1.5">
                         <div className="p-2 bg-default-50 dark:bg-default-100/50 rounded border border-default-200 dark:border-default-300">
                           <div className="flex items-center justify-between mb-1">
-                            <span className="text-xs font-medium text-default-600">入口节点</span>
+                            <span className="text-xs font-medium text-default-600">{canManageTunnel(tunnel) ? '入口节点' : '分配给你的入口地址'}</span>
                           </div>
-                          <code className="text-xs font-mono text-foreground block truncate">
+                          {canManageTunnel(tunnel) && <code className="text-xs font-mono text-foreground block truncate">
                             {getEntryNodeNames(tunnel)}
-                          </code>
+                          </code>}
                           <code className="text-xs font-mono text-default-500 block truncate">
-                            {getDisplayAddress(tunnel.inIp)}
+                            {entryAddress ? getDisplayAddress(entryAddress) : UNASSIGNED_ENTRY_ADDRESS}
                           </code>
                         </div>
                         
-                        <div className="text-center py-0.5">
+                        {canManageTunnel(tunnel) && <><div className="text-center py-0.5">
                           <svg className="w-3 h-3 text-default-400 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
                           </svg>
@@ -740,7 +748,7 @@ export default function TunnelPage() {
                           <code className="text-xs font-mono text-default-500 block truncate">
                             {tunnel.type === 1 ? getDisplayAddress(tunnel.inIp) : getDisplayAddress(tunnel.outIp)}
                           </code>
-                        </div>
+                        </div></>}
                       </div>
 
                       {/* 配置信息 */}
@@ -760,7 +768,7 @@ export default function TunnelPage() {
                     </div>
                     
                     <div className="grid grid-cols-2 gap-1.5 mt-3">
-                      {tunnel.canManage !== false && <Button
+                      {canManageTunnel(tunnel) && <Button
                         size="sm"
                         variant="flat"
                         color="secondary"
@@ -775,7 +783,7 @@ export default function TunnelPage() {
                       >
                         解析域名
                       </Button>}
-                      {tunnel.canManage !== false && <Button
+                      {canManageTunnel(tunnel) && <Button
                         size="sm"
                         variant="flat"
                         color="primary"
@@ -804,7 +812,7 @@ export default function TunnelPage() {
                       >
                         一键 PING
                       </Button>
-                      {tunnel.canManage !== false && <Button
+                      {canManageTunnel(tunnel) && <Button
                         size="sm"
                         variant="flat"
                         color="warning"
@@ -818,7 +826,7 @@ export default function TunnelPage() {
                       >
                         诊断
                       </Button>}
-                      {tunnel.canManage !== false && <Button
+                      {canManageTunnel(tunnel) && <Button
                         size="sm"
                         variant="flat"
                         color="danger"

@@ -20,6 +20,7 @@ import (
 	"github.com/go-gost/x/internal/net/udp"
 	"github.com/go-gost/x/internal/util/crypto"
 	"github.com/go-gost/x/internal/util/mux"
+	"github.com/go-gost/x/runtimeconfig"
 	"github.com/go-gost/x/service"
 	"github.com/gorilla/websocket"
 	"github.com/shirou/gopsutil/v3/cpu"
@@ -185,6 +186,7 @@ type WebSocketReporter struct {
 	aesCrypto             *crypto.AESCrypto // 新增：AES加密器
 	onConnected           func()            // WebSocket 每次连通后的轻量回调
 	lastDetailedMetricsAt time.Time
+	runtimeConfig         *runtimeconfig.Manager
 }
 
 // NewWebSocketReporter 创建一个新的WebSocket报告器
@@ -221,6 +223,9 @@ func (w *WebSocketReporter) Start() {
 // Stop 停止WebSocket报告器
 func (w *WebSocketReporter) Stop() {
 	w.cancel()
+	if w.runtimeConfig != nil {
+		w.runtimeConfig.Stop()
+	}
 	if w.conn != nil {
 		w.conn.Close()
 	}
@@ -345,6 +350,9 @@ func (w *WebSocketReporter) connect() error {
 	w.conn = conn
 	w.connected = true
 	connectedHandler := w.onConnected
+	if w.runtimeConfig != nil {
+		go w.runtimeConfig.Refresh()
+	}
 
 	// 设置关闭处理器来检测连接状态
 	w.conn.SetCloseHandler(func(code int, text string) error {
@@ -690,13 +698,8 @@ func (w *WebSocketReporter) handleReceivedMessage(messageType int, message []byt
 
 // routeCommand 路由命令到对应的处理函数
 func (w *WebSocketReporter) routeCommand(cmd CommandMessage) {
-	jsonBytes, errs := json.Marshal(cmd)
-	if errs != nil {
-		fmt.Println("Error marshaling JSON:", errs)
-		return
-	}
-
-	fmt.Println("🔔 收到命令: ", string(jsonBytes))
+	// Command payloads may contain node/provider credentials. Log metadata only.
+	fmt.Println("🔔 收到命令: ", cmd.Type)
 	var err error
 	var response CommandResponse
 
@@ -704,6 +707,23 @@ func (w *WebSocketReporter) routeCommand(cmd CommandMessage) {
 	response.RequestId = cmd.RequestId
 
 	switch cmd.Type {
+	case "NodeRuntimeConfigCapabilities":
+		response.Type = "NodeRuntimeConfigCapabilitiesResponse"
+		response.Data = map[string]any{"nodeRuntimeConfig": 1, "hotApply": []string{"ddns"}}
+	case "SetNodeRuntimeConfig":
+		response.Type = "SetNodeRuntimeConfigResponse"
+		var cfg runtimeconfig.Config
+		b, marshalErr := json.Marshal(cmd.Data)
+		if marshalErr != nil || json.Unmarshal(b, &cfg) != nil {
+			err = fmt.Errorf("invalid node runtime configuration")
+		} else if w.runtimeConfig == nil {
+			err = fmt.Errorf("node runtime configuration manager unavailable")
+		} else {
+			err = w.runtimeConfig.Apply(cfg)
+			if err == nil {
+				response.Data = map[string]any{"revision": cfg.Revision, "applied": []string{"ddns"}, "tcpTuningRequiresInstall": true}
+			}
+		}
 	// Service 相关命令
 	case "AddService":
 		err = w.handleAddService(cmd.Data)
@@ -770,7 +790,7 @@ func (w *WebSocketReporter) routeCommand(cmd CommandMessage) {
 	}
 
 	// 发送响应
-	if err == nil && cmd.Type != "UserProtocolPolicyCapabilities" && cmd.Type != "ForwardProxyProtocolCapabilities" {
+	if err == nil && cmd.Type != "UserProtocolPolicyCapabilities" && cmd.Type != "ForwardProxyProtocolCapabilities" && cmd.Type != "NodeRuntimeConfigCapabilities" && cmd.Type != "SetNodeRuntimeConfig" {
 		err = saveConfig()
 	}
 	if err != nil {
@@ -1057,32 +1077,10 @@ func (w *WebSocketReporter) handleSetProtocol(data interface{}) error {
 
 // updateLocalConfigJSON 将 http/tls/socks 写入工作目录下的 config.json
 func updateLocalConfigJSON(httpVal int, tlsVal int, socksVal int) error {
-	path := "config.json"
-
-	// 读取现有配置
-	type LocalConfig struct {
-		Addr   string `json:"addr"`
-		Secret string `json:"secret"`
-		Http   int    `json:"http"`
-		Tls    int    `json:"tls"`
-		Socks  int    `json:"socks"`
-	}
-
-	var cfg LocalConfig
-	if b, err := os.ReadFile(path); err == nil {
-		_ = json.Unmarshal(b, &cfg)
-	}
-
-	cfg.Http = httpVal
-	cfg.Tls = tlsVal
-	cfg.Socks = socksVal
-
-	// 写回
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, 0644)
+	return runtimeconfig.UpdateLocal("config.json", func(doc map[string]any) error {
+		doc["http"], doc["tls"], doc["socks"] = httpVal, tlsVal, socksVal
+		return nil
+	})
 }
 
 // handleCall 处理服务端的call回调消息
@@ -1401,6 +1399,8 @@ func StartWebSocketReporterWithConfig(addr string, secret string, http int, tls 
 	reporter.addr = addr
 	reporter.secret = secret
 	reporter.version = version
+	reporter.runtimeConfig = runtimeconfig.New(reporter.ctx, "config.json", addr, secret)
+	reporter.runtimeConfig.Start()
 	reporter.Start()
 	return reporter
 }
