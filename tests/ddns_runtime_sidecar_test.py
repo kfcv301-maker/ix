@@ -1,4 +1,5 @@
 import copy
+import io
 import json
 from pathlib import Path
 import subprocess
@@ -51,6 +52,15 @@ class Network:
 
 
 class SidecarTests(unittest.TestCase):
+    def test_http_identifies_configuration_client(self):
+        with patch.object(sidecar.urllib.request, 'build_opener') as build:
+            build.return_value.open.return_value = io.BytesIO(b'{"ok":true}')
+            self.assertEqual(sidecar.request_json('https://panel.example/api/v1/node/runtime-config',
+                {'Authorization': 'Bearer test-only'}), {'ok': True})
+            request = build.return_value.open.call_args.args[0]
+            self.assertEqual(request.get_header('User-agent'), 'Lunaris-DDNS/1.4.16')
+            self.assertEqual(request.get_header('Authorization'), 'Bearer test-only')
+
     def setUp(self):
         self.root = Path('/private-test-root')
         self.store = {str(self.root / 'config.json'): {'addr': 'https://panel.example', 'secret': 'private-node-secret'}}

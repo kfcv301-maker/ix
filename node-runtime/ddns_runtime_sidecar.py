@@ -39,7 +39,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def request_json(url, headers, method='GET', body=None):
-    request = urllib.request.Request(url, headers=headers, method=method,
+    request = urllib.request.Request(url, headers={'User-Agent': 'Lunaris-DDNS/1.4.16', **headers}, method=method,
         data=None if body is None else json.dumps(body).encode())
     try:
         with urllib.request.build_opener(NoRedirect()).open(request, timeout=20) as response:
