@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -15,6 +16,31 @@ import (
 	"github.com/go-gost/core/metadata"
 	"github.com/go-gost/x/logger"
 )
+
+func TestParseUserProtocolPolicyCaseAliasesAndRevisionOrder(t *testing.T) {
+	latest := UserProtocolPolicy{TLS: TLSOnly, AllowUDP: false, Revision: 12}
+	for _, key := range []string{UserPolicyMetadataKey, strings.ToLower(UserPolicyMetadataKey), strings.ToUpper(UserPolicyMetadataKey)} {
+		p, err := ParseUserProtocolPolicy(map[string]any{key: map[string]any{"TLS": TLSOnly, "ALLOWUDP": false, "REVISION": 12}})
+		if err != nil || p == nil || *p != latest {
+			t.Fatalf("case-insensitive policy was lost: %+v, %v", p, err)
+		}
+	}
+	md := map[string]any{
+		UserPolicyMetadataKey: latest,
+		"userprotocolpolicy":  UserProtocolPolicy{TLS: TLSUnrestricted, AllowUDP: true, Revision: 11},
+		"USERPROTOCOLPOLICY":  UserProtocolPolicy{TLS: TLSDeny, AllowUDP: false, Revision: 11},
+	}
+	for i := 0; i < 50; i++ {
+		p, err := ParseUserProtocolPolicy(md)
+		if err != nil || p == nil || *p != latest {
+			t.Fatalf("older conflicting aliases overrode latest revision: %+v, %v", p, err)
+		}
+	}
+	md["userprotocolpolicy"] = UserProtocolPolicy{TLS: TLSUnrestricted, AllowUDP: true, Revision: 12}
+	if _, err := ParseUserProtocolPolicy(md); err == nil {
+		t.Fatal("accepted conflicting policies at newest revision")
+	}
+}
 
 func TestTLSClassificationAcrossTCPFragments(t *testing.T) {
 	for _, mode := range []string{TLSOnly, TLSDeny} {

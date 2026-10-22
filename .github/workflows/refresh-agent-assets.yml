@@ -3,7 +3,7 @@ name: Refresh verified Agent installer assets
 on:
   workflow_dispatch:
   push:
-    branches: [fix/agent-reinstall-inventory-20261019, fix/security-audit-20261022, fix/node-config-isolation-20261022]
+    branches: [fix/agent-reinstall-inventory-20261019, fix/security-audit-20261022, fix/node-config-isolation-20261022, fix/node-policy-persistence-20261022]
     paths: [go-gost/**, .github/workflows/refresh-agent-assets.yml]
 
 permissions:

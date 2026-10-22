@@ -1,8 +1,11 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
+	"os"
 	"sync"
 	"time"
 
@@ -574,23 +577,51 @@ func (c *Config) Load() error {
 		return err
 	}
 
-	return v.Unmarshal(c)
+	return c.ReadFile(v.ConfigFileUsed())
 }
 
 func (c *Config) Read(r io.Reader) error {
-	if err := v.ReadConfig(r); err != nil {
+	data, err := io.ReadAll(r)
+	if err != nil {
 		return err
 	}
-
-	return v.Unmarshal(c)
+	return c.read(data)
 }
 
 func (c *Config) ReadFile(file string) error {
 	v.SetConfigFile(file)
-	if err := v.ReadInConfig(); err != nil {
+	data, err := os.ReadFile(file)
+	if err != nil {
 		return err
 	}
-	return v.Unmarshal(c)
+	return c.read(data)
+}
+
+func (c *Config) read(data []byte) error {
+	if err := v.ReadConfig(bytes.NewReader(data)); err != nil {
+		return err
+	}
+	// Keep the original bytes: Viper has now validated the input format, but
+	// its decoded map may already have merged differently cased policy keys.
+	policies, err := savedUserProtocolPolicies(data)
+	if err != nil {
+		return err
+	}
+	if err := v.Unmarshal(c); err != nil {
+		return err
+	}
+	if policies != nil && len(policies) != len(c.Services) {
+		return fmt.Errorf("service policies do not match decoded configuration")
+	}
+	for i, policy := range policies {
+		if policy != nil {
+			if c.Services[i] == nil {
+				return fmt.Errorf("policy refers to an invalid service")
+			}
+			c.Services[i].Metadata = WithUserProtocolPolicy(c.Services[i].Metadata, *policy)
+		}
+	}
+	return nil
 }
 
 func (c *Config) Write(w io.Writer, format string) error {

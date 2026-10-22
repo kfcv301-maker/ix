@@ -97,11 +97,7 @@ func (w *WebSocketReporter) handleSetUserProtocolPolicy(data any) error {
 		for name, cfg := range found {
 			// Copy instead of mutating a shared metadata map in config snapshots.
 			clone := *cfg
-			clone.Metadata = make(map[string]any, len(cfg.Metadata)+1)
-			for k, v := range cfg.Metadata {
-				clone.Metadata[k] = v
-			}
-			clone.Metadata[service.UserPolicyMetadataKey] = req.Policy
+			clone.Metadata = config.WithUserProtocolPolicy(cfg.Metadata, req.Policy)
 			for i, original := range c.Services {
 				if original == cfg {
 					c.Services[i] = &clone

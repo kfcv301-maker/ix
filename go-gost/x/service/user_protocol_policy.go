@@ -1,19 +1,20 @@
 package service
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"time"
+
+	"github.com/go-gost/x/config"
 )
 
-const UserPolicyMetadataKey = "userProtocolPolicy"
+const UserPolicyMetadataKey = config.UserPolicyMetadataKey
 const (
-	TLSUnrestricted        = "UNRESTRICTED"
-	TLSOnly                = "TLS_ONLY"
-	TLSDeny                = "TLS_DENY"
+	TLSUnrestricted        = config.TLSUnrestricted
+	TLSOnly                = config.TLSOnly
+	TLSDeny                = config.TLSDeny
 	blockHTTP       uint32 = 1 << iota
 	blockTLS
 	blockSOCKS
@@ -21,40 +22,10 @@ const (
 
 // A non-nil policy belongs to one panel-managed ingress service and replaces
 // legacy node-wide protocol switches. Administrators get an unrestricted policy.
-type UserProtocolPolicy struct {
-	TLS           string `json:"tls"`
-	AllowUDP      bool   `json:"allowUdp"`
-	Revision      uint64 `json:"revision,omitempty"`
-	Administrator bool   `json:"administrator,omitempty"`
-}
-
-func (p UserProtocolPolicy) Validate() error {
-	if p.Administrator && (p.TLS != TLSUnrestricted || !p.AllowUDP) {
-		return fmt.Errorf("administrator policy must be unrestricted")
-	}
-	switch p.TLS {
-	case TLSUnrestricted, TLSOnly, TLSDeny:
-		return nil
-	default:
-		return fmt.Errorf("invalid user TLS policy: %q", p.TLS)
-	}
-}
+type UserProtocolPolicy = config.UserProtocolPolicy
 
 func ParseUserProtocolPolicy(md map[string]any) (*UserProtocolPolicy, error) {
-	v, exists := md[UserPolicyMetadataKey]
-	if !exists {
-		return nil, nil
-	}
-	b, err := json.Marshal(v)
-	if err != nil {
-		return nil, err
-	}
-	// Missing UDP field must never silently become a new restriction.
-	p := UserProtocolPolicy{TLS: TLSUnrestricted, AllowUDP: true}
-	if err := json.Unmarshal(b, &p); err != nil {
-		return nil, err
-	}
-	return &p, p.Validate()
+	return config.ParseUserProtocolPolicy(md)
 }
 
 func UserProtocolPolicyOption(p *UserProtocolPolicy) Option {
