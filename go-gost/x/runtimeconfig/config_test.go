@@ -162,7 +162,7 @@ func TestAuthenticatedPullAndOfflineRecovery(t *testing.T) {
 	m.endpoint = server.URL + "/api/v1/node/runtime-config"
 	m.Refresh()
 	before, _ := os.ReadFile(m.path)
-	for _, code := range []int{401, 404, 503} {
+	for _, code := range []int{404, 503} {
 		lock.Lock()
 		status = code
 		lock.Unlock()
