@@ -14,6 +14,7 @@ import com.admin.common.utils.JwtUtil;
 import com.admin.common.utils.TcpPingDiagnosisParser;
 import com.admin.common.utils.WebSocketServer;
 import com.admin.common.utils.UserDiagnosisView;
+import com.admin.common.utils.TunnelForwardDiagnosisLimiter;
 import com.admin.entity.*;
 import com.admin.mapper.ForwardMapper;
 import com.admin.mapper.TunnelEntryNodeMapper;
@@ -94,6 +95,8 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
 
     @Resource
     private com.admin.common.service.ForwardCreationService forwardCreationService;
+
+    @Resource private TunnelForwardDiagnosisLimiter diagnosisLimiter;
 
 
     @Override
@@ -387,11 +390,45 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
             return R.err("转发不存在");
         }
 
-        R diagnosis = diagnoseForwardInternal(forward);
-        Tunnel tunnel = tunnelService.getById(forward.getTunnelId());
-        return currentUser.getRoleId() == ADMIN_ROLE_ID
-                || (tunnel != null && Objects.equals(tunnel.getOwnerUserId(), currentUser.getUserId().longValue()))
-                ? diagnosis : UserDiagnosisView.restrict(diagnosis);
+        // A retained forwarding row is not an active tunnel permission. Match
+        // batch diagnosis and stop subsequent probes if access is revoked.
+        Forward selected = new Forward();
+        BeanUtils.copyProperties(forward, selected);
+        java.util.function.BooleanSupplier authorized = () -> hasCurrentDiagnosisAccess(currentUser, selected);
+        if (!authorized.getAsBoolean()) return R.err(403, "没有检测此转发的权限，或授权已失效");
+        final TunnelForwardDiagnosisLimiter.Lease lease;
+        try { lease = diagnosisLimiter.acquireForward(currentUser.getUserId(), selected.getId()); }
+        catch (IllegalArgumentException | IllegalStateException exception) { return R.err(429, exception.getMessage()); }
+        try (lease) {
+            R diagnosis = diagnoseForwardInternal(selected, authorized);
+            if (!authorized.getAsBoolean()) return R.err(403, "检测权限或转发配置已变化，请重新检测");
+            Tunnel tunnel = tunnelService.getById(forward.getTunnelId());
+            return currentUser.getRoleId() == ADMIN_ROLE_ID
+                    || (tunnel != null && Objects.equals(tunnel.getOwnerUserId(), currentUser.getUserId().longValue()))
+                    ? diagnosis : UserDiagnosisView.restrict(diagnosis);
+        }
+    }
+
+    private boolean hasCurrentDiagnosisAccess(UserInfo requester, Forward selected) {
+        User user = userService.getById(requester.getUserId());
+        if (user == null || !Objects.equals(user.getStatus(), USER_STATUS_ACTIVE)
+                || !Objects.equals(user.getRoleId(), requester.getRoleId())) return false;
+        Forward latest = this.getById(selected.getId());
+        if (latest == null || !Objects.equals(latest.getUserId(), selected.getUserId())
+                || !Objects.equals(latest.getTunnelId(), selected.getTunnelId())
+                || !Objects.equals(latest.getRemoteAddr(), selected.getRemoteAddr())) return false;
+        Tunnel tunnel = tunnelService.getById(selected.getTunnelId());
+        if (tunnel == null) return false;
+        if (Objects.equals(user.getRoleId(), ADMIN_ROLE_ID)) return true;
+        long now = System.currentTimeMillis();
+        if (!Objects.equals(latest.getUserId(), requester.getUserId())
+                || (user.getExpTime() != null && user.getExpTime() <= now)
+                || !Objects.equals(tunnel.getStatus(), TUNNEL_STATUS_ACTIVE)
+                || (tunnel.getOwnerUserId() != null
+                && !Objects.equals(tunnel.getOwnerUserId(), requester.getUserId().longValue()))) return false;
+        UserTunnel grant = getUserTunnel(requester.getUserId(), selected.getTunnelId());
+        return grant != null && Objects.equals(grant.getStatus(), 1)
+                && (grant.getExpTime() == null || grant.getExpTime() > now);
     }
 
     @Override

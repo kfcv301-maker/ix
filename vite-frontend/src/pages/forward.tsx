@@ -53,6 +53,7 @@ import { assignedEntryAddress, UNASSIGNED_ENTRY_ADDRESS, type EntryAddressMode }
 import { useTunnelDiagnosis } from '@/hooks/use-tunnel-diagnosis';
 import { diagnosisProgressText, TCP_DIAGNOSIS_NOTICE } from '@/utils/tunnel-diagnosis';
 import { parseProxyProtocol, proxyProtocolLabel, proxyProtocolDiagnosisNotice, PROXY_PROTOCOL_DESCRIPTION, type ProxyProtocolVersion } from '@/utils/forward-proxy-protocol';
+import { createForwardExport, parseForwardImport, parseForwardInterface, selectForwardExportRecords, type ForwardExportScope } from '@/utils/forward-export';
 import {
   bulkForwardFieldLabels, planBulkForwardUpdates, executeBulkForwardUpdates,
   type BulkForwardField, type BulkForwardPatch, type BulkForwardPlanEntry, type BulkForwardResult,
@@ -249,6 +250,12 @@ export default function ForwardPage() {
   const [exportData, setExportData] = useState('');
   const [exportLoading, setExportLoading] = useState(false);
   const [selectedTunnelForExport, setSelectedTunnelForExport] = useState<number | null>(null);
+  const [exportScope, setExportScope] = useState<ForwardExportScope>('tunnel');
+  const [exportedCount, setExportedCount] = useState(0);
+  useEffect(() => {
+    setExportData('');
+    setExportedCount(0);
+  }, [selectedTunnelForExport, exportScope, forwardSearch, tunnelFilter, statusFilter, viewMode, adminOnlyMyForwards]);
   
   // 导入相关状态
   const [importModalOpen, setImportModalOpen] = useState(false);
@@ -1047,13 +1054,15 @@ export default function ForwardPage() {
     // 导出转发数据
   const handleExport = () => {
     setSelectedTunnelForExport(null);
+    setExportScope('tunnel');
     setExportData('');
+    setExportedCount(0);
     setExportModalOpen(true);
   };
 
   // 执行导出
   const executeExport = () => {
-    if (!selectedTunnelForExport) {
+    if (exportScope === 'tunnel' && !selectedTunnelForExport) {
       toast.error('请选择要导出的隧道');
       return;
     }
@@ -1061,48 +1070,15 @@ export default function ForwardPage() {
     setExportLoading(true);
     
     try {
-      // 根据当前显示模式获取要导出的转发列表
-      let forwardsToExport: Forward[] = [];
-      
-      if (viewMode === 'grouped') {
-        // 分组模式下，获取指定隧道的转发
-        const userGroups = groupForwardsByUserAndTunnel(false);
-        forwardsToExport = userGroups.flatMap(userGroup => 
-          userGroup.tunnelGroups
-            .filter(tunnelGroup => tunnelGroup.tunnelId === selectedTunnelForExport)
-            .flatMap(tunnelGroup => tunnelGroup.forwards)
-        );
-      } else {
-        // 直接显示模式下，过滤指定隧道的转发
-        forwardsToExport = getSortedForwards(false).filter(forward => forward.tunnelId === selectedTunnelForExport);
-      }
-      
-      if (forwardsToExport.length === 0) {
-        toast.error('所选隧道没有转发数据');
-        setExportLoading(false);
-        return;
-      }
-      
-      // Versioned JSON keeps every setting needed to recreate a forward.
-      // The importer continues to accept the original pipe-delimited format
-      // below so users can still restore their older exports.
-      const exportBundle = {
-        format: 'flux-panel-forward-export',
-        version: 2,
-        exportedAt: new Date().toISOString(),
-        tunnelId: selectedTunnelForExport,
-        forwards: forwardsToExport.map(forward => ({
-          name: forward.name,
-          remoteAddr: forward.remoteAddr,
-          inPort: forward.inPort ?? null,
-          strategy: forward.strategy || 'fifo',
-          proxyProtocol: parseProxyProtocol(forward.proxyProtocol)
-        }))
-      };
+      const forwardsToExport = selectForwardExportRecords(exportScope, selectedTunnelForExport, getSortedForwards(false), getSortedForwards());
+      const exportBundle = createForwardExport(forwardsToExport, exportScope === 'tunnel' ? selectedTunnelForExport : null);
       setExportData(JSON.stringify(exportBundle, null, 2));
+      setExportedCount(forwardsToExport.length);
     } catch (error) {
       console.error('导出失败:', error);
-      toast.error('导出失败');
+      setExportData('');
+      setExportedCount(0);
+      toast.error(error instanceof Error ? error.message : '导出失败');
     } finally {
       setExportLoading(false);
     }
@@ -1111,6 +1087,18 @@ export default function ForwardPage() {
   // 复制导出数据
   const copyExportData = async () => {
     await copyToClipboard(exportData, '转发数据');
+  };
+
+  const downloadExportData = () => {
+    if (!exportData) return;
+    const url = URL.createObjectURL(new Blob([exportData], { type: 'application/json;charset=utf-8' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `forward-export-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
   // 导入转发数据
@@ -1137,39 +1125,7 @@ export default function ForwardPage() {
     setImportResults([]); // 清空之前的结果
 
     try {
-      type ImportItem = {
-        line: string;
-        name?: unknown;
-        remoteAddr?: unknown;
-        inPort?: unknown;
-        strategy?: unknown;
-        proxyProtocol?: unknown;
-      };
-      let items: ImportItem[];
-      const raw = importData.trim();
-      if (raw.startsWith('{')) {
-        const bundle = JSON.parse(raw);
-        if (bundle?.format !== 'flux-panel-forward-export' || bundle?.version !== 2 || !Array.isArray(bundle.forwards)) {
-          throw new Error('JSON 导入文件不是受支持的 v2 转发导出格式');
-        }
-        items = bundle.forwards.map((item: unknown) => {
-          const value = item && typeof item === 'object' ? item as Record<string, unknown> : {};
-          return {
-            line: JSON.stringify(value),
-            name: value.name,
-            remoteAddr: value.remoteAddr,
-            inPort: value.inPort,
-            strategy: value.strategy,
-            proxyProtocol: value.proxyProtocol
-          };
-        });
-      } else {
-        // Legacy: 目标地址|转发名称|入口端口|展示入口地址。第 4 列仍只用于展示。
-        items = raw.split('\n').filter(line => line.trim()).map(line => {
-          const [remoteAddr, name, inPort] = line.trim().split('|');
-          return { line: line.trim(), remoteAddr, name, inPort, strategy: 'fifo' };
-        });
-      }
+      const items = parseForwardImport(importData);
 
       if (items.length === 0) {
         throw new Error('没有可导入的转发记录');
@@ -1232,10 +1188,12 @@ export default function ForwardPage() {
         const strategy = item.strategy === 'round' || item.strategy === 'rand' || item.strategy === 'fifo' || item.strategy === 'hash'
           ? item.strategy : 'fifo';
         let proxyProtocol: ProxyProtocolVersion;
+        let interfaceName: string;
         try {
           proxyProtocol = parseProxyProtocol(item.proxyProtocol);
+          interfaceName = parseForwardInterface(item.interfaceName);
         } catch (error) {
-          results.push({ line, success: false, message: error instanceof Error ? error.message : 'Proxy Protocol 格式错误' });
+          results.push({ line, success: false, message: error instanceof Error ? error.message : '转发参数格式错误' });
           continue;
         }
         try {
@@ -1244,6 +1202,7 @@ export default function ForwardPage() {
             tunnelId: selectedTunnelForImport,
             inPort: portNumber,
             remoteAddr,
+            interfaceName,
             strategy,
             proxyProtocol
           });
@@ -1688,6 +1647,8 @@ export default function ForwardPage() {
 
   const userGroups = groupForwardsByUserAndTunnel();
   const visibleForwards = getSortedForwards();
+  const exportCandidateCount = exportModalOpen
+    ? selectForwardExportRecords(exportScope, selectedTunnelForExport, getSortedForwards(false), visibleForwards).length : 0;
   const tablePageCount = Math.max(1, Math.ceil(visibleForwards.length / tablePageSize));
   const currentTablePage = Math.min(tablePage, tablePageCount);
   const pagedForwards = visibleForwards.slice((currentTablePage - 1) * tablePageSize, currentTablePage * tablePageSize);
@@ -2408,13 +2369,26 @@ export default function ForwardPage() {
             <ModalHeader className="flex flex-col gap-1">
               <h2 className="text-xl font-bold">导出转发数据</h2>
               <p className="text-small text-default-500">
-                格式：目标地址|转发名称|入口端口|当前用户入口地址
+                v2 JSON：保留目标地址、名称、入口端口、出口接口、负载策略和 Proxy Protocol。
               </p>
             </ModalHeader>
             <ModalBody className="pb-6">
               <div className="space-y-4">
+                <Select
+                  label="导出范围"
+                  selectedKeys={[exportScope]}
+                  onSelectionChange={keys => {
+                    const scope = Array.from(keys)[0];
+                    if (scope === 'tunnel' || scope === 'filtered') setExportScope(scope);
+                  }}
+                  disallowEmptySelection
+                  variant="bordered"
+                >
+                  <SelectItem key="tunnel">整条隧道</SelectItem>
+                  <SelectItem key="filtered">当前筛选结果（全部分页）</SelectItem>
+                </Select>
                 {/* 隧道选择 */}
-                <div>
+                {exportScope === 'tunnel' && <div>
                   <Select
                     label="选择导出隧道"
                     placeholder="请选择要导出的隧道"
@@ -2432,17 +2406,24 @@ export default function ForwardPage() {
                       </SelectItem>
                     ))}
                   </Select>
-                </div>
+                </div>}
+
+                <p className="text-small text-default-600" role="status">
+                  {exportScope === 'filtered'
+                    ? `当前筛选结果 ${exportCandidateCount} 条，包含所有分页。`
+                    : selectedTunnelForExport ? `所选隧道共 ${exportCandidateCount} 条，不受列表搜索或状态筛选影响。` : '请选择要导出的隧道。'}
+                </p>
+                <p className="text-tiny text-default-500">导入时将在所选隧道创建规则；VPS 绑定和暂停状态不随文件迁移。</p>
 
                 {/* 导出按钮和数据 */}
                 {exportData && (
-                  <div className="flex justify-between items-center">
+                  <div className="flex flex-wrap gap-2 items-center">
                     <Button 
                       color="primary" 
                       size="sm" 
                       onPress={executeExport}
                       isLoading={exportLoading}
-                      isDisabled={!selectedTunnelForExport}
+                      isDisabled={exportCandidateCount === 0}
                       startContent={
                         <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
                           <path fillRule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM6.293 6.707a1 1 0 010-1.414l3-3a1 1 0 011.414 0l3 3a1 1 0 01-1.414 1.414L11 5.414V13a1 1 0 11-2 0V5.414L7.707 6.707a1 1 0 01-1.414 0z" clipRule="evenodd" />
@@ -2464,6 +2445,8 @@ export default function ForwardPage() {
                     >
                       复制
                     </Button>
+                    <Button color="primary" variant="flat" size="sm" onPress={downloadExportData} startContent={<ConsoleIcon name="download" size={16}/>}>下载 JSON</Button>
+                    <span className="text-tiny text-default-500">已生成 {exportedCount} 条</span>
                   </div>
                 )}
 
@@ -2475,7 +2458,7 @@ export default function ForwardPage() {
                       size="sm" 
                       onPress={executeExport}
                       isLoading={exportLoading}
-                      isDisabled={!selectedTunnelForExport}
+                      isDisabled={exportCandidateCount === 0}
                       startContent={
                         <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
                           <path fillRule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM6.293 6.707a1 1 0 010-1.414l3-3a1 1 0 011.414 0l3 3a1 1 0 01-1.414 1.414L11 5.414V13a1 1 0 11-2 0V5.414L7.707 6.707a1 1 0 01-1.414 0z" clipRule="evenodd" />
@@ -2491,6 +2474,7 @@ export default function ForwardPage() {
                 {exportData && (
                   <div className="relative">
                     <Textarea
+                      aria-label="转发导出 JSON"
                       value={exportData}
                       readOnly
                       variant="bordered"
@@ -2534,7 +2518,7 @@ export default function ForwardPage() {
                 推荐使用本面板导出的 v2 JSON 文件；仍兼容旧格式：目标地址|转发名称|入口端口，每行一个
               </p>
               <p className="text-small text-default-400">
-                v2 会保留负载策略和 Proxy Protocol；缺少 Proxy Protocol 的旧记录默认关闭。旧格式的第 4 列仍会忽略。目标地址支持域名/IPv4:端口及 [IPv6]:端口，多个地址可用逗号分隔；重复记录会被安全跳过。
+                v2 会保留出口接口、负载策略和 Proxy Protocol；旧记录未指定的出口接口保持自动选择，Proxy Protocol 默认关闭。旧格式的第 4 列仍会忽略。目标地址支持域名/IPv4:端口及 [IPv6]:端口，多个地址可用逗号分隔；重复记录会被安全跳过。
               </p>
             </ModalHeader>
             <ModalBody className="pb-6">

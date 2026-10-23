@@ -44,7 +44,7 @@ class TunnelForwardDiagnosisTaskServiceTest {
         ReflectionTestUtils.setField(service, "limiter", new TunnelForwardDiagnosisLimiter());
         ReflectionTestUtils.setField(service, "coordinatorExecutor", (TaskExecutor) coordinators::add);
         ReflectionTestUtils.setField(service, "probeExecutor", (TaskExecutor) Runnable::run);
-        tunnel.setId(11L); tunnel.setName("Tunnel"); tunnel.setOwnerUserId(7L);
+        tunnel.setId(11L); tunnel.setName("Tunnel"); tunnel.setOwnerUserId(7L); tunnel.setStatus(1);
         user.setId(7L); user.setRoleId(1); user.setStatus(1);
         grant.setUserId(7); grant.setTunnelId(11); grant.setStatus(1);
         when(users.selectById(7)).thenReturn(user);
@@ -219,6 +219,13 @@ class TunnelForwardDiagnosisTaskServiceTest {
 
     @Test void privateTunnelTransferStopsAllRemainingProbes() {
         start(21); tunnel.setOwnerUserId(8L); coordinators.remove().run();
+        assertEquals("failed", snapshot().get("status"));
+        assertEquals(21, snapshot().get("skippedForwards"));
+        verify(forwards, never()).diagnoseForwardForSystem(any(Forward.class), any(BooleanSupplier.class));
+    }
+
+    @Test void disabledTunnelStopsAllRemainingProbesEvenWithAnActiveGrant() {
+        start(21); tunnel.setStatus(0); coordinators.remove().run();
         assertEquals("failed", snapshot().get("status"));
         assertEquals(21, snapshot().get("skippedForwards"));
         verify(forwards, never()).diagnoseForwardForSystem(any(Forward.class), any(BooleanSupplier.class));

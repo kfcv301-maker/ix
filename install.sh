@@ -588,6 +588,16 @@ download_agent() {
   ok "Agent 下载并校验完成"
 }
 
+legacy_json_string() {
+  local value="$1"
+  # Legacy installs do not require Python. Quote JSON data without allowing
+  # quotes or backslashes in a node key to change or corrupt the document.
+  [[ ! "$value" =~ [[:cntrl:]] ]] || fail "节点配置不能包含控制字符。"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  printf '"%s"' "$value"
+}
+
 write_config() {
   umask 077
   if [[ -n "$NODE_CONFIG_FILE" ]]; then
@@ -620,20 +630,30 @@ PY
   fi
   # Reinstalling the Agent must not silently enable protocols that the panel
   # administrator has disabled on this node.
-  local current_config="$INSTALL_DIR/config.json" http tls socks
+  local current_config="$INSTALL_DIR/config.json" http tls socks temporary_config panel_json secret_json
   http="$(existing_protocol_flag "$current_config" http)"
   tls="$(existing_protocol_flag "$current_config" tls)"
   socks="$(existing_protocol_flag "$current_config" socks)"
-  cat > "$INSTALL_DIR/config.json" <<EOF
+  panel_json="$(legacy_json_string "$SERVER_ADDR")"
+  secret_json="$(legacy_json_string "$NODE_SECRET")"
+  temporary_config="$(mktemp "$INSTALL_DIR/.config.XXXXXX")"
+  if ! cat > "$temporary_config" <<EOF
 {
-  "addr": "$SERVER_ADDR",
-  "secret": "$NODE_SECRET",
+  "addr": $panel_json,
+  "secret": $secret_json,
   "http": $http,
   "tls": $tls,
   "socks": $socks
 }
 EOF
-  chmod 600 "$INSTALL_DIR/config.json"
+  then
+    rm -f -- "$temporary_config"
+    fail "写入节点配置失败，原配置已保留。"
+  fi
+  if ! chmod 600 "$temporary_config" || ! mv -fT -- "$temporary_config" "$current_config"; then
+    rm -f -- "$temporary_config"
+    fail "保存节点配置失败，原配置已保留。"
+  fi
   [[ -f "$INSTALL_DIR/gost.json" ]] || printf '{"services":[],"chains":[],"limiters":[]}\n' > "$INSTALL_DIR/gost.json"
   chmod 600 "$INSTALL_DIR/gost.json"
 }
@@ -1016,7 +1036,7 @@ install_agent() {
   detect_init_system
   [[ -n "$SERVER_ADDR" ]] || fail "缺少 --panel 参数。"
   [[ -n "$NODE_SECRET" ]] || fail "缺少 --token 参数。"
-  [[ "$SERVER_ADDR" != *$'\n'* && "$NODE_SECRET" != *$'\n'* ]] || fail "参数不能包含换行符。"
+  [[ ! "$SERVER_ADDR$NODE_SECRET" =~ [[:cntrl:]] ]] || fail "节点参数不能包含控制字符。"
   if [[ "$DDNS_MODE" == "enabled" ]]; then
     [[ -n "$CF_API_TOKEN" && -n "$CF_RECORD_NAME" ]] || fail "启用 DDNS 时必须同时提供 --cf-api-token 和 --cf-record。"
     [[ "$CF_API_TOKEN" != *$'\n'* && "$CF_RECORD_NAME" != *$'\n'* ]] || fail "DDNS 参数不能包含换行符。"
