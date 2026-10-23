@@ -7,8 +7,100 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 )
+
+func TestUnsupportedOldPanelLeavesLegacyDDNSOwnerUntouched(t *testing.T) {
+	for _, status := range []int{http.StatusNotFound, http.StatusOK} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			m := reviewManager(t)
+			before, err := os.ReadFile(m.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			retired := false
+			m.retireLegacy = func() error { retired = true; return nil }
+			arrived := make(chan struct{})
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				close(arrived)
+				w.WriteHeader(status)
+				if status == http.StatusOK {
+					// Some older panels route unknown APIs to their ordinary envelope.
+					json.NewEncoder(w).Encode(map[string]any{"code": -1, "msg": "unsupported"})
+				}
+			}))
+			defer server.Close()
+			m.endpoint = server.URL
+			m.Start()
+			select {
+			case <-arrived:
+			case <-time.After(2 * time.Second):
+				t.Fatal("startup did not probe panel compatibility")
+			}
+			m.refreshMu.Lock()
+			m.refreshMu.Unlock()
+			m.mu.Lock()
+			unchanged := m.current == nil && m.workerDone == nil && !retired
+			m.mu.Unlock()
+			after, err := os.ReadFile(m.path)
+			if !unchanged || err != nil || string(before) != string(after) {
+				t.Fatal("unsupported old panel changed legacy DDNS ownership or private settings")
+			}
+		})
+	}
+}
+
+func TestUnchangedAcknowledgedPushSupersedesInflightPull(t *testing.T) {
+	for _, status := range []int{http.StatusOK, http.StatusUnauthorized, http.StatusForbidden} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			m := reviewManager(t)
+			latest := reviewConfig("latest", "latest.example.invalid")
+			if err := m.Apply(latest); err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.ReadFile(m.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			started, release := make(chan struct{}), make(chan struct{})
+			var releaseOnce sync.Once
+			unblock := func() { releaseOnce.Do(func() { close(release) }) }
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				close(started)
+				<-release
+				w.WriteHeader(status)
+				if status == http.StatusOK {
+					json.NewEncoder(w).Encode(reviewConfig("old", "old.example.invalid"))
+				}
+			}))
+			defer server.Close()
+			defer unblock()
+			m.endpoint = server.URL
+			done := make(chan struct{})
+			go func() { defer close(done); m.Refresh() }()
+			<-started
+			// Reconnects may push the same current snapshot. Its successful ACK
+			// must still supersede an older request already in flight.
+			if err := m.Apply(latest); err != nil {
+				t.Fatal(err)
+			}
+			unblock()
+			<-done
+			m.mu.Lock()
+			preserved := m.current != nil && *m.current == latest
+			m.mu.Unlock()
+			if !preserved {
+				t.Fatal("in-flight response undid unchanged acknowledged push")
+			}
+			after, err := os.ReadFile(m.path)
+			if err != nil || string(before) != string(after) {
+				t.Fatal("in-flight response rewrote private runtime configuration")
+			}
+		})
+	}
+}
 
 func reviewManager(t *testing.T) *Manager {
 	t.Helper()

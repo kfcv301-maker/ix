@@ -1,9 +1,10 @@
-import { Route, Routes, useNavigate } from "react-router-dom";
+import { Route, Routes, useNavigate, useLocation } from "react-router-dom";
 import { lazy, Suspense, useEffect } from "react";
 
 import IndexPage from "@/pages/index";
 
 import AdminLayout from "@/layouts/admin";
+import { PageErrorBoundary } from "@/components/page-error-boundary";
 
 import { isLoggedIn } from "@/utils/auth";
 import { siteConfig } from "@/config/site";
@@ -82,6 +83,7 @@ function SettingsRoute() {
 }
 
 function App() {
+  const location = useLocation();
   // 立即设置页面标题（使用已从缓存读取的配置）
   useEffect(() => {
     document.title = siteConfig.name;
@@ -107,6 +109,7 @@ function App() {
   }, []);
 
   return (
+    <PageErrorBoundary key={location.pathname}>
     <Routes>
       <Route path="/" element={<LoginRoute />} />
       <Route 
@@ -196,6 +199,7 @@ function App() {
         element={<SettingsRoute />}
       />
     </Routes>
+    </PageErrorBoundary>
   );
 }
 

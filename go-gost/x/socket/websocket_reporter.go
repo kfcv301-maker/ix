@@ -790,7 +790,7 @@ func (w *WebSocketReporter) routeCommand(cmd CommandMessage) {
 	}
 
 	// 发送响应
-	if err == nil && cmd.Type != "UserProtocolPolicyCapabilities" && cmd.Type != "ForwardProxyProtocolCapabilities" && cmd.Type != "NodeRuntimeConfigCapabilities" && cmd.Type != "SetNodeRuntimeConfig" {
+	if err == nil && cmd.Type != "UserProtocolPolicyCapabilities" && cmd.Type != "ForwardProxyProtocolCapabilities" && cmd.Type != "NodeRuntimeConfigCapabilities" && cmd.Type != "SetNodeRuntimeConfig" && cmd.Type != "SetProtocol" {
 		err = saveConfig()
 	}
 	if err != nil {
@@ -1026,6 +1026,10 @@ func (w *WebSocketReporter) handleDeleteLimiter(data interface{}) error {
 	return deleteLimiter(deleteReq)
 }
 
+// Serialize persistence and activation so concurrent commands cannot leave
+// memory with an older snapshot than the one most recently saved to disk.
+var protocolUpdateMu sync.Mutex
+
 // handleSetProtocol 处理设置屏蔽协议的命令
 func (w *WebSocketReporter) handleSetProtocol(data interface{}) error {
 	jsonData, err := json.Marshal(data)
@@ -1065,13 +1069,14 @@ func (w *WebSocketReporter) handleSetProtocol(data interface{}) error {
 		socksVal = *req.SOCKS
 	}
 
-	// 设置至 service，全量传递（未提供的值沿用0）
-	service.SetProtocolBlock(httpVal, tlsVal, socksVal)
-
-	// 同步写入本地 config.json
+	protocolUpdateMu.Lock()
+	defer protocolUpdateMu.Unlock()
+	// Persist first. A disk failure must not change traffic after a negative ACK.
 	if err := updateLocalConfigJSON(httpVal, tlsVal, socksVal); err != nil {
 		return fmt.Errorf("写入config.json失败: %v", err)
 	}
+	// This atomic store cannot fail. Omitted fields keep the legacy zero default.
+	service.SetProtocolBlock(httpVal, tlsVal, socksVal)
 	return nil
 }
 

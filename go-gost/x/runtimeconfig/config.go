@@ -270,6 +270,10 @@ func (m *Manager) applyLocked(cfg Config) error {
 		return errors.New("node configuration manager stopped")
 	}
 	if m.current != nil && reflect.DeepEqual(*m.current, cfg) {
+		// An acknowledged push establishes the current snapshot even if its
+		// contents did not change. Retire older in-flight pulls without writing
+		// the same private file or restarting the DDNS worker.
+		m.generation++
 		return nil
 	}
 	// Establish that private persistence works before interrupting the previous

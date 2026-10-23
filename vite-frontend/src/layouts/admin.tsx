@@ -10,7 +10,7 @@ import { ConsoleIcon } from '@/components/console-ui';
 import { updatePassword } from '@/api';
 import { safeLogout } from '@/utils/logout';
 import { siteConfig } from '@/config/site';
-import { getPanelTheme, panelThemes, savePanelTheme, getPanelAppearance, savePanelAppearance, type PanelTheme, type PanelAppearance } from '@/utils/panel-theme';
+import { getPanelTheme, panelThemes, savePanelTheme, getPanelAppearance, savePanelAppearance, subscribePanelPreferences, type PanelTheme, type PanelAppearance } from '@/utils/panel-theme';
 
 interface MenuItem {
   path: string;
@@ -44,6 +44,10 @@ export default function AdminLayout({
   const [isThemePickerOpen, setIsThemePickerOpen] = useState(false);
   const [panelTheme, setPanelTheme] = useState<PanelTheme>(() => getPanelTheme());
   const [appearance, setAppearance] = useState<PanelAppearance>(() => getPanelAppearance());
+  useEffect(() => subscribePanelPreferences(preferences => {
+    setPanelTheme(preferences.theme);
+    setAppearance(preferences.appearance);
+  }), []);
   const [passwordForm, setPasswordForm] = useState<PasswordForm>({
     newUsername: '',
     currentPassword: '',
@@ -455,6 +459,7 @@ export default function AdminLayout({
       <Modal
         isOpen={isThemePickerOpen}
         onOpenChange={setIsThemePickerOpen}
+        scrollBehavior="inside"
         size="2xl"
         placement="center"
         backdrop="blur"
@@ -465,7 +470,7 @@ export default function AdminLayout({
             <ModalBody>
               <div className="flex flex-wrap items-center justify-between gap-3 pb-3">
                 <span className="text-sm text-default-500">显示模式</span>
-                <div className="console-segment" aria-label="显示模式">
+                <div className="console-segment" role="group" aria-label="显示模式">
                   {([['light', '浅色'], ['dark', '深色'], ['system', '跟随系统']] as const).map(([mode, label]) => <button type="button" key={mode} aria-pressed={appearance === mode} onClick={() => { setAppearance(mode); savePanelAppearance(mode); }}>{label}</button>)}
                 </div>
               </div>

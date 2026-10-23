@@ -154,9 +154,7 @@ export default function IndexPage() {
       };
 
       // 检测暗黑模式
-      const isDarkMode = document.documentElement.classList.contains('dark') || 
-                        document.documentElement.getAttribute('data-theme') === 'dark' ||
-                        window.matchMedia('(prefers-color-scheme: dark)').matches;
+      const isDarkMode = document.documentElement.classList.contains('dark');
       
       // 根据主题调整颜色
       const trackColor = isDarkMode ? "#4a5568" : "#7db0be"; // 暗黑模式使用更深的灰蓝色
@@ -345,9 +343,7 @@ export default function IndexPage() {
                   ref={captchaContainerRef}
                   className="w-full flex justify-center"
                   style={{
-                    filter: document.documentElement.classList.contains('dark') || 
-                           document.documentElement.getAttribute('data-theme') === 'dark' ||
-                           window.matchMedia('(prefers-color-scheme: dark)').matches 
+                    filter: document.documentElement.classList.contains('dark')
                            ? 'brightness(0.8) contrast(0.9)' : 'none'
                   }}
                 />

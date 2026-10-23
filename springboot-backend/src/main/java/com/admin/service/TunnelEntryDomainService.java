@@ -6,6 +6,8 @@ import com.admin.entity.UserTunnel;
 import com.admin.entity.TunnelEntryDomain;
 
 import java.util.List;
+import java.util.Map;
+import java.util.Collection;
 
 public interface TunnelEntryDomainService {
 
@@ -30,4 +32,7 @@ public interface TunnelEntryDomainService {
     R validateUserEntryAssignment(Integer tunnelId, String mode, Long domainId);
 
     String resolveAssignedDomain(UserTunnel userTunnel);
+
+    /** Resolve one user's assignments, keyed by tunnel ID. Missing or invalid domains are omitted. */
+    Map<Integer, String> resolveAssignedDomains(Collection<UserTunnel> userTunnels);
 }

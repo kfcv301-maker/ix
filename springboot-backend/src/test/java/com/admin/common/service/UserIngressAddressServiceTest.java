@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -34,8 +35,8 @@ class UserIngressAddressServiceTest {
         UserTunnel second = grant(8, 11, "CUSTOM");
         when(grants.selectList(any())).thenReturn(List.of(first, second));
         when(tunnels.selectList(any())).thenReturn(List.of(tunnel));
-        when(domains.resolveAssignedDomain(first)).thenReturn("alice.example.com");
-        when(domains.resolveAssignedDomain(second)).thenReturn("bob.example.com");
+        when(domains.resolveAssignedDomains(List.of(first))).thenReturn(Map.of(11, "alice.example.com"));
+        when(domains.resolveAssignedDomains(List.of(second))).thenReturn(Map.of(11, "bob.example.com"));
         assertEquals("alice.example.com", service.forUser(7).get(11).address());
         assertEquals("bob.example.com", service.forUser(8).get(11).address());
         assertEquals("192.0.2.1,192.0.2.2", tunnel.getInIp(), "display projection must not change routing data");
@@ -63,7 +64,7 @@ class UserIngressAddressServiceTest {
         UserTunnel grant = grant(7, 11, "DEFAULT");
         when(grants.selectList(any())).thenReturn(List.of(grant));
         when(tunnels.selectList(any())).thenReturn(List.of(tunnel(11, null)));
-        when(domains.resolveAssignedDomain(grant)).thenReturn("assigned-default.example.com");
+        when(domains.resolveAssignedDomains(List.of(grant))).thenReturn(Map.of(11, "assigned-default.example.com"));
         assertEquals("assigned-default.example.com", service.forUser(7).get(11).address());
     }
 
@@ -82,6 +83,27 @@ class UserIngressAddressServiceTest {
         when(grants.selectList(any())).thenReturn(List.of(grant(7, 11, "corrupt")));
         when(tunnels.selectList(any())).thenReturn(List.of(tunnel(11, null)));
         assertEquals(UserIngressAddressService.UNASSIGNED, service.forUser(7).get(11));
+    }
+
+    @Test void oneDomainLookupIncludesOnlyAuthorizedVisibleAssignments() {
+        UserTunnel custom = grant(7, 11, " custom ");
+        UserTunnel defaultDomain = grant(7, 12, "default");
+        UserTunnel expired = grant(7, 14, "CUSTOM"); expired.setExpTime(1L);
+        UserTunnel disabled = grant(7, 15, "CUSTOM"); disabled.setStatus(0);
+        when(grants.selectList(any())).thenReturn(List.of(custom, defaultDomain,
+                grant(7, 13, "NONE"), expired, disabled, grant(7, 16, "CUSTOM"), grant(8, 17, "CUSTOM")));
+        when(tunnels.selectList(any())).thenReturn(List.of(tunnel(11, null), tunnel(12, null),
+                tunnel(13, null), tunnel(14, null), tunnel(15, null), tunnel(16, 8L), tunnel(17, null)));
+        when(domains.resolveAssignedDomains(List.of(custom, defaultDomain)))
+                .thenReturn(Map.of(11, "custom.example.com", 12, "default.example.com"));
+
+        var addresses = service.forUser(7);
+        assertEquals(3, addresses.size());
+        assertEquals("custom.example.com", addresses.get(11).address());
+        assertEquals("default.example.com", addresses.get(12).address());
+        assertEquals("base.example.com", addresses.get(13).address());
+        verify(domains).resolveAssignedDomains(List.of(custom, defaultDomain));
+        verifyNoMoreInteractions(domains);
     }
 
     private static UserTunnel grant(int user, int tunnel, String mode) {
