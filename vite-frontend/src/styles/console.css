@@ -193,6 +193,30 @@
 :root[data-panel-theme='xboard-console'] { --panel-accent:#397bf6; --panel-accent-soft:#edf4ff; }
 :root[data-panel-theme='xboard-console']:not(.dark), :root:not([data-panel-theme]):not(.dark) { --heroui-primary:219 91% 59%; --heroui-primary-foreground:0 0% 100%; }
 :root[data-panel-theme='xboard-console'].dark { --panel-accent:#75a7ff; --panel-accent-soft:#1c2e49; --heroui-primary:217 100% 73%; --heroui-primary-foreground:222 30% 10%; }
+
+/* Custom skins share the selected appearance with inputs, menus and dialogs. */
+:root.dark:is([data-panel-theme='dora-sky'], [data-panel-theme='akcdn-console']) {
+  --panel-bg:#101824; --panel-surface:#182333; --panel-surface-soft:#1e2d40;
+  --panel-sidebar:#182333; --panel-sidebar-ink:#e5eefb; --panel-header:#182333;
+  --panel-text:#e5eefb; --panel-muted:#a1b4cd; --panel-border:#314158;
+  --panel-accent:#82b9ff; --panel-accent-soft:#243b57; --panel-shadow:0 8px 24px #0002;
+}
+:root.dark[data-panel-theme='sakura-glass'] {
+  --panel-bg:#21171e; --panel-surface:#30232c; --panel-surface-soft:#3b2c36;
+  --panel-sidebar:#30232c; --panel-sidebar-ink:#fae8f2; --panel-header:#30232c;
+  --panel-text:#fae8f2; --panel-muted:#c8a8b9; --panel-border:#55404d;
+  --panel-accent:#f7a8cb; --panel-accent-soft:#513042; --panel-shadow:0 8px 24px #0002;
+}
+:root.dark[data-panel-theme='nvenix-minimal'] {
+  --panel-bg:#101012; --panel-surface:#18181b; --panel-surface-soft:#242427;
+  --panel-sidebar:#18181b; --panel-sidebar-ink:#f4f4f5; --panel-header:#18181b;
+  --panel-text:#f4f4f5; --panel-muted:#a1a1aa; --panel-border:#303036;
+  --panel-accent:#f4f4f5; --panel-accent-soft:#242427; --panel-shadow:none;
+}
+@media (prefers-reduced-motion:reduce) {
+  .panel-theme-choice, .console-nav-link, .console-icon-button { transition:none; }
+  .panel-theme-choice:hover, .panel-theme-choice.is-selected { transform:none; }
+}
 .console-brand-mark { border-radius:11px; background:linear-gradient(145deg,#326ee9,#62a1ff); color:#fff; box-shadow:0 4px 12px #397bf622; }
 .console-nav-link { border-radius:10px; }
 .console-nav-link[aria-current='page'] { background:var(--panel-accent-soft,var(--console-subtle)); color:var(--console-accent); }

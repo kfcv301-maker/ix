@@ -1,7 +1,6 @@
 package socket
 
 import (
-	"encoding/json"
 	"github.com/go-gost/x/config"
 	"github.com/go-gost/x/service"
 	"os"
@@ -61,12 +60,8 @@ func TestPolicyPersistsAcrossConfigReloadAndReportsWriteFailure(t *testing.T) {
 	if err := saveConfig(); err != nil {
 		t.Fatal(err)
 	}
-	b, err := os.ReadFile("gost.json")
-	if err != nil {
-		t.Fatal(err)
-	}
 	var restored config.Config
-	if err := json.Unmarshal(b, &restored); err != nil {
+	if err := restored.ReadFile("gost.json"); err != nil {
 		t.Fatal(err)
 	}
 	got, err := service.ParseUserProtocolPolicy(restored.Services[0].Metadata)

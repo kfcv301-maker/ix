@@ -11,6 +11,7 @@ import org.apache.commons.lang3.StringUtils;
 import org.springframework.stereotype.Service;
 
 import java.util.HashMap;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -40,18 +41,29 @@ public class UserIngressAddressService {
                 .or(shared -> shared.isNull("owner_user_id").in("id", assignments.keySet())));
         List<Tunnel> tunnels = tunnelMapper.selectList(query);
         Map<Integer, Address> addresses = new HashMap<>();
+        List<Tunnel> visible = new ArrayList<>();
+        List<UserTunnel> domainGrants = new ArrayList<>();
         for (Tunnel tunnel : tunnels) {
             boolean owned = Objects.equals(tunnel.getOwnerUserId(), userId.longValue());
             // Recheck ownership in Java too: a grant never authorizes another user's private tunnel.
             if (!owned && (tunnel.getOwnerUserId() != null || !Objects.equals(tunnel.getStatus(), 1))) continue;
             UserTunnel grant = assignments.get(tunnel.getId().intValue());
             if (grant == null && !owned) continue;
-            addresses.put(tunnel.getId().intValue(), resolve(tunnel.getInIp(), grant));
+            visible.add(tunnel);
+            if (grant != null && (TunnelEntryDomainService.ENTRY_ADDRESS_MODE_CUSTOM.equalsIgnoreCase(
+                    StringUtils.trim(grant.getEntryAddressMode()))
+                    || TunnelEntryDomainService.ENTRY_ADDRESS_MODE_DEFAULT.equalsIgnoreCase(
+                    StringUtils.trim(grant.getEntryAddressMode())))) domainGrants.add(grant);
+        }
+        Map<Integer, String> domains = domainGrants.isEmpty() ? Map.of() : domainService.resolveAssignedDomains(domainGrants);
+        for (Tunnel tunnel : visible) {
+            int id = tunnel.getId().intValue();
+            addresses.put(id, resolve(tunnel.getInIp(), assignments.get(id), domains.get(id)));
         }
         return addresses;
     }
 
-    private Address resolve(String originalAddress, UserTunnel grant) {
+    private Address resolve(String originalAddress, UserTunnel grant, String assignedDomain) {
         // Blank is the historical, administrator-authorized NONE mode. A missing grant is
         // allowed only for the tunnel owner above; it never grants a shared raw ingress.
         String mode = grant == null || StringUtils.isBlank(grant.getEntryAddressMode())
@@ -62,7 +74,7 @@ public class UserIngressAddressService {
         }
         if (!TunnelEntryDomainService.ENTRY_ADDRESS_MODE_CUSTOM.equals(mode)
                 && !TunnelEntryDomainService.ENTRY_ADDRESS_MODE_DEFAULT.equals(mode)) return UNASSIGNED;
-        String domain = domainService.resolveAssignedDomain(grant);
+        String domain = assignedDomain;
         if (StringUtils.isBlank(domain)) domain = null;
         return new Address(mode, domain, domain, grant.getEntryDomainId());
     }

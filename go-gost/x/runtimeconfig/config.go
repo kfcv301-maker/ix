@@ -208,6 +208,28 @@ func (m *Manager) Refresh() {
 		return
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		if m.generation != generation {
+			return
+		}
+		// Revoked authority is different from an outage. Stop only this DDNS
+		// worker, including when private persistence fails; never touch traffic.
+		if m.workerCancel != nil {
+			m.workerCancel()
+		}
+		if m.workerDone != nil {
+			<-m.workerDone
+		}
+		m.workerCancel, m.workerDone, m.current = nil, nil, nil
+		m.generation++
+		_ = UpdateLocal(m.path, func(doc map[string]any) error {
+			delete(doc, "runtime")
+			return nil
+		})
+		return
+	}
 	// Old panels return 404. Preserve existing DDNS until a new panel has
 	// supplied an authenticated, complete and validated configuration.
 	if resp.StatusCode != http.StatusOK {
@@ -248,6 +270,10 @@ func (m *Manager) applyLocked(cfg Config) error {
 		return errors.New("node configuration manager stopped")
 	}
 	if m.current != nil && reflect.DeepEqual(*m.current, cfg) {
+		// An acknowledged push establishes the current snapshot even if its
+		// contents did not change. Retire older in-flight pulls without writing
+		// the same private file or restarting the DDNS worker.
+		m.generation++
 		return nil
 	}
 	// Establish that private persistence works before interrupting the previous

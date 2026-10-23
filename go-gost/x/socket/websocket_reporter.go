@@ -223,13 +223,16 @@ func (w *WebSocketReporter) Start() {
 // Stop 停止WebSocket报告器
 func (w *WebSocketReporter) Stop() {
 	w.cancel()
+	w.connMutex.Lock()
+	conn := w.conn
+	w.conn, w.connected = nil, false
+	w.connMutex.Unlock()
+	if conn != nil {
+		conn.Close()
+	}
 	if w.runtimeConfig != nil {
 		w.runtimeConfig.Stop()
 	}
-	if w.conn != nil {
-		w.conn.Close()
-	}
-
 }
 
 // SetConnectedHandler registers work that must run after every successful
@@ -274,7 +277,10 @@ func (w *WebSocketReporter) run() {
 			}
 
 			// 连接成功，开始发送消息
-			if w.connected {
+			w.connMutex.Lock()
+			isConnected := w.connected
+			w.connMutex.Unlock()
+			if isConnected {
 				w.handleConnection()
 			} else {
 				// 如果连接失败，等待重试
@@ -293,6 +299,9 @@ func (w *WebSocketReporter) run() {
 func (w *WebSocketReporter) connect() error {
 	w.connMutex.Lock()
 	defer w.connMutex.Unlock()
+	if err := w.ctx.Err(); err != nil {
+		return err
+	}
 
 	// 如果已经在连接中或已连接，直接返回
 	if w.connecting || w.connected {
@@ -331,14 +340,51 @@ func (w *WebSocketReporter) connect() error {
 		return fmt.Errorf("解析 WebSocket URL 失败: %w", err)
 	}
 
-	dialer := websocket.DefaultDialer
+	// Do not mutate the process-wide dialer or let a stopped reporter finish a
+	// pending authenticated handshake and publish another live connection.
+	dialer := *websocket.DefaultDialer
 	dialer.HandshakeTimeout = 10 * time.Second
+	// Gorilla's context cancels TCP dialing but an established socket can still
+	// wait for HTTP upgrade headers. Close that socket when this reporter stops.
+	var stopHandshakeWatch func() bool
+	watchDial := func(dial func(context.Context, string, string) (net.Conn, error)) func(context.Context, string, string) (net.Conn, error) {
+		return func(ctx context.Context, network, address string) (net.Conn, error) {
+			conn, err := dial(ctx, network, address)
+			if err == nil {
+				stopHandshakeWatch = context.AfterFunc(w.ctx, func() { conn.Close() })
+			}
+			return conn, err
+		}
+	}
+	dialTCP := dialer.NetDialContext
+	if dialTCP == nil {
+		if dialer.NetDial != nil {
+			dialTCP = func(_ context.Context, network, address string) (net.Conn, error) {
+				return dialer.NetDial(network, address)
+			}
+		} else {
+			dialTCP = (&net.Dialer{}).DialContext
+		}
+	}
+	dialer.NetDialContext = watchDial(dialTCP)
+	if dialer.NetDialTLSContext != nil {
+		dialer.NetDialTLSContext = watchDial(dialer.NetDialTLSContext)
+	}
+	defer func() {
+		if stopHandshakeWatch != nil {
+			stopHandshakeWatch()
+		}
+	}()
 
 	headers := http.Header{}
 	headers.Set("Authorization", "Bearer "+w.secret)
-	conn, _, err := dialer.Dial(u.String(), headers)
+	conn, _, err := dialer.DialContext(w.ctx, u.String(), headers)
 	if err != nil {
 		return fmt.Errorf("连接WebSocket失败: %v", err)
+	}
+	if err := w.ctx.Err(); err != nil {
+		conn.Close()
+		return err
 	}
 
 	// 如果在连接过程中已经有连接了，关闭新连接
@@ -355,9 +401,11 @@ func (w *WebSocketReporter) connect() error {
 	}
 
 	// 设置关闭处理器来检测连接状态
-	w.conn.SetCloseHandler(func(code int, text string) error {
+	conn.SetCloseHandler(func(code int, text string) error {
 		w.connMutex.Lock()
-		w.connected = false
+		if w.conn == conn {
+			w.connected = false
+		}
 		w.connMutex.Unlock()
 		return nil
 	})
@@ -417,19 +465,24 @@ func buildSystemInfoWebSocketURL(addr, version string, http, tls, socks int) (st
 
 // handleConnection 处理WebSocket连接
 func (w *WebSocketReporter) handleConnection() {
+	w.connMutex.Lock()
+	conn := w.conn
+	w.connMutex.Unlock()
+	if conn == nil {
+		return
+	}
 	defer func() {
+		conn.Close()
 		w.connMutex.Lock()
-		if w.conn != nil {
-			w.conn.Close()
-			w.conn = nil
+		if w.conn == conn {
+			w.conn, w.connected = nil, false
 		}
-		w.connected = false
 		w.connMutex.Unlock()
 		fmt.Printf("🔌 WebSocket连接已关闭\n")
 	}()
 
 	// 启动消息接收goroutine
-	go w.receiveMessages()
+	go w.receiveMessages(conn)
 
 	// 主发送循环
 	ticker := time.NewTicker(w.pingInterval)
@@ -442,7 +495,7 @@ func (w *WebSocketReporter) handleConnection() {
 		case <-ticker.C:
 			// 检查连接状态
 			w.connMutex.Lock()
-			isConnected := w.connected
+			isConnected := w.conn == conn && w.connected
 			w.connMutex.Unlock()
 
 			if !isConnected {
@@ -571,15 +624,14 @@ func (w *WebSocketReporter) sendSystemInfo(sysInfo SystemInfo) error {
 }
 
 // receiveMessages 接收服务端发送的消息
-func (w *WebSocketReporter) receiveMessages() {
+func (w *WebSocketReporter) receiveMessages(conn *websocket.Conn) {
 	for {
 		select {
 		case <-w.ctx.Done():
 			return
 		default:
 			w.connMutex.Lock()
-			conn := w.conn
-			connected := w.connected
+			connected := w.conn == conn && w.connected
 			w.connMutex.Unlock()
 
 			if conn == nil || !connected {
@@ -595,11 +647,21 @@ func (w *WebSocketReporter) receiveMessages() {
 					fmt.Printf("❌ WebSocket读取消息错误: %v\n", err)
 				}
 				w.connMutex.Lock()
-				w.connected = false
+				if w.conn == conn {
+					w.connected = false
+				}
 				w.connMutex.Unlock()
 				return
 			}
 
+			// An old receiver must not consume another connection's frames or
+			// process buffered commands after its connection has been replaced.
+			w.connMutex.Lock()
+			current := w.conn == conn && w.connected
+			w.connMutex.Unlock()
+			if !current {
+				return
+			}
 			// 处理接收到的消息
 			w.handleReceivedMessage(messageType, message)
 		}
@@ -790,7 +852,7 @@ func (w *WebSocketReporter) routeCommand(cmd CommandMessage) {
 	}
 
 	// 发送响应
-	if err == nil && cmd.Type != "UserProtocolPolicyCapabilities" && cmd.Type != "ForwardProxyProtocolCapabilities" && cmd.Type != "NodeRuntimeConfigCapabilities" && cmd.Type != "SetNodeRuntimeConfig" {
+	if err == nil && cmd.Type != "UserProtocolPolicyCapabilities" && cmd.Type != "ForwardProxyProtocolCapabilities" && cmd.Type != "NodeRuntimeConfigCapabilities" && cmd.Type != "SetNodeRuntimeConfig" && cmd.Type != "SetProtocol" {
 		err = saveConfig()
 	}
 	if err != nil {
@@ -1026,6 +1088,10 @@ func (w *WebSocketReporter) handleDeleteLimiter(data interface{}) error {
 	return deleteLimiter(deleteReq)
 }
 
+// Serialize persistence and activation so concurrent commands cannot leave
+// memory with an older snapshot than the one most recently saved to disk.
+var protocolUpdateMu sync.Mutex
+
 // handleSetProtocol 处理设置屏蔽协议的命令
 func (w *WebSocketReporter) handleSetProtocol(data interface{}) error {
 	jsonData, err := json.Marshal(data)
@@ -1065,13 +1131,14 @@ func (w *WebSocketReporter) handleSetProtocol(data interface{}) error {
 		socksVal = *req.SOCKS
 	}
 
-	// 设置至 service，全量传递（未提供的值沿用0）
-	service.SetProtocolBlock(httpVal, tlsVal, socksVal)
-
-	// 同步写入本地 config.json
+	protocolUpdateMu.Lock()
+	defer protocolUpdateMu.Unlock()
+	// Persist first. A disk failure must not change traffic after a negative ACK.
 	if err := updateLocalConfigJSON(httpVal, tlsVal, socksVal); err != nil {
 		return fmt.Errorf("写入config.json失败: %v", err)
 	}
+	// This atomic store cannot fail. Omitted fields keep the legacy zero default.
+	service.SetProtocolBlock(httpVal, tlsVal, socksVal)
 	return nil
 }
 

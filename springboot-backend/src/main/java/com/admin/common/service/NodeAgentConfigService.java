@@ -35,7 +35,7 @@ public class NodeAgentConfigService {
     @Resource private NodeMapper nodeMapper;
     @Resource private UserMapper userMapper;
     @Value("${jwt-secret}") private String jwtSecret;
-    @Value("${agent.install.release:1.4.15}") private String agentInstallRelease;
+    @Value("${agent.install.release:1.4.16}") private String agentInstallRelease;
 
     private final Set<Long> queued = ConcurrentHashMap.newKeySet();
     private final ThreadPoolExecutor sync = new ThreadPoolExecutor(1, 2, 30, TimeUnit.SECONDS,

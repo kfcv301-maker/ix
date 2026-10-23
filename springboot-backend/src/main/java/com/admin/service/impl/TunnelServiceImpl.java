@@ -36,6 +36,8 @@ import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.BeanUtils;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import jakarta.annotation.Resource;
 import java.net.InetAddress;
@@ -376,30 +378,36 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
             return R.err(ERROR_TUNNEL_NOT_FOUND);
         }
         if (!canManage(existing)) return R.err(403, "只能删除自己创建的隧道");
+        boolean administrator = isAdministrator();
+        Long requesterId = currentUserId();
 
         // 2. 检查隧道使用情况
-        R usageCheckResult = isAdministrator() ? checkTunnelUsage(id) : checkForwardUsage(id);
+        R usageCheckResult = administrator ? checkTunnelUsage(id) : checkForwardUsage(id);
         if (usageCheckResult.getCode() != 0) {
             return usageCheckResult;
         }
-        if (!isAdministrator()) {
+        if (!administrator) {
             long otherGrants = userTunnelMapper.selectCount(new QueryWrapper<UserTunnel>()
                     .eq("tunnel_id", id).ne("user_id", currentUserId()));
             if (otherGrants > 0) return R.err("此隧道已分配给其他用户，请联系管理员解除授权");
             userTunnelMapper.delete(new QueryWrapper<UserTunnel>()
                     .eq("tunnel_id", id).eq("user_id", currentUserId()));
-            WebSocketServer.closeUserSessions(currentUserId());
         }
 
         // 3. 执行删除操作
         boolean result = this.removeById(id);
+        // Returning an error normally would commit earlier grant deletions.
+        if (!result) throw new IllegalStateException(ERROR_DELETE_MSG);
         if (result) {
             // Keep the relation table in step with the legacy tunnel row. This
             // prevents a deleted tunnel from keeping a node falsely "in use".
             tunnelEntryNodeMapper.delete(new QueryWrapper<TunnelEntryNode>().eq("tunnel_id", id));
             tunnelEntryDomainMapper.delete(new QueryWrapper<TunnelEntryDomain>().eq("tunnel_id", id));
         }
-        return result ? R.ok(SUCCESS_DELETE_MSG) : R.err(ERROR_DELETE_MSG);
+        if (!administrator) TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override public void afterCommit() { WebSocketServer.closeUserSessions(requesterId); }
+        });
+        return R.ok(SUCCESS_DELETE_MSG);
     }
 
     private boolean isAdministrator() {

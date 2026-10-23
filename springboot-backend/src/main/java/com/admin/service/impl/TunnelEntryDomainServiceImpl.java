@@ -19,6 +19,10 @@ import org.springframework.transaction.annotation.Transactional;
 
 import jakarta.annotation.Resource;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Objects;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -200,21 +204,44 @@ public class TunnelEntryDomainServiceImpl extends ServiceImpl<TunnelEntryDomainM
 
     @Override
     public String resolveAssignedDomain(UserTunnel userTunnel) {
-        if (userTunnel == null || userTunnel.getTunnelId() == null) {
-            return null;
-        }
-        String mode = normalizeMode(userTunnel.getEntryAddressMode());
-        if (ENTRY_ADDRESS_MODE_DEFAULT.equals(mode)) {
-            TunnelEntryDomain entryDomain = findDefaultDomain(userTunnel.getTunnelId().longValue());
-            return entryDomain == null ? null : entryDomain.getDomain();
-        }
-        if (ENTRY_ADDRESS_MODE_CUSTOM.equals(mode) && userTunnel.getEntryDomainId() != null) {
-            TunnelEntryDomain entryDomain = getActiveDomain(userTunnel.getEntryDomainId());
-            if (entryDomain != null && Long.valueOf(userTunnel.getTunnelId()).equals(entryDomain.getTunnelId())) {
-                return entryDomain.getDomain();
+        if (userTunnel == null || userTunnel.getTunnelId() == null) return null;
+        return resolveAssignedDomains(List.of(userTunnel)).get(userTunnel.getTunnelId());
+    }
+
+    /** Request-local resolution: one read across the user's tunnels, with no stale cross-request cache. */
+    @Override
+    public Map<Integer, String> resolveAssignedDomains(Collection<UserTunnel> userTunnels) {
+        if (userTunnels == null || userTunnels.isEmpty()) return Map.of();
+        Set<Long> tunnelIds = userTunnels.stream().filter(Objects::nonNull)
+                .filter(grant -> grant.getTunnelId() != null)
+                .filter(grant -> ENTRY_ADDRESS_MODE_DEFAULT.equals(normalizeMode(grant.getEntryAddressMode()))
+                        || (ENTRY_ADDRESS_MODE_CUSTOM.equals(normalizeMode(grant.getEntryAddressMode()))
+                        && grant.getEntryDomainId() != null))
+                .map(grant -> grant.getTunnelId().longValue()).collect(Collectors.toSet());
+        if (tunnelIds.isEmpty()) return Map.of();
+        Map<Long, TunnelEntryDomain> byId = new HashMap<>();
+        Map<Long, TunnelEntryDomain> defaults = new HashMap<>();
+        for (TunnelEntryDomain domain : this.list(new QueryWrapper<TunnelEntryDomain>()
+                .eq("status", ACTIVE_STATUS).in("tunnel_id", tunnelIds))) {
+            if (domain.getId() == null || !Objects.equals(domain.getStatus(), ACTIVE_STATUS)
+                    || !tunnelIds.contains(domain.getTunnelId())) continue;
+            byId.put(domain.getId(), domain);
+            if (Objects.equals(domain.getIsDefault(), DEFAULT_DOMAIN)) {
+                defaults.merge(domain.getTunnelId(), domain,
+                        (first, second) -> first.getId() < second.getId() ? first : second);
             }
         }
-        return null;
+        Map<Integer, String> result = new HashMap<>();
+        for (UserTunnel grant : userTunnels) {
+            if (grant == null || grant.getTunnelId() == null) continue;
+            String mode = normalizeMode(grant.getEntryAddressMode());
+            TunnelEntryDomain domain = ENTRY_ADDRESS_MODE_DEFAULT.equals(mode)
+                    ? defaults.get(grant.getTunnelId().longValue())
+                    : ENTRY_ADDRESS_MODE_CUSTOM.equals(mode) ? byId.get(grant.getEntryDomainId()) : null;
+            if (domain != null && Objects.equals(domain.getTunnelId(), grant.getTunnelId().longValue())
+                    && StringUtils.isNotBlank(domain.getDomain())) result.put(grant.getTunnelId(), domain.getDomain());
+        }
+        return result;
     }
 
     private List<TunnelEntryDomain> findActiveDomains(Long tunnelId) {

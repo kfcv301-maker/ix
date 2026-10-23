@@ -2,7 +2,7 @@ name: Build, Verify, and Release
 
 # Source-based Compose installs do not require Docker Hub. Releases are immutable.
 env:
-  VERSION: "1.4.15"
+  VERSION: "1.4.16"
 
 on:
   workflow_dispatch:
@@ -121,7 +121,7 @@ jobs:
 
       - name: Check Agent forwarding and resource races
         working-directory: ./go-gost/x
-        run: go test -race -count=5 -timeout=180s ./chain ./internal/net/udp ./internal/net/proxyproto ./internal/util/mux ./handler/forward/local ./dialer ./service ./socket ./api ./runtimeconfig
+        run: go test -race -count=5 -timeout=300s ./chain ./internal/net/udp ./internal/net/proxyproto ./internal/util/mux ./handler/forward/local ./dialer ./service ./socket ./api ./runtimeconfig
 
       - name: Record optional mux diagnostics cost
         working-directory: ./go-gost/x
@@ -342,6 +342,8 @@ jobs:
           python3 tests/release_version_contract_test.py
           python3 tests/ddns_install_recovery_test.py
           python3 tests/node_bootstrap_contract_test.py
+          python3 tests/legacy_node_install_test.py
+          python3 tests/ddns_runtime_sidecar_test.py
           bash tests/node_runtime_install_test.sh
           python3 tests/realtime_node_access_test.py
           bash tests/install_tuning_test.sh

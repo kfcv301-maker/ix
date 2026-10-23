@@ -1,39 +1,33 @@
-import React, { useEffect } from 'react';
-import { useTheme } from '@heroui/use-theme';
-import { applyPanelTheme, getPanelTheme, getPanelAppearance, type PanelAppearance } from '@/utils/panel-theme';
+import React, { useLayoutEffect } from 'react';
+import { applyPanelTheme, subscribePanelPreferences, resolvePanelAppearance, type PanelAppearance } from '@/utils/panel-theme';
 
 interface ThemeProviderProps {
   children: React.ReactNode;
 }
 
 export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
-  const { setTheme } = useTheme();
-
-  useEffect(() => {
-    applyPanelTheme(getPanelTheme());
-
+  useLayoutEffect(() => {
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
-    let appearance = getPanelAppearance();
+    let appearance: PanelAppearance = 'light';
     const apply = () => {
-      const resolved = appearance === 'system' ? (mediaQuery.matches ? 'dark' : 'light') : appearance;
-      setTheme(resolved);
-      document.documentElement.classList.toggle('dark', resolved === 'dark');
-      document.documentElement.style.colorScheme = resolved;
+      const resolved = resolvePanelAppearance(appearance, mediaQuery.matches);
+      const root = document.documentElement;
+      root.classList.remove('light', 'dark', 'system');
+      root.classList.add(resolved);
+      root.style.colorScheme = resolved;
     };
     const handleThemeChange = () => { if (appearance === 'system') apply(); };
-    const handleAppearanceChange = (event: Event) => {
-      const choice = (event as CustomEvent<PanelAppearance>).detail;
-      if (choice === 'light' || choice === 'dark' || choice === 'system') appearance = choice;
+    const unsubscribe = subscribePanelPreferences(preferences => {
+      applyPanelTheme(preferences.theme);
+      appearance = preferences.appearance;
       apply();
-    };
-    apply();
+    });
     mediaQuery.addEventListener('change', handleThemeChange);
-    window.addEventListener('panel-appearance-change', handleAppearanceChange);
     return () => {
       mediaQuery.removeEventListener('change', handleThemeChange);
-      window.removeEventListener('panel-appearance-change', handleAppearanceChange);
+      unsubscribe();
     };
-  }, [setTheme]);
+  }, []);
 
   return <>{children}</>;
 };

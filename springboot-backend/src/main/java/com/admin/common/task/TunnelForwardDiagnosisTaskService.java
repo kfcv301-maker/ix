@@ -165,6 +165,7 @@ public class TunnelForwardDiagnosisTaskService {
                     .eq("user_id", task.requesterUserId).eq("tunnel_id", task.tunnelId));
             long now = clock.getAsLong();
             if (requester.getExpTime() != null && requester.getExpTime() <= now) error = "检测账号已到期";
+            else if (!Objects.equals(tunnel.getStatus(), 1)) error = "隧道已停用，检测权限已撤销";
             else if (tunnel.getOwnerUserId() != null && !Objects.equals(tunnel.getOwnerUserId(), task.requesterUserId.longValue())) error = "隧道归属已变化，检测权限已撤销";
             else if (grant == null || !Objects.equals(grant.getStatus(), 1)
                     || (grant.getExpTime() != null && grant.getExpTime() <= now)) error = "隧道检测权限已撤销或到期";

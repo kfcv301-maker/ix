@@ -5,6 +5,7 @@ import org.springframework.stereotype.Component;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Bounds expensive, node-side tunnel diagnostics. Individual jobs use a small
@@ -33,15 +34,26 @@ public class TunnelForwardDiagnosisLimiter {
             long remainingSeconds = Math.max(1, (COOLDOWN_MILLIS - (now - previousStart) + 999) / 1000);
             throw new IllegalStateException("该隧道刚执行过一键 PING，请 " + remainingSeconds + " 秒后再试");
         }
+        Lease lease = acquireSlot(key, now);
+        lastStarted.put(key, now);
+        cleanupHistory(now);
+        return lease;
+    }
+
+    /** Single-rule probes share the batch capacity but do not impose a tunnel cooldown. */
+    public Lease acquireForward(Integer userId, Long forwardId) {
+        if (userId == null || forwardId == null) throw new IllegalArgumentException("无法确定诊断请求归属");
+        return acquireSlot("forward:" + forwardId, System.currentTimeMillis());
+    }
+
+    private Lease acquireSlot(String key, long now) {
         if (running.putIfAbsent(key, now) != null) {
-            throw new IllegalStateException("该隧道的一键 PING 正在执行中");
+            throw new IllegalStateException("该检测正在执行中，请稍后重试");
         }
         if (!capacity.tryAcquire()) {
             running.remove(key);
             throw new IllegalStateException("当前诊断任务较多，请稍后重试");
         }
-        lastStarted.put(key, now);
-        cleanupHistory(now);
         return new Lease(key);
     }
 
@@ -55,7 +67,7 @@ public class TunnelForwardDiagnosisLimiter {
 
     public final class Lease implements AutoCloseable {
         private final String key;
-        private boolean closed;
+        private final AtomicBoolean closed = new AtomicBoolean();
 
         private Lease(String key) {
             this.key = key;
@@ -63,8 +75,7 @@ public class TunnelForwardDiagnosisLimiter {
 
         @Override
         public void close() {
-            if (closed) return;
-            closed = true;
+            if (!closed.compareAndSet(false, true)) return;
             running.remove(key);
             capacity.release();
         }

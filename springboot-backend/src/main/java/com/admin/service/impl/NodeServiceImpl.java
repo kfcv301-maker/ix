@@ -103,7 +103,7 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
     @Value("${jwt-secret}")
     private String jwtSecret;
 
-    @Value("${agent.install.release:1.4.15}")
+    @Value("${agent.install.release:1.4.16}")
     private String agentInstallRelease;
 
     private volatile AESCrypto ddnsCrypto;
@@ -181,6 +181,16 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
         }
         if (!canManage(node)) return R.err(403, "只能修改自己创建的节点");
 
+        // Validate the entire request before sending any live protocol command.
+        Node updateNode = buildUpdateNode(nodeUpdateDto);
+        R installSettings = applyInstallSettings(updateNode, node, nodeUpdateDto.getTcpTuningProfile(),
+                nodeUpdateDto.getTcpTuningAutoEnabled(), nodeUpdateDto.getTcpTuningProfileMin(), nodeUpdateDto.getTcpTuningProfileMax(),
+                nodeUpdateDto.getDdnsEnabled(), nodeUpdateDto.getCfApiToken(), nodeUpdateDto.getCfRecordName());
+        if (installSettings.getCode() != 0) return installSettings;
+        for (Integer flag : new Integer[]{nodeUpdateDto.getHttp(), nodeUpdateDto.getTls(), nodeUpdateDto.getSocks()}) {
+            if (flag != null && flag != 0 && flag != 1) return R.err("协议开关只能为 0 或 1");
+        }
+
         //1.1 如果节点在线 且传入更新的 http/tls/socks 任意一项与数据库不一致，则通过 WS 通知节点更新设置
         boolean online = node.getStatus() != null && node.getStatus() == 1;
         Integer newHttp = nodeUpdateDto.getHttp();
@@ -193,26 +203,23 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
 
         if (online && (httpChanged || tlsChanged || socksChanged)) {
             JSONObject req = new JSONObject();
-            req.put("http", newHttp);
-            req.put("tls", newTls);
-            req.put("socks", newSocks);
+            // SetProtocol is a complete snapshot on legacy agents: omitted/null
+            // fields become zero, so preserve fields absent from a partial edit.
+            req.put("http", newHttp != null ? newHttp : Objects.requireNonNullElse(node.getHttp(), 0));
+            req.put("tls", newTls != null ? newTls : Objects.requireNonNullElse(node.getTls(), 0));
+            req.put("socks", newSocks != null ? newSocks : Objects.requireNonNullElse(node.getSocks(), 0));
 
             GostDto gostResult = WebSocketServer.send_msg(node.getId(), req, "SetProtocol");
+            if (gostResult == null) return R.err("节点未确认协议设置，请稍后重试");
             if (!Objects.equals(gostResult.getMsg(), "OK")){
                 return R.err(gostResult.getMsg());
             }
         }
 
 
-        // 2. 构建更新对象并执行更新
-        Node updateNode = buildUpdateNode(nodeUpdateDto);
-        R installSettings = applyInstallSettings(updateNode, node, nodeUpdateDto.getTcpTuningProfile(),
-                nodeUpdateDto.getTcpTuningAutoEnabled(), nodeUpdateDto.getTcpTuningProfileMin(), nodeUpdateDto.getTcpTuningProfileMax(),
-                nodeUpdateDto.getDdnsEnabled(), nodeUpdateDto.getCfApiToken(), nodeUpdateDto.getCfRecordName());
-        if (installSettings.getCode() != 0) {
-            return installSettings;
-        }
+        // 2. 保存成功后才传播相关隧道和运行设置
         boolean result = this.updateById(updateNode);
+        if (!result) return R.err(ERROR_UPDATE_MSG);
 
         // 更新隧道入口ip
         List<Tunnel> inNodeId = tunnelService.list(new QueryWrapper<Tunnel>().eq("in_node_id", updateNode.getId()));
@@ -237,8 +244,8 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
             tunnelService.updateBatchById(outNodeId);
         }
 
-        if (result) agentConfigService.requestSync(node.getId());
-        return result ? R.ok(SUCCESS_UPDATE_MSG) : R.err(ERROR_UPDATE_MSG);
+        agentConfigService.requestSync(node.getId());
+        return R.ok(SUCCESS_UPDATE_MSG);
     }
 
     /**

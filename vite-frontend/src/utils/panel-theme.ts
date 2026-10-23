@@ -1,6 +1,7 @@
 export const PANEL_THEME_STORAGE_KEY = 'flux-panel-theme';
 export const PANEL_APPEARANCE_STORAGE_KEY = 'flux-panel-appearance';
 export type PanelAppearance = 'light' | 'dark' | 'system';
+const PANEL_PREFERENCE_EVENT = 'panel-preferences-change';
 
 export function getPanelAppearance(): PanelAppearance {
   try {
@@ -13,7 +14,7 @@ export function getPanelAppearance(): PanelAppearance {
 
 export function savePanelAppearance(appearance: PanelAppearance) {
   try { localStorage.setItem(PANEL_APPEARANCE_STORAGE_KEY, appearance); } catch { /* Apply for this session even when persistence is unavailable. */ }
-  window.dispatchEvent(new CustomEvent('panel-appearance-change', { detail: appearance }));
+  window.dispatchEvent(new CustomEvent(PANEL_PREFERENCE_EVENT, { detail: { appearance } }));
 }
 
 export const panelThemes = [
@@ -29,10 +30,14 @@ export const panelThemes = [
 export type PanelTheme = (typeof panelThemes)[number]['id'];
 
 export function getPanelTheme(): PanelTheme {
-  const savedTheme = localStorage.getItem(PANEL_THEME_STORAGE_KEY);
-  return panelThemes.some((theme) => theme.id === savedTheme)
-    ? (savedTheme as PanelTheme)
-    : 'xboard-console';
+  try {
+    const savedTheme = localStorage.getItem(PANEL_THEME_STORAGE_KEY);
+    return panelThemes.some((theme) => theme.id === savedTheme)
+      ? (savedTheme as PanelTheme)
+      : 'xboard-console';
+  } catch {
+    return 'xboard-console';
+  }
 }
 
 export function applyPanelTheme(theme: PanelTheme) {
@@ -45,6 +50,41 @@ export function applyPanelTheme(theme: PanelTheme) {
 }
 
 export function savePanelTheme(theme: PanelTheme) {
-  localStorage.setItem(PANEL_THEME_STORAGE_KEY, theme);
+  try { localStorage.setItem(PANEL_THEME_STORAGE_KEY, theme); } catch { /* Keep this session usable when storage is unavailable. */ }
   applyPanelTheme(theme);
+  window.dispatchEvent(new CustomEvent(PANEL_PREFERENCE_EVENT, { detail: { theme } }));
+}
+
+export interface PanelPreferences { theme: PanelTheme; appearance: PanelAppearance }
+
+// Share one preference stream between the document and the theme picker. Storage
+// events keep other tabs in sync; custom events also work without localStorage.
+export function subscribePanelPreferences(listener: (preferences: PanelPreferences) => void) {
+  let preferences: PanelPreferences = { theme: getPanelTheme(), appearance: getPanelAppearance() };
+  const notify = () => listener({ ...preferences });
+  const handleChange = (event: Event) => {
+    const detail = (event as CustomEvent<Partial<PanelPreferences>>).detail;
+    if (!detail) return;
+    if (panelThemes.some(theme => theme.id === detail.theme)) preferences.theme = detail.theme!;
+    if (detail.appearance === 'light' || detail.appearance === 'dark' || detail.appearance === 'system') preferences.appearance = detail.appearance;
+    notify();
+  };
+  const handleStorage = (event: StorageEvent) => {
+    if (event.key !== null && event.key !== PANEL_THEME_STORAGE_KEY && event.key !== PANEL_APPEARANCE_STORAGE_KEY) return;
+    // Ignore similarly named sessionStorage keys.
+    try { if (event.storageArea && event.storageArea !== localStorage) return; } catch { return; }
+    preferences = { theme: getPanelTheme(), appearance: getPanelAppearance() };
+    notify();
+  };
+  window.addEventListener(PANEL_PREFERENCE_EVENT, handleChange);
+  window.addEventListener('storage', handleStorage);
+  notify();
+  return () => {
+    window.removeEventListener(PANEL_PREFERENCE_EVENT, handleChange);
+    window.removeEventListener('storage', handleStorage);
+  };
+}
+
+export function resolvePanelAppearance(appearance: PanelAppearance, systemDark: boolean): 'light' | 'dark' {
+  return appearance === 'system' ? (systemDark ? 'dark' : 'light') : appearance;
 }
