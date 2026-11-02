@@ -18,8 +18,9 @@ import static org.mockito.Mockito.*;
 
 class ForwardPartialCreateRetryTest {
     @ParameterizedTest
-    @CsvSource({"tcp,false", "udp,false", "none,false", "tcp,true"})
-    void partialLegacyCreateRecoversOnlyMissingProtocols(String existing, boolean duplicateReply) {
+    @CsvSource({"tcp,false,false", "udp,false,false", "none,false,false", "tcp,true,false",
+            "tcp,false,true", "udp,false,true", "none,false,true", "tcp,true,true"})
+    void partialLegacyCreateRecoversOnlyMissingProtocols(String existing, boolean duplicateReply, boolean configurationMissing) {
         ForwardSyncTaskService service = new ForwardSyncTaskService();
         var policies = mock(UserProtocolPolicyService.class);
         var grants = mock(UserTunnelService.class);
@@ -41,7 +42,7 @@ class ForwardPartialCreateRetryTest {
                 if (command.equals("SetUserProtocolPolicy")) { result.setMsg("未知命令类型"); return result; }
                 if (command.equals("ResumeService")) {
                     for (Object name : ((JSONObject)data).getJSONArray("services")) {
-                        if (!running.contains(name)) { result.setMsg("service " + name + " not found"); break; }
+                        if (!running.contains(name)) { result.setMsg("service " + name + (configurationMissing ? " configuration" : "") + " not found"); break; }
                     }
                 } else if (command.equals("AddService")) {
                     for (Object item : (JSONArray)data) {

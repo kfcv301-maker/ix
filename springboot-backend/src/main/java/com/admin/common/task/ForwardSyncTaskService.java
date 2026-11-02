@@ -570,8 +570,13 @@ public class ForwardSyncTaskService {
         for (String protocol : List.of("tcp", "udp")) {
             GostDto state = GostUtil.ResumeServiceProtocol(task.getNodeId(), task.getServiceName(), protocol);
             if (isSuccess(state)) continue;
-            String expected = "service " + task.getServiceName() + "_" + protocol + " not found";
-            if (state == null || !expected.equals(state.getMsg())) return endpointError("确认入口 " + protocol + " 服务", state);
+            String target = "service " + task.getServiceName() + "_" + protocol;
+            String message = state == null ? null : state.getMsg();
+            // Resume preflight in enhanced Agents checks saved configuration before the registry.
+            if (!(target + " not found").equals(message)
+                    && !(target + " configuration not found").equals(message)) {
+                return endpointError("确认入口 " + protocol + " 服务", state);
+            }
             missing.add(protocol);
         }
         if (missing.isEmpty()) return null;
