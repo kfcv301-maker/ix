@@ -34,9 +34,9 @@ credentials=subprocess.check_output(['docker','exec',backend,'cat','/app/config/
 values=dict(line.split('=',1) for line in credentials.splitlines() if '=' in line)
 admin=api('user/login',{'username':values['username'],'password':values['password']})['data']['token']
 assert sql("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='flux_panel' AND TABLE_NAME IN ('node_ip_state','node_ip_event')")=='2'
-sql("""INSERT INTO user (id,user,pwd,token_version,role_id,exp_time,flow,in_flow,out_flow,num,created_time,updated_time,status)
-VALUES (9301,'ip-fixture-9301','unused',0,1,4102444800000,100,0,0,100,1,1,1),
-(9302,'ip-fixture-9302','unused',0,1,4102444800000,100,0,0,100,1,1,1);
+sql("""INSERT INTO user (id,user,pwd,token_version,role_id,exp_time,flow,in_flow,out_flow,flow_reset_time,num,created_time,updated_time,status)
+VALUES (9301,'ip-fixture-9301','unused',0,1,4102444800000,100,0,0,1,100,1,1,1),
+(9302,'ip-fixture-9302','unused',0,1,4102444800000,100,0,0,1,100,1,1,1);
 INSERT INTO node (id,name,secret,ip,server_ip,port_sta,port_end,owner_user_id,created_time,status)
 VALUES (9301,'owner-ip','fixture-ip-secret-1','192.0.2.10','192.0.2.10',10000,10099,9301,1,0),
 (9302,'other-ip','fixture-ip-secret-2','192.0.2.20','192.0.2.20',10000,10099,9302,1,0),
