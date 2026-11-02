@@ -30,6 +30,7 @@ credentials = subprocess.check_output(['docker', 'exec', backend, 'cat',
 values = dict(line.split('=', 1) for line in credentials.splitlines() if '=' in line)
 token = api('user/login', {'username': values['username'], 'password': values['password']})['data']['token']
 sql("""
+ALTER TABLE forward AUTO_INCREMENT=10000;
 INSERT INTO node (id,name,secret,ip,server_ip,port_sta,port_end,created_time,status)
 VALUES (9200,'offline-create-fixture','create-fixture-secret','127.0.0.1','127.0.0.1',23000,23099,1,0);
 INSERT INTO tunnel (id,name,in_node_id,in_ip,out_node_id,out_ip,type,flow,created_time,updated_time,status)

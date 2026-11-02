@@ -808,10 +808,10 @@ export default function ForwardPage() {
         setModalOpen(false);
         loadData();
       } else {
-        toast.error(res.code === -1 && !isEdit
+        toast.error(res.transportError && !isEdit
           ? '尚未确认创建结果，请先查看规则列表，勿重复添加'
           : res.msg || '操作失败');
-        if (res.code === -1) await loadData(false);
+        if (res.transportError) await loadData(false);
       }
     } catch (error) {
       console.error('提交失败:', error);
@@ -1225,7 +1225,7 @@ export default function ForwardPage() {
             duplicateKeys.add(duplicateKey);
             results.push({ line, success: true, message: response.data?.forwardId ? response.msg : '创建成功', forwardName: name });
           } else {
-            results.push({ line, success: false, message: response.code === -1
+            results.push({ line, success: false, message: response.transportError
               ? '尚未确认创建结果；可重试导入，本次请求不会重复创建' : response.msg || '创建失败' });
           }
         } catch {

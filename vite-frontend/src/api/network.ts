@@ -40,6 +40,7 @@ interface ApiResponse<T = any> {
   code: number;
   msg: string;
   data: T;
+  transportError?: boolean;
 }
 
 // 处理token失效的逻辑
@@ -100,7 +101,7 @@ const Network = {
               return;
             }
            
-           resolve({"code": -1, "msg": error.message || "网络请求失败", "data": null as T});
+           resolve({"code": -1, "msg": error.message || "网络请求失败", "data": null as T, transportError: true});
          });
     });
   },
@@ -141,7 +142,7 @@ const Network = {
               return;
             }
            
-           resolve({"code": -1, "msg": error.message || "网络请求失败", "data": null as T});
+           resolve({"code": -1, "msg": error.message || "网络请求失败", "data": null as T, transportError: true});
          });
     });
   }
