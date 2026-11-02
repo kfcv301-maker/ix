@@ -55,6 +55,22 @@ export const getRealtimeNodes = () => Network.post<RealtimeNode[]>("/realtime/no
 // 节点CRUD操作 - 全部使用POST请求
 export const createNode = (data: any) => Network.post("/node/create", data);
 export const getNodeList = () => Network.post("/node/list");
+export interface NodeIpSummary {
+  nodeId: number; target: string; ddnsEnabled: boolean; source: 'dns' | 'configured';
+  status: string; addresses: string[]; checkedAt: number; resolvedAt: number;
+  startedAt: number; baselineAt: number; lastChangeAt: number;
+  todayChanges: number; weekChanges: number; timezone: string;
+}
+export interface NodeIpEvent {
+  id: number; kind: 'BASELINE' | 'CHANGE' | 'TARGET_CHANGED'; target: string;
+  source: string; previousAddresses: string[]; addresses: string[]; observedAt: number; confirmedAt: number;
+}
+export interface NodeIpHistory {
+  summary: NodeIpSummary; days: { date: string; count: number }[];
+  events: NodeIpEvent[]; nextBeforeId: number | null; retentionDays: number;
+}
+export const getNodeIpSummaries = () => Network.post<NodeIpSummary[]>("/node/ip-history/summaries");
+export const getNodeIpHistory = (id: number, beforeId?: number) => Network.post<NodeIpHistory>("/node/ip-history", { id, beforeId });
 export const updateNode = (data: any) => Network.post("/node/update", data);
 export const deleteNode = (id: number) => Network.post("/node/delete", { id });
 export interface NodeInstallOptions {

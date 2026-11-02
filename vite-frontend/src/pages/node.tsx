@@ -1,4 +1,5 @@
 import { ConsoleHeading, ConsoleIcon, ConsoleSearch, ConsoleEmpty } from '@/components/console-ui';
+import { NodeIpHistoryModal, useNodeIpSummaries } from '@/components/node-ip-history';
 import { useState, useEffect, useRef } from "react";
 import { Card, CardBody } from "@heroui/card";
 import { Button } from "@heroui/button";
@@ -163,6 +164,8 @@ export default function NodePage() {
   const [nodeFilter, setNodeFilter] = useState('all');
   const isAdministrator = JwtUtil.getRoleIdFromToken() === 0;
   const canManageNode = (node: Node) => isAdministrator || node.canManage === true;
+  const [ipHistoryNodeId, setIpHistoryNodeId] = useState<number | null>(null);
+  const { summaries: ipSummaries, unavailable: ipSummaryUnavailable } = useNodeIpSummaries(nodeList.some(canManageNode));
   const visibleNodes = nodeList.filter(node => {
     const online = node.connectionStatus === 'online';
     if (nodeFilter === 'online' && !online || nodeFilter === 'offline' && online) return false;
@@ -987,6 +990,7 @@ export default function NodePage() {
                   <div className="monitor-name-line"><button onClick={() => setMonitorNodeId(node.id)} title={node.name}>{node.name}</button><span className={`monitor-status ${online ? 'is-online' : ''}`}><span className={`console-status-dot ${online ? 'status-success' : ''}`}/>{online ? '在线' : '离线'}</span></div>
                   {canManageNode(node) && <span className="monitor-address" title={node.serverIp}>{node.serverIp || '未设置服务器地址'}</span>}
                   <span className="monitor-version">{node.version ? `v${node.version.replace(/^v/, '')}` : '版本未知'}{online && !info ? ' · 等待上报' : ''}</span>
+                  {canManageNode(node) && <button className="ip-history-link" onClick={() => setIpHistoryNodeId(node.id)} aria-label={`查看 ${node.name} 的 IP 变化记录`}><ConsoleIcon name="globe" size={12}/>IP 记录 · {ipSummaryUnavailable ? '暂未获取' : ipSummaries[node.id]?.baselineAt ? `今日 ${ipSummaries[node.id].todayChanges} 次变化` : '等待观测'}</button>}
                 </div>
                 <div className="monitor-resource" role="cell" data-label="CPU"><strong>{info ? `${info.cpuUsage.toFixed(1)}%` : '—'}</strong><Progress aria-label={`${node.name} CPU 使用率`} value={info?.cpuUsage || 0} color={getProgressColor(info?.cpuUsage || 0, !info)} size="sm" className="monitor-progress"/><small>{info?.cpuCores ? `${info.cpuCores} 核` : '—'}</small></div>
                 <div className="monitor-resource" role="cell" data-label="内存"><strong>{info ? `${info.memoryUsage.toFixed(1)}%` : '—'}</strong><Progress aria-label={`${node.name} 内存使用率`} value={info?.memoryUsage || 0} color={getProgressColor(info?.memoryUsage || 0, !info)} size="sm" className="monitor-progress"/><small>{info?.memoryTotal ? formatCapacity(info.memoryTotal) : '—'}</small></div>
@@ -1000,6 +1004,8 @@ export default function NodePage() {
               </div>;
             })}</div>
           </div>}
+
+        <NodeIpHistoryModal node={nodeList.find(node => node.id === ipHistoryNodeId && canManageNode(node)) || null} onClose={() => setIpHistoryNodeId(null)}/>
 
         {/* 展开后的实时曲线，不写入数据库；保存当前页面会话内最近 3 分钟。 */}
         <Modal
