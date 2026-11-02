@@ -6,6 +6,7 @@ import javax.naming.directory.InitialDirContext;
 import javax.naming.directory.Attributes;
 import javax.naming.directory.Attribute;
 import javax.naming.NamingEnumeration;
+import javax.naming.NamingException;
 import java.net.IDN;
 import java.net.InetAddress;
 import java.util.ArrayList;
@@ -56,10 +57,12 @@ public class NodeAddressResolver {
         environment.put("com.sun.jndi.dns.timeout.retries", "1");
         InitialDirContext context = null;
         try {
-            context = new InitialDirContext(environment);
-            Attributes records = context.getAttributes(value + ".", new String[]{"A", "AAAA"});
+            context = openContext(environment);
             List<String> addresses = new ArrayList<>();
             for (String family : List.of("A", "AAAA")) {
+                // JNDI combines multiple record types into ANY. Modern DNS servers may
+                // legitimately return no address records to ANY, so query each family.
+                Attributes records = context.getAttributes(value + ".", new String[]{family});
                 Attribute attribute = records.get(family);
                 if (attribute == null) continue;
                 NamingEnumeration<?> entries = attribute.getAll();
@@ -74,6 +77,10 @@ public class NodeAddressResolver {
             return new NodeIpObservation.Result(addresses.isEmpty() ? "no_records" : "ok", "dns", addresses);
         } catch (Exception unavailable) { return failure("resolve_failed"); }
         finally { if (context != null) try { context.close(); } catch (Exception ignored) {} }
+    }
+
+    InitialDirContext openContext(Hashtable<String,String> environment) throws NamingException {
+        return new InitialDirContext(environment);
     }
 
     private NodeIpObservation.Result failure(String status) { return new NodeIpObservation.Result(status,"dns",List.of()); }
