@@ -54,6 +54,7 @@ import { useTunnelDiagnosis } from '@/hooks/use-tunnel-diagnosis';
 import { diagnosisProgressText, TCP_DIAGNOSIS_NOTICE } from '@/utils/tunnel-diagnosis';
 import { parseProxyProtocol, proxyProtocolLabel, proxyProtocolDiagnosisNotice, PROXY_PROTOCOL_DESCRIPTION, type ProxyProtocolVersion } from '@/utils/forward-proxy-protocol';
 import { createForwardExport, parseForwardImport, parseForwardInterface, selectForwardExportRecords, type ForwardExportScope } from '@/utils/forward-export';
+import { createForwardRequestCache } from '@/utils/forward-create-request';
 import {
   bulkForwardFieldLabels, planBulkForwardUpdates, executeBulkForwardUpdates,
   type BulkForwardField, type BulkForwardPatch, type BulkForwardPlanEntry, type BulkForwardResult,
@@ -233,6 +234,10 @@ export default function ForwardPage() {
   const [diagnosisModalOpen, setDiagnosisModalOpen] = useState(false);
   const [isEdit, setIsEdit] = useState(false);
   const [submitLoading, setSubmitLoading] = useState(false);
+  const submitBusyRef = useRef(false);
+  const createRequests = useRef(createForwardRequestCache());
+  const importRequests = useRef(createForwardRequestCache());
+  const importBusyRef = useRef(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [operatingForwardIds, setOperatingForwardIds] = useState<Set<number>>(() => new Set());
   const [diagnosisLoading, setDiagnosisLoading] = useState(false);
@@ -752,8 +757,9 @@ export default function ForwardPage() {
 
   // 提交表单
   const handleSubmit = async () => {
+    if (submitBusyRef.current) return;
     if (!validateForm()) return;
-    
+    submitBusyRef.current = true;
     setSubmitLoading(true);
     try {
       const processedRemoteAddr = form.remoteAddr
@@ -793,20 +799,26 @@ export default function ForwardPage() {
           strategy: addressCount > 1 ? form.strategy : 'fifo',
           proxyProtocol: form.proxyProtocol
         };
-        res = await createForward(createData);
+        res = await createForward({ ...createData, requestId: createRequests.current.get(createData) });
+        if (res.code === 0) createRequests.current.acknowledge(createData);
       }
       
       if (res.code === 0) {
-        toast.success(isEdit ? '修改成功' : '创建成功');
+        toast.success(isEdit ? '修改成功' : (res.data?.forwardId ? res.msg : '创建成功'));
         setModalOpen(false);
         loadData();
       } else {
-        toast.error(res.msg || '操作失败');
+        toast.error(res.code === -1 && !isEdit
+          ? '尚未确认创建结果，请先查看规则列表，勿重复添加'
+          : res.msg || '操作失败');
+        if (res.code === -1) await loadData(false);
       }
     } catch (error) {
       console.error('提交失败:', error);
-      toast.error('操作失败');
+      toast.error(isEdit ? '操作失败' : '尚未确认创建结果，请先查看规则列表；重试会复用本次请求');
+      if (!isEdit) await loadData(false);
     } finally {
+      submitBusyRef.current = false;
       setSubmitLoading(false);
     }
   };
@@ -1111,6 +1123,7 @@ export default function ForwardPage() {
 
   // 执行导入
   const executeImport = async () => {
+    if (importBusyRef.current) return;
     if (!importData.trim()) {
       toast.error('请输入要导入的数据');
       return;
@@ -1121,6 +1134,7 @@ export default function ForwardPage() {
       return;
     }
 
+    importBusyRef.current = true;
     setImportLoading(true);
     setImportResults([]); // 清空之前的结果
 
@@ -1197,7 +1211,7 @@ export default function ForwardPage() {
           continue;
         }
         try {
-          const response = await createForward({
+          const payload = {
             name,
             tunnelId: selectedTunnelForImport,
             inPort: portNumber,
@@ -1205,15 +1219,17 @@ export default function ForwardPage() {
             interfaceName,
             strategy,
             proxyProtocol
-          });
+          };
+          const response = await createForward({ ...payload, requestId: importRequests.current.get(payload) });
           if (response.code === 0) {
             duplicateKeys.add(duplicateKey);
-            results.push({ line, success: true, message: '创建成功', forwardName: name });
+            results.push({ line, success: true, message: response.data?.forwardId ? response.msg : '创建成功', forwardName: name });
           } else {
-            results.push({ line, success: false, message: response.msg || '创建失败' });
+            results.push({ line, success: false, message: response.code === -1
+              ? '尚未确认创建结果；可重试导入，本次请求不会重复创建' : response.msg || '创建失败' });
           }
         } catch {
-          results.push({ line, success: false, message: '网络错误，创建失败' });
+          results.push({ line, success: false, message: '网络异常，结果待确认；可重试导入，本次请求不会重复创建' });
         }
       }
 
@@ -1232,6 +1248,7 @@ export default function ForwardPage() {
       toast.error(message);
       setImportResults([{ line: '导入文件', success: false, message }]);
     } finally {
+      importBusyRef.current = false;
       setImportLoading(false);
     }
   };
@@ -2046,7 +2063,9 @@ export default function ForwardPage() {
         {/* 新增/编辑模态框 */}
         <Modal 
           isOpen={modalOpen}
-          onOpenChange={setModalOpen}
+          onOpenChange={open => { if (!submitBusyRef.current) setModalOpen(open); }}
+          isDismissable={!submitLoading}
+          isKeyboardDismissDisabled={submitLoading}
           size="2xl"
           scrollBehavior="outside"
           backdrop="blur"

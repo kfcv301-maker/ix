@@ -8,9 +8,13 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.Pattern;
 
 @Data
 public class ForwardDto {
+
+    @Pattern(regexp = "[A-Za-z0-9_-]{16,64}", message = "创建请求标识格式不正确")
+    private String requestId;
 
     @NotBlank(message = "转发名称不能为空")
     private String name;

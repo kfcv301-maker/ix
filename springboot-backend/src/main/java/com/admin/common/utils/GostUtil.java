@@ -313,6 +313,11 @@ public class GostUtil {
         return WebSocketServer.send_msg(node_id, data, "ResumeService");
     }
 
+    public static GostDto ResumeServiceProtocol(Long nodeId, String name, String protocol) {
+        if (!"tcp".equals(protocol) && !"udp".equals(protocol)) throw new IllegalArgumentException("Unsupported protocol");
+        return WebSocketServer.send_msg(nodeId, JSONObject.of("services", JSONArray.of(name + "_" + protocol)), "ResumeService");
+    }
+
     public static GostDto PauseRemoteService(Long node_id, String name) {
         JSONObject data = new JSONObject();
         JSONArray services = new JSONArray();

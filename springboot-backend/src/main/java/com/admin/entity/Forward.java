@@ -24,6 +24,10 @@ public class Forward extends BaseEntity{
 
     private String name;
 
+    /** Scoped to the owner; retries of one submission must not create another listener. */
+    private String createRequestId;
+    private String createRequestHash;
+
     private Integer tunnelId;
 
     private Integer inPort;

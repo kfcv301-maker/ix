@@ -304,7 +304,7 @@ public class ForwardSyncTaskService {
         runAfterCommit(() -> {
             try {
                 forwardSyncTaskExecutor.dispatchOperation(operationId);
-            } catch (TaskRejectedException exception) {
+            } catch (RuntimeException exception) {
                 // Leave rows pending; the scheduled dispatcher will retry.
                 log.warn("节点同步调度器繁忙，操作 {} 将由定时任务重试", operationId);
             }
@@ -338,6 +338,15 @@ public class ForwardSyncTaskService {
             if (!isStillDesired(task, forward)) {
                 forwardSyncTaskMapper.markCancelled(task.getId(), now);
                 return;
+            }
+
+            if (OPERATION_RESUME.equals(task.getOperation())) {
+                Tunnel currentTunnel = tunnelService.getById(forward.getTunnelId());
+                String denied = currentTunnel == null ? "隧道不存在" : resumeDeniedReason(forward, currentTunnel);
+                if (denied != null) {
+                    self.queueSafetyPause(forward.getId());
+                    return;
+                }
             }
 
             String failure = executeEndpoint(task, forward);
@@ -521,7 +530,7 @@ public class ForwardSyncTaskService {
         if (isSuccess(result)) return null;
         if (!isNotFound(result)) return endpointError("恢复出口服务", result);
         result = GostUtil.AddRemoteService(task.getNodeId(), task.getServiceName(), forward.getOutPort(),
-                forward.getRemoteAddr(), tunnel.getProtocol(), forward.getStrategy(), tunnel.getInterfaceName());
+                forward.getRemoteAddr(), tunnel.getProtocol(), forward.getStrategy(), forward.getInterfaceName());
         return isSuccess(result) ? null : endpointError("重建出口服务", result);
     }
 
@@ -557,6 +566,15 @@ public class ForwardSyncTaskService {
     }
 
     private String recreateIngress(ForwardSyncTask task, Forward forward, Tunnel tunnel) {
+        List<String> missing = new ArrayList<>();
+        for (String protocol : List.of("tcp", "udp")) {
+            GostDto state = GostUtil.ResumeServiceProtocol(task.getNodeId(), task.getServiceName(), protocol);
+            if (isSuccess(state)) continue;
+            String expected = "service " + task.getServiceName() + "_" + protocol + " not found";
+            if (state == null || !expected.equals(state.getMsg())) return endpointError("确认入口 " + protocol + " 服务", state);
+            missing.add(protocol);
+        }
+        if (missing.isEmpty()) return null;
         if (Objects.equals(tunnel.getType(), TUNNEL_TYPE_TUNNEL_FORWARD)) {
             String remoteAddress = formatAddress(tunnel.getOutIp(), forward.getOutPort());
             GostDto chainResult = GostUtil.UpdateChains(task.getNodeId(), task.getServiceName(), remoteAddress,
@@ -571,10 +589,17 @@ public class ForwardSyncTaskService {
         Integer limiter = userTunnel == null ? null : userTunnel.getSpeedId();
         String interfaceName = Objects.equals(tunnel.getType(), TUNNEL_TYPE_TUNNEL_FORWARD)
                 ? null : forward.getInterfaceName();
-        GostDto serviceResult = GostUtil.AddService(task.getNodeId(), task.getServiceName(), forward.getInPort(),
-                limiter, forward.getRemoteAddr(), tunnel.getType(), tunnel, forward.getStrategy(), interfaceName,
-                userProtocolPolicyService.forForward(forward), forward.getProxyProtocol());
-        return isSuccess(serviceResult) ? null : endpointError("重建入口服务", serviceResult);
+        for (String protocol : missing) {
+            GostDto serviceResult = GostUtil.AddMissingService(task.getNodeId(), task.getServiceName(), forward.getInPort(),
+                    limiter, forward.getRemoteAddr(), tunnel.getType(), tunnel, forward.getStrategy(), interfaceName,
+                    userProtocolPolicyService.forForward(forward), "tcp".equals(protocol), "udp".equals(protocol), forward.getProxyProtocol());
+            // A previous command may have succeeded while its ACK was lost.
+            if (serviceResult != null && ("service " + task.getServiceName() + "_" + protocol + " already exists").equals(serviceResult.getMsg())) {
+                serviceResult = GostUtil.ResumeServiceProtocol(task.getNodeId(), task.getServiceName(), protocol);
+            }
+            if (!isSuccess(serviceResult)) return endpointError("重建入口 " + protocol + " 服务", serviceResult);
+        }
+        return null;
     }
 
     private void finalizeIfComplete(String operationId) {
@@ -660,6 +685,9 @@ public class ForwardSyncTaskService {
         if (owner == null) return "转发归属用户不存在";
         if (!Objects.equals(owner.getStatus(), 1)) return "转发所属用户已禁用";
         if (Objects.equals(owner.getRoleId(), 0)) return null;
+        if (tunnel.getOwnerUserId() != null && !Objects.equals(tunnel.getOwnerUserId(), owner.getId())) {
+            return "隧道归属已变化";
+        }
         long now = System.currentTimeMillis();
         if (owner.getExpTime() != null && owner.getExpTime() <= now) return "转发所属用户已到期";
         if (!hasRemainingQuota(owner.getFlow(), owner.getInFlow(), owner.getOutFlow())) return "转发所属用户流量已用完";

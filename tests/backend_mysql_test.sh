@@ -74,6 +74,7 @@ python3 "$ROOT_DIR/tests/forward_dispatch_test.py" "$BACKEND_CONTAINER" "$MYSQL_
 python3 "$ROOT_DIR/tests/node_cascade_delete_test.py" "$BACKEND_CONTAINER" "$MYSQL_CONTAINER"
 python3 "$ROOT_DIR/tests/user_disable_forward_test.py" "$BACKEND_CONTAINER" "$MYSQL_CONTAINER"
 python3 "$ROOT_DIR/tests/forward_proxy_protocol_test.py" "$BACKEND_CONTAINER" "$MYSQL_CONTAINER"
+python3 "$ROOT_DIR/tests/forward_create_test.py" "$BACKEND_CONTAINER" "$MYSQL_CONTAINER"
 sql <<'SQL'
 INSERT INTO forward (id,user_id,user_name,name,tunnel_id,in_port,remote_addr,proxy_protocol,created_time,updated_time,status)
 VALUES (9101,91000,'migration-fixture','proxy-v1-restart',9100,18102,'127.0.0.1:18103',1,1,1,2),
