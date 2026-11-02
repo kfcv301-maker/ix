@@ -56,21 +56,23 @@ for i in range(53):
     rows.append(f"(9301,'{kind}','192.0.2.10','configured','[\"192.0.2.9\"]','[\"192.0.2.10\"]',{stamp},{stamp})")
 sql('INSERT INTO node_ip_event (node_id,kind,target,source,previous_addresses,addresses,observed_at,confirmed_at) VALUES '+','.join(rows))
 owner=owner_token(9301)
-first=api('node/ip-history',{'id':9301},owner)
+for node in (9301,9302,9303): assert api('node/ip-history',{'id':node},owner)['code']==403
+assert api('node/ip-history/summaries',{},owner)['code']==403
+first=api('node/ip-history',{'id':9301},admin)
 assert first['code']==0,first
 data=first['data']
 assert data['summary']['todayChanges']==2 and data['summary']['weekChanges']==52,data
 assert data['summary']['timezone']=='Asia/Shanghai'
 assert len(data['events'])==50 and data['nextBeforeId']
-second=api('node/ip-history',{'id':9301,'beforeId':data['nextBeforeId']},owner)['data']
+second=api('node/ip-history',{'id':9301,'beforeId':data['nextBeforeId']},admin)['data']
 assert len(second['events'])>=3 and second['nextBeforeId'] is None
 assert not ({e['id'] for e in data['events']} & {e['id'] for e in second['events']})
 for node in (9302,9303): assert api('node/ip-history',{'id':node},owner)['code']==403
 assert api('node/ip-history',{'id':9302},admin)['code']==0
-summaries=api('node/ip-history/summaries',{},owner)
-assert summaries['code']==0 and {s['nodeId'] for s in summaries['data']}=={9301}
+summaries=api('node/ip-history/summaries',{},admin)
+assert summaries['code']==0 and {9301,9302,9303}.issubset({s['nodeId'] for s in summaries['data']})
 assert 'secret' not in json.dumps(first).lower() and 'token' not in json.dumps(summaries).lower()
 sql('UPDATE user SET status=0 WHERE id=9301')
 assert api('node/ip-history',{'id':9301},owner)['code']!=0
 assert api('node/ip-history/summaries',{},owner)['code']!=0
-print('IP history MySQL pagination, Shanghai day boundary, baseline exclusion and tenant isolation passed')
+print('IP history MySQL pagination, Shanghai day boundary, baseline exclusion and admin-only access passed')

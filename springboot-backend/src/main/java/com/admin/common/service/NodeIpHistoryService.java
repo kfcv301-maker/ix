@@ -103,14 +103,15 @@ public class NodeIpHistoryService {
 
     User activeUser(Long userId) {
         User user=userId==null ? null : users.selectById(userId);
-        if (user==null || !Objects.equals(user.getStatus(),1)) throw new SecurityException("当前用户不可查看 IP 记录");
+        if (user==null || !Objects.equals(user.getStatus(),1) || !Objects.equals(user.getRoleId(),0))
+            throw new SecurityException("仅管理员可查看 IP 记录");
         return user;
     }
 
     Node managedNode(User user, Long nodeId) {
         Node node=nodeId==null ? null : nodes.selectById(nodeId);
-        if (node==null || (!Objects.equals(user.getRoleId(),0) && !Objects.equals(node.getOwnerUserId(),user.getId()))) {
-            throw new SecurityException("只能查看自己管理的节点 IP 记录");
+        if (node==null || !Objects.equals(user.getRoleId(),0)) {
+            throw new SecurityException("仅管理员可查看节点 IP 记录");
         }
         return node;
     }
@@ -118,24 +119,19 @@ public class NodeIpHistoryService {
     private long dayStart(int daysAgo) { return LocalDate.now(clock.withZone(ZONE)).minusDays(daysAgo).atStartOfDay(ZONE).toInstant().toEpochMilli(); }
 
     public List<Map<String,Object>> summaries(Long userId) {
-        User user=activeUser(userId);
-        QueryWrapper<Node> scope=new QueryWrapper<>();
-        if (!Objects.equals(user.getRoleId(),0)) scope.eq("owner_user_id",userId);
-        List<Node> manageable=nodes.selectList(scope.orderByAsc("id"));
+        activeUser(userId);
+        List<Node> manageable=nodes.selectList(new QueryWrapper<Node>().orderByAsc("id"));
         if (manageable.isEmpty()) return List.of();
-        boolean admin=Objects.equals(user.getRoleId(),0);
-        String owner=admin ? "" : " AND n.owner_user_id=?";
-        Object[] stateArgs=admin ? new Object[]{} : new Object[]{userId};
         Map<Long,NodeIpObservation.State> states=new HashMap<>();
-        jdbc.query("SELECT s.node_id,s.payload FROM node_ip_state s INNER JOIN node n ON n.id=s.node_id WHERE 1=1"+owner,
-                rs -> { states.put(rs.getLong(1),JSON.parseObject(rs.getString(2),NodeIpObservation.State.class)); },stateArgs);
+        jdbc.query("SELECT s.node_id,s.payload FROM node_ip_state s INNER JOIN node n ON n.id=s.node_id",
+                rs -> { states.put(rs.getLong(1),JSON.parseObject(rs.getString(2),NodeIpObservation.State.class)); });
         Map<Long,long[]> counts=new HashMap<>();
-        Object[] countArgs=admin ? new Object[]{dayStart(0),dayStart(6)} : new Object[]{dayStart(0),dayStart(6),userId};
         jdbc.query("SELECT e.node_id,SUM(CASE WHEN e.confirmed_at>=? THEN 1 ELSE 0 END),COUNT(*) "
-                        + "FROM node_ip_event e INNER JOIN node n ON n.id=e.node_id WHERE e.kind='CHANGE' AND e.confirmed_at>=?"+owner+" GROUP BY e.node_id",
-                rs -> { counts.put(rs.getLong(1),new long[]{rs.getLong(2),rs.getLong(3)}); },countArgs);
+                        + "FROM node_ip_event e INNER JOIN node n ON n.id=e.node_id WHERE e.kind='CHANGE' AND e.confirmed_at>=? GROUP BY e.node_id",
+                rs -> { counts.put(rs.getLong(1),new long[]{rs.getLong(2),rs.getLong(3)}); },dayStart(0),dayStart(6));
         List<Map<String,Object>> result=new ArrayList<>();
         for (Node node:manageable) result.add(summary(node,states.get(node.getId()),counts.getOrDefault(node.getId(),new long[2])));
+        activeUser(userId);
         return result;
     }
 

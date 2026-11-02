@@ -49,14 +49,23 @@ class NodeIpHistoryServiceTest {
         verifyNoInteractions(jdbc);
     }
 
-    @Test void authorizedOwnerAndAdminAreAcceptedButInvalidCursorIsRejected() {
+    @Test void nodeOwnerIsDeniedAndOnlyAdminCanValidateCursor() {
         when(users.selectById(7L)).thenReturn(user(7,1,1));
         when(nodes.selectById(2L)).thenReturn(node(2,7L));
-        assertThrows(IllegalArgumentException.class,()->service.history(7L,2L,0L));
+        assertThrows(SecurityException.class,()->service.history(7L,2L,0L));
+        assertThrows(SecurityException.class,()->service.history(7L,2L,null));
+        assertThrows(SecurityException.class,()->service.summaries(7L));
         when(users.selectById(7L)).thenReturn(user(7,0,1));
         when(nodes.selectById(2L)).thenReturn(node(2,null));
         assertThrows(IllegalArgumentException.class,()->service.history(7L,2L,-1L));
         verifyNoInteractions(jdbc);
+    }
+
+    @Test void currentDatabaseRoleRevocationBlocksPreviouslyAuthorizedAdmin() {
+        when(users.selectById(7L)).thenReturn(user(7,0,1),user(7,1,1));
+        assertEquals(0,service.activeUser(7L).getRoleId());
+        assertThrows(SecurityException.class,()->service.summaries(7L));
+        verifyNoInteractions(jdbc,nodes);
     }
 
     @Test void obsoleteObservationCannotOverwriteChangedNodeTarget() {
