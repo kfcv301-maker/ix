@@ -4,6 +4,7 @@ import com.admin.entity.Node;
 import com.admin.entity.User;
 import com.admin.mapper.NodeMapper;
 import com.admin.mapper.UserMapper;
+import com.admin.common.utils.WebSocketServer;
 import com.alibaba.fastjson2.JSON;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import jakarta.annotation.PreDestroy;
@@ -76,20 +77,37 @@ public class NodeIpHistoryService {
     }
 
     void record(Long nodeId, String target, NodeIpObservation.Result result, long now) {
+        record(nodeId,target,result,now,WebSocketServer.continuitySample(nodeId,now));
+    }
+
+    void record(Long nodeId, String target, NodeIpObservation.Result result, long now, NodeContinuityObservation.Sample sample) {
         transactions.executeWithoutResult(tx -> {
             if (jdbc.queryForList("SELECT id FROM node WHERE id=? FOR UPDATE",nodeId).isEmpty()) return;
             Node current=nodes.selectById(nodeId);
             if (current==null || !Objects.equals(target,NodeAddressResolver.target(current))) return;
             List<String> saved=jdbc.query("SELECT payload FROM node_ip_state WHERE node_id=?",(rs,n)->rs.getString(1),nodeId);
             var state=saved.isEmpty() ? new NodeIpObservation.State() : JSON.parseObject(saved.get(0),NodeIpObservation.State.class);
+            if (now<=state.getCheckedAt()) return;
+            if (state.getContinuity()==null) state.setContinuity(new NodeContinuityObservation.State());
+            var continuityEvent=NodeContinuityObservation.accept(state.getContinuity(),sample,now);
+            long previousResolvedAt=state.getResolvedAt();
+            long previousCandidateSince=state.getCandidateSince();
             var event=NodeIpObservation.accept(state,target,result,now);
+            if (state.getCandidateSince()>0 && state.getCandidateSince()!=previousCandidateSince)
+                state.setIpEvidenceStart(previousResolvedAt);
             jdbc.update("INSERT INTO node_ip_state (node_id,payload,checked_at) VALUES (?,?,?) "
                     + "ON DUPLICATE KEY UPDATE payload=VALUES(payload),checked_at=VALUES(checked_at)",
                     nodeId,JSON.toJSONString(state),state.getCheckedAt());
             if (event!=null) {
-                jdbc.update("INSERT INTO node_ip_event (node_id,kind,target,source,previous_addresses,addresses,observed_at,confirmed_at) VALUES (?,?,?,?,?,?,?,?)",
+                var evidence="CHANGE".equals(event.kind()) ? NodeContinuityObservation.classifyIp(state.getContinuity(),state.getIpEvidenceStart(),now) : null;
+                jdbc.update("INSERT INTO node_ip_event (node_id,kind,target,source,previous_addresses,addresses,observed_at,confirmed_at,context_json) VALUES (?,?,?,?,?,?,?,?,?)",
                         nodeId,event.kind(),target,result.source(),JSON.toJSONString(event.previous()),
-                        JSON.toJSONString(event.addresses()),event.observedAt(),event.confirmedAt());
+                        JSON.toJSONString(event.addresses()),event.observedAt(),event.confirmedAt(),evidence==null ? null : JSON.toJSONString(evidence));
+            }
+            if (continuityEvent!=null) {
+                jdbc.update("INSERT INTO node_ip_event (node_id,kind,target,source,previous_addresses,addresses,observed_at,confirmed_at,context_json) VALUES (?,?,?,?,?,?,?,?,?)",
+                        nodeId,continuityEvent.kind(),target,result.source(),"[]",JSON.toJSONString(state.getAddresses()),
+                        continuityEvent.observedAt(),continuityEvent.confirmedAt(),JSON.toJSONString(continuityEvent.evidence()));
             }
         });
     }
@@ -167,12 +185,14 @@ public class NodeIpHistoryService {
         for (int i=6;i>=0;i--) chart.add(Map.of("date",LocalDate.ofEpochDay(today-i).toString(),"count",daily.getOrDefault(today-i,0L)));
         long[] counts={daily.getOrDefault(today,0L),daily.values().stream().mapToLong(Long::longValue).sum()};
         Object[] args=beforeId==null ? new Object[]{nodeId} : new Object[]{nodeId,beforeId};
-        List<Map<String,Object>> events=jdbc.query("SELECT id,kind,target,source,previous_addresses,addresses,observed_at,confirmed_at FROM node_ip_event WHERE node_id=?"
+        List<Map<String,Object>> events=jdbc.query("SELECT id,kind,target,source,previous_addresses,addresses,observed_at,confirmed_at,context_json FROM node_ip_event WHERE node_id=?"
                 +(beforeId==null ? "" : " AND id<?")+" ORDER BY id DESC LIMIT 51",(rs,n)-> {
             Map<String,Object> e=new LinkedHashMap<>();
             e.put("id",rs.getLong("id")); e.put("kind",rs.getString("kind")); e.put("target",rs.getString("target")); e.put("source",rs.getString("source"));
             e.put("previousAddresses",JSON.parseArray(rs.getString("previous_addresses"),String.class));
             e.put("addresses",JSON.parseArray(rs.getString("addresses"),String.class));
+            String context=rs.getString("context_json");
+            e.put("evidence",context==null ? null : JSON.parseObject(context,NodeContinuityObservation.Evidence.class));
             e.put("observedAt",rs.getLong("observed_at")); e.put("confirmedAt",rs.getLong("confirmed_at")); return e;
         },args);
         boolean more=events.size()>50;
@@ -181,6 +201,18 @@ public class NodeIpHistoryService {
         response.put("summary",summary(node,state,counts)); response.put("days",chart); response.put("events",events);
         response.put("nextBeforeId",more ? events.get(events.size()-1).get("id") : null);
         response.put("retentionDays",90);
+        // Separate counts: an address change and a suspected replacement may be related, never sum them.
+        Map<String,Long> changes=new LinkedHashMap<>();
+        changes.put("ipOnlyLikely",0L); changes.put("machineSuspected",0L); changes.put("unknownIp",0L);
+        jdbc.query("SELECT kind,JSON_UNQUOTE(JSON_EXTRACT(context_json,'$.classification')) AS classification,COUNT(*) AS total "
+                + "FROM node_ip_event WHERE node_id=? AND confirmed_at>=? AND kind IN ('CHANGE','MACHINE_SUSPECTED') GROUP BY kind,classification",
+                rs -> {
+                    String key="MACHINE_SUSPECTED".equals(rs.getString(1)) ? "machineSuspected"
+                            : "IP_ONLY_LIKELY".equals(rs.getString(2)) ? "ipOnlyLikely"
+                            : "MACHINE_SUSPECTED".equals(rs.getString(2)) ? "ipNearMachine" : "unknownIp";
+                    changes.merge(key,rs.getLong(3),Long::sum);
+                },nodeId,dayStart(0));
+        response.put("todayClassification",changes);
         // Never return credentials, installation keys, or another tenant's infrastructure addresses.
         managedNode(activeUser(userId),nodeId);
         return response;

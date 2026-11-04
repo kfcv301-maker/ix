@@ -34,6 +34,24 @@ import static org.mockito.Mockito.*;
 class WebSocketInitialSnapshotTest {
     private WebSocketServer server;
 
+    @Test
+    void continuityReaderUsesCurrentReportsWithoutSendingAnything() throws Exception {
+        WebSocketSession agent=agent(1L,"continuity-agent");
+        report(agent,"{\"metrics_level\":\"detail\",\"bytes_received\":1,\"bytes_transmitted\":2,\"cpu_usage\":1,\"uptime\":123,\"cpu_cores\":2,\"memory_total\":4000000000}");
+        clearInvocations(agent);
+        var sample=WebSocketServer.continuitySample(1L,System.currentTimeMillis());
+        assertNotNull(sample);assertEquals(123,sample.uptime());assertEquals(2,sample.cores());
+        assertNull(WebSocketServer.continuitySample(1L,sample.receivedAt()+30_001));
+        assertNull(WebSocketServer.continuitySample(1L,sample.receivedAt()-1));
+        assertNull(WebSocketServer.continuitySample(999L,System.currentTimeMillis()));
+        verify(agent,never()).sendMessage(any());verify(agent,never()).close(any());
+        report(agent,"{\"metrics_level\":\"summary\",\"bytes_received\":10,\"bytes_transmitted\":2,\"cpu_usage\":1}");
+        // Missing current uptime must not inherit an older detail report's uptime.
+        assertEquals(0,WebSocketServer.continuitySample(1L,System.currentTimeMillis()).uptime());
+        agent.getAttributes().put("monitorRetired",true);
+        assertNull(WebSocketServer.continuitySample(1L,System.currentTimeMillis()));
+    }
+
     @BeforeEach
     void setUp() {
         clearState();

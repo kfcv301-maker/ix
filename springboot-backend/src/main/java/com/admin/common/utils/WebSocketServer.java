@@ -55,6 +55,24 @@ public class WebSocketServer extends TextWebSocketHandler {
 
     private record NodeMetricSnapshot(String sessionId, JSONObject summary, JSONObject detail,
                                       long receivedAt, long sequence) { }
+
+    private static final String observationEpoch = java.util.UUID.randomUUID().toString();
+
+    /** Read existing reports only. Never sends commands or changes Agent connection state. */
+    public static com.admin.common.service.NodeContinuityObservation.Sample continuitySample(Long nodeId, long now) {
+        NodeMetricSnapshot snapshot=latestNodeMetrics.get(nodeId);
+        WebSocketSession session=nodeSessions.get(nodeId);
+        if (snapshot==null || session==null || !session.isOpen() || !snapshot.sessionId().equals(session.getId())
+                || Boolean.TRUE.equals(session.getAttributes().get("monitorRetired"))
+                || now<snapshot.receivedAt() || now-snapshot.receivedAt()>MAX_SNAPSHOT_AGE_MS) return null;
+        try {
+            var sample=new com.admin.common.service.NodeContinuityObservation.Sample(observationEpoch,snapshot.sessionId(),
+                    snapshot.receivedAt(),snapshot.summary().getLongValue("uptime"),
+                    snapshot.detail().getIntValue("cpu_cores"),snapshot.detail().getLongValue("memory_total"),
+                    snapshot.detail().getLongValue("disk_total"));
+            return nodeSessions.get(nodeId)==session ? sample : null;
+        } catch (RuntimeException invalidMetric) { return null; }
+    }
     
     // 为每个session提供锁对象，防止并发发送消息
     private static final ConcurrentHashMap<String, Object> sessionLocks = new ConcurrentHashMap<>();

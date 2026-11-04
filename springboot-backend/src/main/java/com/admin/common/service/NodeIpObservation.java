@@ -21,6 +21,8 @@ public final class NodeIpObservation {
         private long resolvedAt;
         private long lastChangeAt;
         private String status = "pending";
+        private NodeContinuityObservation.State continuity = new NodeContinuityObservation.State();
+        private long ipEvidenceStart;
     }
 
     public record Result(String status, String source, List<String> addresses) {}

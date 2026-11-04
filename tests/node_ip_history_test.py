@@ -66,12 +66,23 @@ assert data['summary']['timezone']=='Asia/Shanghai'
 assert len(data['events'])==50 and data['nextBeforeId']
 second=api('node/ip-history',{'id':9301,'beforeId':data['nextBeforeId']},admin)['data']
 assert len(second['events'])>=3 and second['nextBeforeId'] is None
+assert data['todayClassification']=={'ipOnlyLikely':0,'machineSuspected':0,'unknownIp':2},data
+assert all(e.get('evidence') is None for e in data['events'])
 assert not ({e['id'] for e in data['events']} & {e['id'] for e in second['events']})
 for node in (9302,9303): assert api('node/ip-history',{'id':node},owner)['code']==403
 assert api('node/ip-history',{'id':9302},admin)['code']==0
 summaries=api('node/ip-history/summaries',{},admin)
 assert summaries['code']==0 and {9301,9302,9303}.issubset({s['nodeId'] for s in summaries['data']})
 assert 'secret' not in json.dumps(first).lower() and 'token' not in json.dumps(summaries).lower()
+# Add only in disposable CI: machine events never inflate the existing DNS counts.
+evidence=json.dumps(dict(classification='MACHINE_SUSPECTED',reason='BOOT_CHANGED',beforeUptime=10000,afterUptime=60))
+sql("INSERT INTO node_ip_event (node_id,kind,target,source,previous_addresses,addresses,observed_at,confirmed_at,context_json) "
+    +f"VALUES (9301,'MACHINE_SUSPECTED','192.0.2.10','configured','[]','[\"192.0.2.10\"]',{start},{start},'{evidence}')")
+new=api('node/ip-history',{'id':9301},admin)['data']
+assert new['summary']['todayChanges']==2 and new['summary']['weekChanges']==52
+assert new['todayClassification']['machineSuspected']==1
+assert new['events'][0]['evidence']['classification']=='MACHINE_SUSPECTED'
+assert 'session' not in json.dumps(new).lower() and 'epoch' not in json.dumps(new).lower()
 sql('UPDATE user SET status=0 WHERE id=9301')
 assert api('node/ip-history',{'id':9301},owner)['code']!=0
 assert api('node/ip-history/summaries',{},owner)['code']!=0

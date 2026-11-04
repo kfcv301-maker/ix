@@ -20,5 +20,8 @@ public class NodeIpHistoryMigration {
                 + "KEY idx_node_ip_event_page (node_id,id), "
                 + "KEY idx_node_ip_event_count (node_id,kind,confirmed_at), "
                 + "KEY idx_node_ip_event_retention (confirmed_at)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        Integer columns=jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() "
+                + "AND TABLE_NAME='node_ip_event' AND COLUMN_NAME='context_json'",Integer.class);
+        if (columns!=null && columns==0) jdbc.execute("ALTER TABLE node_ip_event ADD COLUMN context_json TEXT NULL");
     }
 }

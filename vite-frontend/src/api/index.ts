@@ -62,12 +62,14 @@ export interface NodeIpSummary {
   todayChanges: number; weekChanges: number; timezone: string;
 }
 export interface NodeIpEvent {
-  id: number; kind: 'BASELINE' | 'CHANGE' | 'TARGET_CHANGED'; target: string;
+  id: number; kind: 'BASELINE' | 'CHANGE' | 'TARGET_CHANGED' | 'MACHINE_SUSPECTED' | 'RECONNECTED' | 'OBSERVATION_GAP'; target: string;
   source: string; previousAddresses: string[]; addresses: string[]; observedAt: number; confirmedAt: number;
+  evidence?: { classification: string; reason: string; beforeUptime: number; afterUptime: number } | null;
 }
 export interface NodeIpHistory {
   summary: NodeIpSummary; days: { date: string; count: number }[];
   events: NodeIpEvent[]; nextBeforeId: number | null; retentionDays: number;
+  todayClassification?: { ipOnlyLikely: number; machineSuspected: number; unknownIp: number; ipNearMachine?: number };
 }
 export const getNodeIpSummaries = () => Network.post<NodeIpSummary[]>("/node/ip-history/summaries");
 export const getNodeIpHistory = (id: number, beforeId?: number) => Network.post<NodeIpHistory>("/node/ip-history", { id, beforeId });

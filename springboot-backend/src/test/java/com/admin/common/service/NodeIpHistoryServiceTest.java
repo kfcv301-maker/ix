@@ -32,6 +32,33 @@ class NodeIpHistoryServiceTest {
     private User user(long id, int role, int status) { User u=new User();u.setId(id);u.setRoleId(role);u.setStatus(status);return u; }
     private Node node(long id, Long owner) { Node n=new Node();n.setId(id);n.setOwnerUserId(owner);n.setServerIp("node.example");return n; }
 
+    @Test void persistedSamplingClassifiesIpAndMachineEventsWithoutTouchingNodes() {
+        java.util.concurrent.atomic.AtomicReference<String> saved=new java.util.concurrent.atomic.AtomicReference<>();
+        List<Object[]> events=new java.util.ArrayList<>();
+        when(tm.getTransaction(any())).thenReturn(mock(TransactionStatus.class));
+        when(jdbc.queryForList("SELECT id FROM node WHERE id=? FOR UPDATE",2L)).thenReturn(List.of(Map.of("id",2L)));
+        when(nodes.selectById(2L)).thenReturn(node(2,null));
+        when(jdbc.query(eq("SELECT payload FROM node_ip_state WHERE node_id=?"),any(RowMapper.class),eq(2L)))
+                .thenAnswer(call -> saved.get()==null ? List.of() : List.of(saved.get()));
+        when(jdbc.update(anyString(),any(Object[].class))).thenAnswer(call -> {
+            Object[] args=call.getArguments();
+            if (((String)args[0]).startsWith("INSERT INTO node_ip_state")) saved.set((String)args[2]);
+            else events.add(args);
+            return 1;
+        });
+        long base=1_800_000_000_000L;
+        for (int i=0;i<5;i++) {
+            var sample=new NodeContinuityObservation.Sample("epoch",i<3 ? "a" : "b",base+i*60000L,i<3 ? 10000+i*60 : 5+(i-3)*60,2,0,0);
+            service.record(2L,"node.example",new NodeIpObservation.Result("ok","dns",List.of(i==0 ? "192.0.2.1" : "192.0.2.2")),base+i*60000L,sample);
+        }
+        assertEquals(3,events.size());
+        assertEquals("BASELINE",events.get(0)[2]);assertEquals("CHANGE",events.get(1)[2]);assertEquals("MACHINE_SUSPECTED",events.get(2)[2]);
+        assertEquals("IP_ONLY_LIKELY",JSON.parseObject((String)events.get(1)[9]).getString("classification"));
+        assertEquals("BOOT_CHANGED",JSON.parseObject((String)events.get(2)[9]).getString("reason"));
+        assertFalse(((String)events.get(2)[9]).contains("session"));
+        verify(nodes,times(5)).selectById(2L);verifyNoMoreInteractions(nodes);
+    }
+
     @Test void tunnelAccessNeverGrantsInfrastructureHistoryAccess() {
         when(users.selectById(7L)).thenReturn(user(7,1,1));
         when(nodes.selectById(2L)).thenReturn(node(2,null));
