@@ -563,8 +563,7 @@ EOF
   ok "动态 TCP 内存保护已启用（每分钟采样；不重启 Agent、不主动断开转发）"
 }
 
-# Generated helper below must match node-runtime/port_reservation_guard.py.
-configure_port_reservations() {
+ensure_port_guard_dependencies() {
   if ! command -v python3 >/dev/null; then
     if command -v apt-get >/dev/null; then
       apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3
@@ -574,6 +573,10 @@ configure_port_reservations() {
       fail "端口预留防护需要 python3"
     fi
   fi
+}
+
+# Generated helper below must match node-runtime/port_reservation_guard.py.
+configure_port_reservations() {
   cat > "$INSTALL_DIR/port-reservation-guard.py" <<'PORT_GUARD_PY'
 #!/usr/bin/env python3
 """Reserve forwarding ports without restarting, closing or reconfiguring GOST.
@@ -771,7 +774,7 @@ def install(root):
         subprocess.run(['systemctl', 'enable', '--now', 'flux-panel-port-guard.timer'], check=True, capture_output=True)
     elif Path('/sbin/openrc-run').exists():
         unit = Path('/etc/init.d/flux-panel-port-guard')
-        atomic(unit, '#!/sbin/openrc-run\ncommand="/usr/bin/python3"\ncommand_args="' + str(destination) + ' --root ' + str(root) + ' --watch"\nsupervisor="supervise-daemon"\nrespawn_delay=5\ndepend() { after net; before flux-panel-agent; }\n', 0o755)
+        atomic(unit, '#!/sbin/openrc-run\ncommand="/usr/bin/python3"\ncommand_args="' + str(destination) + ' --root ' + str(root) + ' --watch"\nsupervisor="supervise-daemon"\nrespawn_delay=5\nstart_pre() { /usr/bin/python3 ' + str(destination) + ' --root ' + str(root) + ' --local-sync || true; }\ndepend() { after net; before flux-panel-agent; }\n', 0o755)
         subprocess.run(['rc-update', 'add', 'flux-panel-port-guard', 'default'], check=True, capture_output=True)
         subprocess.run(['rc-service', 'flux-panel-port-guard', 'start'], check=True, capture_output=True)
     else:
@@ -846,7 +849,7 @@ download_agent() {
 
 legacy_json_string() {
   local value="$1"
-  # Legacy installs do not require Python. Quote JSON data without allowing
+  # Quote legacy CLI values as JSON data without allowing
   # quotes or backslashes in a node key to change or corrupt the document.
   [[ ! "$value" =~ [[:cntrl:]] ]] || fail "节点配置不能包含控制字符。"
   value="${value//\\/\\\\}"
@@ -906,6 +909,28 @@ EOF
     rm -f -- "$temporary_config"
     fail "写入节点配置失败，原配置已保留。"
   fi
+  # Old command syntax must preserve cached DDNS/runtime settings and extension
+  # fields on reinstall. Never carry DDNS authority to a different node identity.
+  if ! python3 - "$current_config" "$temporary_config" "$DDNS_MODE" <<'PY'
+import json,sys
+old_path,new_path,ddns_mode=sys.argv[1:]
+try:
+    with open(old_path) as source: old=json.load(source)
+except FileNotFoundError:
+    old={}
+with open(new_path) as source: new=json.load(source)
+def origin(value):
+    value=value.rstrip('/')
+    return value if '://' in value else 'http://'+value
+if old.get('secret')!=new['secret'] or origin(old.get('addr',''))!=origin(new['addr']) or ddns_mode in ('enabled','disabled'):
+    old.pop('runtime',None)
+old.update(new)
+with open(new_path,'w') as target: json.dump(old,target,indent=2)
+PY
+  then
+    rm -f -- "$temporary_config"
+    fail "读取原节点配置失败，原配置已保留。"
+  fi
   if ! chmod 600 "$temporary_config" || ! mv -fT -- "$temporary_config" "$current_config"; then
     rm -f -- "$temporary_config"
     fail "保存节点配置失败，原配置已保留。"
@@ -926,7 +951,7 @@ from urllib.parse import urlsplit
 try:
     path=sys.argv[1]
     st=os.stat(path,follow_symlinks=False)
-    if not stat.S_ISREG(st.st_mode) or st.st_uid!=os.geteuid() or st.st_mode & 0o077 or st.st_size>65536:raise ValueError()
+    if not stat.S_ISREG(st.st_mode) or st.st_uid!=os.geteuid() or st.st_mode & 0o077 or st.st_size>1048576:raise ValueError()
     d=json.load(open(path))
     if d.get('schemaVersion')!=1:raise ValueError()
     panel=d['panelUrl'];secret=d['secret'];u=urlsplit(panel)
@@ -1305,6 +1330,8 @@ install_agent() {
     fail "指定 TCP 调优上下限时还需要 --tcp-auto-tune。"
   fi
 
+  # Resolve dependencies before replacing any installed binary/configuration.
+  ensure_port_guard_dependencies
   apply_tcp_tuning
   mkdir -p "$INSTALL_DIR"
   download_agent

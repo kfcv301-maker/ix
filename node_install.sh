@@ -273,7 +273,7 @@ def install(root):
         subprocess.run(['systemctl', 'enable', '--now', 'flux-panel-port-guard.timer'], check=True, capture_output=True)
     elif Path('/sbin/openrc-run').exists():
         unit = Path('/etc/init.d/flux-panel-port-guard')
-        atomic(unit, '#!/sbin/openrc-run\ncommand="/usr/bin/python3"\ncommand_args="' + str(destination) + ' --root ' + str(root) + ' --watch"\nsupervisor="supervise-daemon"\nrespawn_delay=5\ndepend() { after net; before flux-panel-agent; }\n', 0o755)
+        atomic(unit, '#!/sbin/openrc-run\ncommand="/usr/bin/python3"\ncommand_args="' + str(destination) + ' --root ' + str(root) + ' --watch"\nsupervisor="supervise-daemon"\nrespawn_delay=5\nstart_pre() { /usr/bin/python3 ' + str(destination) + ' --root ' + str(root) + ' --local-sync || true; }\ndepend() { after net; before flux-panel-agent; }\n', 0o755)
         subprocess.run(['rc-update', 'add', 'flux-panel-port-guard', 'default'], check=True, capture_output=True)
         subprocess.run(['rc-service', 'flux-panel-port-guard', 'start'], check=True, capture_output=True)
     else:
@@ -318,4 +318,13 @@ PORT_GUARD_PY
   python3 "$WORK/port-reservation-guard.py" --install --bootstrap-config "$WORK/config.json"
 }
 configure_port_reservations
+# Older immutable release installers accept small private config documents.
+# The guard has already persisted port claims; do not pass them to the Agent.
+python3 - "$WORK/config.json" <<'PY'
+import json,sys
+path=sys.argv[1]
+with open(path) as source: data=json.load(source)
+data.pop('reservedPorts',None)
+with open(path,'w') as target: json.dump(data,target)
+PY
 AGENT_RELEASE="$RELEASE" AGENT_RELEASE_BASE="$BASE" bash "$WORK/install.sh" --config-file "$WORK/config.json"
