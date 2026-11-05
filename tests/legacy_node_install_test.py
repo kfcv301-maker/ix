@@ -125,6 +125,31 @@ Path(args[args.index('-o')+1]).write_bytes(data)
         code,config,_,_,started,_=self.exercise(['--panel','https://old-panel.example.invalid','--token','fixture-node-secret'],corrupt=True)
         self.assertNotEqual(code,0);self.assertIsNone(config);self.assertFalse(started)
 
+    def test_reinstall_preserves_runtime_ddns_and_extensions_for_same_identity(self):
+        old={'addr':'http://old-panel.example.invalid:6365/','secret':'fixture-node-secret',
+             'http':0,'tls':1,'socks':0,'runtime':{'revision':'cached','ddns':{'enabled':True,'recordName':'fixture.example.invalid'}},
+             'extension':{'keep':True}}
+        code,config,_,_,started,output=self.exercise(['-a','old-panel.example.invalid:6365','-s','fixture-node-secret'],old_config=old)
+        self.assertEqual(code,0,output);self.assertTrue(started)
+        self.assertEqual(config['runtime'],old['runtime'])
+        self.assertEqual(config['extension'],old['extension'])
+        self.assertEqual([config[k] for k in ('http','tls','socks')],[0,1,0])
+
+    def test_changing_identity_does_not_reuse_old_dns_authority(self):
+        old={'addr':'https://old-panel.example.invalid','secret':'different-node-key',
+             'runtime':{'ddns':{'enabled':True,'recordName':'previous-node.example.invalid'}}}
+        code,config,_,_,started,output=self.exercise(['-a','https://old-panel.example.invalid','-s','fixture-node-secret'],old_config=old)
+        self.assertEqual(code,0,output);self.assertTrue(started)
+        self.assertNotIn('runtime',config)
+
+    def test_explicit_legacy_ddns_change_is_not_overridden_by_old_runtime(self):
+        old={'addr':'https://old-panel.example.invalid','secret':'fixture-node-secret',
+             'runtime':{'ddns':{'enabled':True,'recordName':'old.example.invalid'}}}
+        code,config,options,_,started,output=self.exercise(['-a','https://old-panel.example.invalid','-s','fixture-node-secret',
+            '--disable-ddns'],old_config=old)
+        self.assertEqual(code,0,output);self.assertTrue(started)
+        self.assertNotIn('runtime',config);self.assertEqual(options[0],'disabled')
+
     def test_legacy_secret_is_serialized_as_data_not_json_syntax(self):
         secret='fixture-node-secret"\\suffix'
         code,config,_,_,started,output=self.exercise(['-a','https://old-panel.example.invalid','-s',secret])

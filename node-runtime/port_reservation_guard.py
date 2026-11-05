@@ -194,7 +194,7 @@ def install(root):
         subprocess.run(['systemctl', 'enable', '--now', 'flux-panel-port-guard.timer'], check=True, capture_output=True)
     elif Path('/sbin/openrc-run').exists():
         unit = Path('/etc/init.d/flux-panel-port-guard')
-        atomic(unit, '#!/sbin/openrc-run\ncommand="/usr/bin/python3"\ncommand_args="' + str(destination) + ' --root ' + str(root) + ' --watch"\nsupervisor="supervise-daemon"\nrespawn_delay=5\ndepend() { after net; before flux-panel-agent; }\n', 0o755)
+        atomic(unit, '#!/sbin/openrc-run\ncommand="/usr/bin/python3"\ncommand_args="' + str(destination) + ' --root ' + str(root) + ' --watch"\nsupervisor="supervise-daemon"\nrespawn_delay=5\nstart_pre() { /usr/bin/python3 ' + str(destination) + ' --root ' + str(root) + ' --local-sync || true; }\ndepend() { after net; before flux-panel-agent; }\n', 0o755)
         subprocess.run(['rc-update', 'add', 'flux-panel-port-guard', 'default'], check=True, capture_output=True)
         subprocess.run(['rc-service', 'flux-panel-port-guard', 'start'], check=True, capture_output=True)
     else:
