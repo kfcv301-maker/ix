@@ -344,6 +344,7 @@ jobs:
           python3 tests/node_bootstrap_contract_test.py
           python3 tests/legacy_node_install_test.py
           python3 tests/ddns_runtime_sidecar_test.py
+            python3 tests/port_reservation_guard_test.py
           bash tests/node_runtime_install_test.sh
           python3 tests/realtime_node_access_test.py
           bash tests/install_tuning_test.sh

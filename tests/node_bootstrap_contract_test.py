@@ -23,6 +23,8 @@ python3 - "$2" <<'PY'
 import json,os,sys
 from pathlib import Path
 data=json.load(open(sys.argv[1]))
+assert 'reservedPorts' not in data
+assert os.path.getsize(sys.argv[1]) <= 65536
 Path(os.environ['BOOTSTRAP_RESULT']).write_text(json.dumps({'secret':data['secret'],'record':data['ddns']['recordName'],'panel':data['panelUrl'],'release':os.environ['AGENT_RELEASE'],'base':os.environ['AGENT_RELEASE_BASE']}))
 PY
 '''
@@ -30,13 +32,14 @@ PY
 
 @unittest.skipUnless(BASH, 'bash required')
 class NodeBootstrapTest(unittest.TestCase):
-    def exercise(self, *, record='one.example.invalid', reject=False, corrupt=False, panel='https://panel.example.invalid'):
+    def exercise(self, *, record='one.example.invalid', reject=False, corrupt=False, panel='https://panel.example.invalid', reserved_ports=None):
         with tempfile.TemporaryDirectory(prefix='node-bootstrap-') as folder:
             work = Path(folder)
             # Root is required by the real entry. The isolated copy only runs
             # a mock installer, so permit the unprivileged CI test account.
             entry = (ROOT / 'node_install.sh').read_text(encoding='utf-8')
             entry = entry.replace('[[ "$EUID" -eq 0 ]] || fail "请以 root 执行"', ':')
+            entry = entry.replace('\nconfigure_port_reservations\n', '\n# Host mutation is tested separately in an isolated network namespace.\n')
             (work / 'entry.sh').write_text(entry, encoding='utf-8', newline='\n')
             bindir = work / 'bin'; bindir.mkdir()
             bashenv = work / 'bash-env.sh'
@@ -46,6 +49,7 @@ class NodeBootstrapTest(unittest.TestCase):
             (bindir / 'python3').chmod(0o755)
             response = {'schemaVersion': 1, 'nodeId': 27, 'secret': 'private-node-secret', 'agentRelease': '1.4.15',
                         'ddns': {'enabled': True, 'provider': 'cloudflare', 'apiToken': 'private-cloudflare-token', 'recordName': record, 'intervalSeconds': 60}}
+            if reserved_ports is not None: response['reservedPorts'] = reserved_ports
             (work / 'response.json').write_text(json.dumps(response))
             (work / 'release.sh').write_text(MOCK_RELEASE, newline='\n')
             digest = '0' * 64 if corrupt else hashlib.sha256((work / 'release.sh').read_bytes()).hexdigest()
@@ -93,6 +97,11 @@ shutil.copyfile(source,out)
     def test_revocation_does_not_install_from_cached_or_default_config(self):
         code, result, requests, _ = self.exercise(reject=True)
         self.assertNotEqual(code, 0); self.assertIsNone(result); self.assertEqual(len(requests), 1)
+
+    def test_large_port_claims_do_not_break_immutable_legacy_release_installer(self):
+        code,result,_,log=self.exercise(reserved_ports=list(range(10000,22000)))
+        self.assertEqual(code,0,log)
+        self.assertEqual(result['release'],'1.4.15')
 
     def test_tampered_release_script_never_executes(self):
         code, result, _, _ = self.exercise(corrupt=True)

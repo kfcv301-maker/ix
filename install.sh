@@ -563,6 +563,265 @@ EOF
   ok "动态 TCP 内存保护已启用（每分钟采样；不重启 Agent、不主动断开转发）"
 }
 
+ensure_port_guard_dependencies() {
+  if ! command -v python3 >/dev/null; then
+    if command -v apt-get >/dev/null; then
+      apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3
+    elif command -v apk >/dev/null; then
+      apk add --no-cache python3
+    else
+      fail "端口预留防护需要 python3"
+    fi
+  fi
+}
+
+# Generated helper below must match node-runtime/port_reservation_guard.py.
+configure_port_reservations() {
+  cat > "$INSTALL_DIR/port-reservation-guard.py" <<'PORT_GUARD_PY'
+#!/usr/bin/env python3
+"""Reserve forwarding ports without restarting, closing or reconfiguring GOST.
+
+System reservations are additive: never remove another application's reservation.
+The panel supplies paused/pending claims too; local configuration/cache is used
+when the panel is older or unavailable. No provider credentials are persisted.
+"""
+import argparse
+import fcntl
+import json
+import os
+from pathlib import Path
+import re
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.parse
+import urllib.request
+
+MAX_BYTES = 8 * 1024 * 1024
+MIN_EPHEMERAL_FREE = 4096
+
+
+def read_json(path):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(fd, 'rb') as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+            raise ValueError('Untrusted configuration permissions')
+        data = stream.read(MAX_BYTES + 1)
+        if len(data) > MAX_BYTES:
+            raise ValueError('Configuration too large')
+        return json.loads(data)
+
+
+def atomic(path, data, mode=0o600):
+    if path.is_symlink():
+        raise ValueError('Symlink refused')
+    fd, name = tempfile.mkstemp(prefix='.port-guard-', dir=path.parent)
+    try:
+        os.fchmod(fd, mode)
+        with os.fdopen(fd, 'w') as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(name, path)
+    finally:
+        if os.path.exists(name):
+            os.unlink(name)
+
+
+def port_list(value):
+    if not isinstance(value, list) or len(value) > 65535:
+        raise ValueError('Invalid port list')
+    if any(type(p) is not int or not 1 <= p <= 65535 for p in value):
+        raise ValueError('Invalid port')
+    return set(value)
+
+
+def parse_ranges(value):
+    ports = set()
+    for entry in value.strip().split(','):
+        if not entry:
+            continue
+        if not re.fullmatch(r'\d+(?:-\d+)?', entry):
+            raise ValueError('Invalid reserved range')
+        values = list(map(int, entry.split('-')))
+        lo, hi = values[0], values[-1]
+        if not 1 <= lo <= hi <= 65535:
+            raise ValueError('Invalid reserved range')
+        ports.update(range(lo, hi + 1))
+    return ports
+
+
+def format_ranges(ports):
+    groups = []
+    for p in sorted(ports):
+        if groups and groups[-1][1] + 1 == p:
+            groups[-1][1] = p
+        else:
+            groups.append([p, p])
+    return ','.join(str(lo) if lo == hi else f'{lo}-{hi}' for lo, hi in groups)
+
+
+def merge_reservations(current, wanted, low, high):
+    merged = current | wanted
+    remaining = sum(p not in merged for p in range(low, high + 1))
+    # Do not refuse an idempotent run on a host with a pre-existing small pool.
+    if merged != current and remaining < min(MIN_EPHEMERAL_FREE, (high - low + 1) // 2):
+        raise ValueError('Insufficient outbound port capacity')
+    return merged
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+def fetch_ports(identity):
+    origin, secret = identity.get('addr', identity.get('panelUrl')), identity.get('secret')
+    if not isinstance(origin, str) or not isinstance(secret, str) or not secret or any(c in secret for c in '\r\n\x00'):
+        raise ValueError('Invalid node identity')
+    # Match legacy Agent handling of a bare panel host:port.
+    if '://' not in origin:
+        origin = 'http://' + origin
+    u = urllib.parse.urlsplit(origin)
+    if u.scheme not in ('http', 'https') or not u.hostname or u.username or u.password or u.query or u.fragment or u.path not in ('', '/'):
+        raise ValueError('Invalid panel origin')
+    request = urllib.request.Request(origin.rstrip('/') + '/api/v1/node/port-reservations',
+        headers={'Authorization': 'Bearer ' + secret, 'Accept': 'application/json',
+                 'User-Agent': 'Lunaris-Port-Guard/1.0'})
+    with urllib.request.build_opener(NoRedirect()).open(request, timeout=8) as response:
+        raw = response.read(MAX_BYTES + 1)
+        if len(raw) > MAX_BYTES:
+            raise ValueError('Response too large')
+        data = json.loads(raw)
+    if data.get('schemaVersion') != 1:
+        raise ValueError('Unsupported port schema')
+    return port_list(data.get('reservedPorts'))
+
+
+def local_ports(document):
+    ports = set()
+    for service in document.get('services', []):
+        # Paused listeners need protection just as much as active listeners.
+        address = service.get('addr', '')
+        if not isinstance(address, str):
+            raise ValueError('Invalid listener address')
+        suffix = address.rsplit(':', 1)[-1]
+        if suffix.isdecimal() and 1 <= int(suffix) <= 65535:
+            ports.add(int(suffix))
+    return ports
+
+
+def sync(root, online=True, bootstrap=None, proc=Path('/proc/sys/net/ipv4')):
+    root = Path(root)
+    lockfd = os.open(root / 'port-guard.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(lockfd, 'w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        wanted = set()
+        cache = root / 'port-guard-cache.json'
+        for path, extract in ((cache, lambda d: port_list(d['reservedPorts'])),
+                              (root / 'gost.json', local_ports)):
+            if path.exists():
+                wanted |= extract(read_json(path))
+        panel_synced = False
+        if bootstrap:
+            wanted |= port_list(read_json(bootstrap).get('reservedPorts', []))
+        if online and (root / 'config.json').exists():
+            try:
+                wanted |= fetch_ports(read_json(root / 'config.json'))
+                panel_synced = True
+            except Exception:
+                # Never print request exceptions: they may contain auth material.
+                # Keep protecting saved/local ports on old or unavailable panels.
+                pass
+        current = parse_ranges((proc / 'ip_local_reserved_ports').read_text())
+        low, high = map(int, (proc / 'ip_local_port_range').read_text().split())
+        if not 1 <= low <= high <= 65535:
+            raise ValueError('Invalid ephemeral range')
+        merged = merge_reservations(current, wanted, low, high)
+        # Persist desired ports before changing the kernel, so boot preflight can
+        # recover after power loss. Preserve every prior system reservation too.
+        atomic(cache, json.dumps({'schemaVersion': 1, 'reservedPorts': sorted(merged)}))
+        if merged != current:
+            (proc / 'ip_local_reserved_ports').write_text(format_ranges(merged) + '\n')
+        actual = parse_ranges((proc / 'ip_local_reserved_ports').read_text())
+        if not merged <= actual:
+            raise ValueError('Kernel reservation verification failed')
+        result = {'protectedPorts': len(wanted), 'systemReservedPorts': len(actual),
+                  'panelSynced': panel_synced, 'ephemeralRange': [low, high],
+                  'updatedAt': int(time.time()), 'agentRestarted': False}
+        atomic(root / 'port-guard-status.json', json.dumps(result))
+        return result
+
+
+def install(root):
+    root = Path(root).resolve()
+    if not re.fullmatch(r'/[A-Za-z0-9_./-]+', str(root)):
+        raise ValueError('Unsupported installation directory')
+    destination = root / 'port-reservation-guard.py'
+    atomic(destination, Path(__file__).read_text(), 0o700)
+    if Path('/run/systemd/system').is_dir():
+        units = Path('/etc/systemd/system')
+        atomic(units / 'flux-panel-port-guard.service', '[Unit]\nDescription=Reserve forwarding ports\nAfter=network-online.target\n\n[Service]\nType=oneshot\nUMask=0077\nExecStart=/usr/bin/python3 ' + str(destination) + ' --root ' + str(root) + ' --sync\nTimeoutStartSec=30\n', 0o644)
+        atomic(units / 'flux-panel-port-guard.timer', '[Unit]\nDescription=Refresh forwarding port reservations\n\n[Timer]\nOnBootSec=10s\nOnUnitInactiveSec=10s\nAccuracySec=1s\nUnit=flux-panel-port-guard.service\n\n[Install]\nWantedBy=timers.target\n', 0o644)
+        dropin = units / 'flux-panel-agent.service.d'
+        dropin.mkdir(exist_ok=True)
+        # Adding a drop-in and reloading systemd never restarts the running Agent.
+        atomic(dropin / '20-port-reservation.conf', '[Service]\nExecStartPre=-/usr/bin/python3 ' + str(destination) + ' --root ' + str(root) + ' --local-sync\n', 0o644)
+        subprocess.run(['systemctl', 'daemon-reload'], check=True, capture_output=True)
+        subprocess.run(['systemctl', 'enable', '--now', 'flux-panel-port-guard.timer'], check=True, capture_output=True)
+    elif Path('/sbin/openrc-run').exists():
+        unit = Path('/etc/init.d/flux-panel-port-guard')
+        atomic(unit, '#!/sbin/openrc-run\ncommand="/usr/bin/python3"\ncommand_args="' + str(destination) + ' --root ' + str(root) + ' --watch"\nsupervisor="supervise-daemon"\nrespawn_delay=5\nstart_pre() { /usr/bin/python3 ' + str(destination) + ' --root ' + str(root) + ' --local-sync || true; }\ndepend() { after net; before flux-panel-agent; }\n', 0o755)
+        subprocess.run(['rc-update', 'add', 'flux-panel-port-guard', 'default'], check=True, capture_output=True)
+        subprocess.run(['rc-service', 'flux-panel-port-guard', 'start'], check=True, capture_output=True)
+    else:
+        raise ValueError('Unsupported init system')
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--root', default='/etc/flux-panel-agent')
+    parser.add_argument('--bootstrap-config')
+    mode = parser.add_mutually_exclusive_group(required=True)
+    for arg in ('install', 'sync', 'local-sync', 'watch'):
+        mode.add_argument('--' + arg, action='store_true')
+    args = parser.parse_args()
+    if os.geteuid() != 0:
+        raise ValueError('Root required')
+    root = Path(args.root)
+    if root.is_symlink():
+        raise ValueError('Symlink installation directory refused')
+    root.mkdir(parents=True, exist_ok=True)
+    if args.watch:
+        while True:
+            try:
+                sync(root)
+            except Exception:
+                print('Port reservation refresh failed; existing reservations retained', file=sys.stderr, flush=True)
+            time.sleep(10)
+    else:
+        result = sync(root, not args.local_sync, args.bootstrap_config)
+        if args.install:
+            install(root)
+        print(json.dumps(result))
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except Exception as error:
+        print('Port reservation guard failed: ' + type(error).__name__, file=sys.stderr)
+        sys.exit(1)
+PORT_GUARD_PY
+  chmod 700 "$INSTALL_DIR/port-reservation-guard.py"
+  local args=(--root "$INSTALL_DIR" --install)
+  [[ -z "$NODE_CONFIG_FILE" ]] || args+=(--bootstrap-config "$NODE_CONFIG_FILE")
+  python3 "$INSTALL_DIR/port-reservation-guard.py" "${args[@]}"
+}
+
 download_agent() {
   local arch url checksum_url temp_bin temp_checksum expected actual
   arch="$(architecture)"
@@ -590,7 +849,7 @@ download_agent() {
 
 legacy_json_string() {
   local value="$1"
-  # Legacy installs do not require Python. Quote JSON data without allowing
+  # Quote legacy CLI values as JSON data without allowing
   # quotes or backslashes in a node key to change or corrupt the document.
   [[ ! "$value" =~ [[:cntrl:]] ]] || fail "节点配置不能包含控制字符。"
   value="${value//\\/\\\\}"
@@ -650,6 +909,28 @@ EOF
     rm -f -- "$temporary_config"
     fail "写入节点配置失败，原配置已保留。"
   fi
+  # Old command syntax must preserve cached DDNS/runtime settings and extension
+  # fields on reinstall. Never carry DDNS authority to a different node identity.
+  if ! python3 - "$current_config" "$temporary_config" "$DDNS_MODE" <<'PY'
+import json,sys
+old_path,new_path,ddns_mode=sys.argv[1:]
+try:
+    with open(old_path) as source: old=json.load(source)
+except FileNotFoundError:
+    old={}
+with open(new_path) as source: new=json.load(source)
+def origin(value):
+    value=value.rstrip('/')
+    return value if '://' in value else 'http://'+value
+if old.get('secret')!=new['secret'] or origin(old.get('addr',''))!=origin(new['addr']) or ddns_mode in ('enabled','disabled'):
+    old.pop('runtime',None)
+old.update(new)
+with open(new_path,'w') as target: json.dump(old,target,indent=2)
+PY
+  then
+    rm -f -- "$temporary_config"
+    fail "读取原节点配置失败，原配置已保留。"
+  fi
   if ! chmod 600 "$temporary_config" || ! mv -fT -- "$temporary_config" "$current_config"; then
     rm -f -- "$temporary_config"
     fail "保存节点配置失败，原配置已保留。"
@@ -670,7 +951,7 @@ from urllib.parse import urlsplit
 try:
     path=sys.argv[1]
     st=os.stat(path,follow_symlinks=False)
-    if not stat.S_ISREG(st.st_mode) or st.st_uid!=os.geteuid() or st.st_mode & 0o077 or st.st_size>65536:raise ValueError()
+    if not stat.S_ISREG(st.st_mode) or st.st_uid!=os.geteuid() or st.st_mode & 0o077 or st.st_size>1048576:raise ValueError()
     d=json.load(open(path))
     if d.get('schemaVersion')!=1:raise ValueError()
     panel=d['panelUrl'];secret=d['secret'];u=urlsplit(panel)
@@ -1049,10 +1330,13 @@ install_agent() {
     fail "指定 TCP 调优上下限时还需要 --tcp-auto-tune。"
   fi
 
+  # Resolve dependencies before replacing any installed binary/configuration.
+  ensure_port_guard_dependencies
   apply_tcp_tuning
   mkdir -p "$INSTALL_DIR"
   download_agent
   write_config
+  configure_port_reservations
   configure_tcp_tuning_guard
   write_service
   # Complete legacy DDNS setup before the new Agent starts and takes ownership.
@@ -1083,11 +1367,18 @@ uninstall_agent() {
   [[ "$confirm" =~ ^[Yy]$ ]] || { info "已取消"; return; }
   stop_agent_service
   if [[ "$INIT_SYSTEM" == "systemd" ]]; then
+    systemctl disable --now flux-panel-port-guard.timer 2>/dev/null || true
+    systemctl stop flux-panel-port-guard.service 2>/dev/null || true
+    rm -f /etc/systemd/system/flux-panel-port-guard.service /etc/systemd/system/flux-panel-port-guard.timer \
+      /etc/systemd/system/flux-panel-agent.service.d/20-port-reservation.conf
     systemctl disable --now "$DDNS_TIMER_NAME" 2>/dev/null || true
     systemctl disable --now "${TCP_GUARD_SERVICE_NAME}.timer" 2>/dev/null || true
     rm -f "/etc/systemd/system/${DDNS_SERVICE_NAME}.service" "/etc/systemd/system/${DDNS_TIMER_NAME}" \
       "/etc/systemd/system/${TCP_GUARD_SERVICE_NAME}.service" "/etc/systemd/system/${TCP_GUARD_SERVICE_NAME}.timer"
   else
+    rc-service flux-panel-port-guard stop 2>/dev/null || true
+    rc-update del flux-panel-port-guard default 2>/dev/null || true
+    rm -f /etc/init.d/flux-panel-port-guard
     rc-service "$TCP_GUARD_SERVICE_NAME" stop 2>/dev/null || true
     rc-update del "$TCP_GUARD_SERVICE_NAME" default 2>/dev/null || true
     rm -f "/etc/init.d/$TCP_GUARD_SERVICE_NAME"

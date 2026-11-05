@@ -14,6 +14,23 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ForwardServiceImplTest {
+    @Test void automaticPortsAvoidEphemeralRangeAndStillFindLastSafePort() {
+        ForwardServiceImpl service = new ForwardServiceImpl();
+        for (int i = 0; i < 200; i++) {
+            Integer port = ReflectionTestUtils.invokeMethod(service, "chooseRandomAvailablePort",
+                    1000, 65535, java.util.Set.of(1000, 32767));
+            assertNotNull(port); assertTrue((port > 1000 && port < 32767) || port >= 61000);
+        }
+        assertEquals(Integer.valueOf(32766), ReflectionTestUtils.invokeMethod(service,
+                "chooseRandomAvailablePort", 32765, 60999, java.util.Set.of(32765, 32767)));
+        assertNull(ReflectionTestUtils.invokeMethod(service, "chooseRandomAvailablePort",
+                32768, 60999, java.util.Set.of()));
+        assertNull(ReflectionTestUtils.invokeMethod(service, "chooseRandomAvailablePort",
+                32767, 60999, java.util.Set.of(32767)));
+        Integer highOnly = ReflectionTestUtils.invokeMethod(service, "chooseRandomAvailablePort",
+                37769, 65535, java.util.Set.of());
+        assertNotNull(highOnly); assertTrue(highOnly >= 61000);
+    }
     @Test void changingTunnelStopsBeforeCreationWhenOldNodesCannotBeResolved() {
         ForwardServiceImpl service = new ForwardServiceImpl();
         TunnelService tunnels = mock(TunnelService.class);

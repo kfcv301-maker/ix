@@ -21,6 +21,9 @@ class NodeAgentConfigServiceTest {
         UserMapper users = mock(UserMapper.class);
         ReflectionTestUtils.setField(service, "nodeMapper", nodes);
         ReflectionTestUtils.setField(service, "userMapper", users);
+        ForwardPortReservationService ports = mock(ForwardPortReservationService.class);
+        when(ports.reservedPorts(7L, null)).thenReturn(java.util.Set.of(54348, 37722));
+        ReflectionTestUtils.setField(service, "portReservations", ports);
         ReflectionTestUtils.setField(service, "jwtSecret", "panel-key");
         ReflectionTestUtils.setField(service, "agentInstallRelease", "1.4.15");
         node = new Node(); node.setId(7L); node.setSecret("node-Secret"); node.setOwnerUserId(2L);
@@ -30,6 +33,15 @@ class NodeAgentConfigServiceTest {
         when(users.selectById(2L)).thenReturn(owner);
     }
     @AfterEach void close() { service.close(); }
+    @Test void portConfigurationIsNodeScopedAndIndependentOfBrokenDdns() {
+        node.setDdnsEnabled(1); node.setDdnsToken("corrupt");
+        assertNull(service.authenticatedPortReservations("node-secret"));
+        var config = service.authenticatedPortReservations("node-Secret");
+        assertEquals(java.util.List.of(37722, 54348), config.getList("reservedPorts", Integer.class));
+        assertEquals(java.util.Set.of("schemaVersion", "reservedPorts"), config.keySet());
+        owner.setStatus(0);
+        assertNull(service.authenticatedPortReservations("node-Secret"));
+    }
     @Test void credentialScopesCannotBeInterchangedOrUsedAcrossNodes() {
         String key = NodeAgentConfigService.installKey(node);
         assertNull(service.installationConfig(7L, node.getSecret()));

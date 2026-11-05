@@ -193,7 +193,10 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
                 forward.setEntryAddressMode(address.mode());
                 forward.setInterfaceName(null);
                 // Agent errors can embed private node addresses or credentials.
-                if (forward.getSyncError() != null) forward.setSyncError("节点同步尚未完成，请联系管理员检查");
+                if (forward.getSyncError() != null) forward.setSyncError(
+                        forward.getSyncError().toLowerCase(java.util.Locale.ROOT).contains("address already in use")
+                                ? "监听端口暂时被占用，系统正在自动重试，无需重复添加规则"
+                                : "节点同步尚未完成，请联系管理员检查");
             }
         }
 
@@ -951,7 +954,7 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
             // 用户未指定端口时自动分配
             inPort = allocateInPort(tunnel, excludeForwardId);
             if (inPort == null) {
-                return PortAllocation.error("隧道入口端口已满，无法分配新端口");
+                return PortAllocation.error("隧道入口没有可自动分配的安全端口，请管理员检查 1–32767 或 61000–65535 范围内的可用端口");
             }
         }
 
@@ -959,7 +962,7 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
         if (tunnel.getType() == TUNNEL_TYPE_TUNNEL_FORWARD) {
             outPort = allocateOutPort(tunnel, excludeForwardId);
             if (outPort == null) {
-                return PortAllocation.error("隧道出口端口已满，无法分配新端口");
+                return PortAllocation.error("隧道出口没有可自动分配的安全端口，请管理员检查 1–32767 或 61000–65535 范围内的可用端口");
             }
         }
 
@@ -1496,18 +1499,25 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
      * “full” result.
      */
     private Integer chooseRandomAvailablePort(int rangeStart, int rangeEnd, Set<Integer> usedPorts) {
+        // Linux normally allocates outbound ports in 32768..60999. Keep new
+        // automatic forwarding ports outside that range, including on legacy Agents.
+        // Explicit/existing ports are preserved and protected by the node guard.
+        rangeStart = Math.max(1, rangeStart);
+        rangeEnd = Math.min(65535, rangeEnd);
+        final int availableStart = rangeStart, availableEnd = rangeEnd;
         long rangeSize = (long) rangeEnd - rangeStart + 1;
+        long safeRangeSize = rangeSize - Math.max(0, Math.min(rangeEnd, 60999) - Math.max(rangeStart, 32768) + 1);
         long usedInRange = usedPorts.stream()
-                .filter(port -> port >= rangeStart && port <= rangeEnd)
+                .filter(port -> port >= availableStart && port <= availableEnd && automaticPortSafe(port))
                 .count();
-        if (rangeSize <= 0 || usedInRange >= rangeSize) {
+        if (safeRangeSize <= 0 || usedInRange >= safeRangeSize) {
             return null;
         }
 
         int probes = (int) Math.min(rangeSize, 32);
         for (int attempt = 0; attempt < probes; attempt++) {
             int candidate = ThreadLocalRandom.current().nextInt(rangeStart, rangeEnd + 1);
-            if (!usedPorts.contains(candidate)) {
+            if (automaticPortSafe(candidate) && !usedPorts.contains(candidate)) {
                 return candidate;
             }
         }
@@ -1515,11 +1525,15 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
         int offset = ThreadLocalRandom.current().nextInt((int) rangeSize);
         for (int step = 0; step < rangeSize; step++) {
             int candidate = rangeStart + (int) ((offset + step) % rangeSize);
-            if (!usedPorts.contains(candidate)) {
+            if (automaticPortSafe(candidate) && !usedPorts.contains(candidate)) {
                 return candidate;
             }
         }
         return null;
+    }
+
+    private boolean automaticPortSafe(int port) {
+        return port < 32768 || port > 60999;
     }
 
     /**
