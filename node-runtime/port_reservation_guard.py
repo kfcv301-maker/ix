@@ -102,11 +102,15 @@ def fetch_ports(identity):
     origin, secret = identity.get('addr', identity.get('panelUrl')), identity.get('secret')
     if not isinstance(origin, str) or not isinstance(secret, str) or not secret or any(c in secret for c in '\r\n\x00'):
         raise ValueError('Invalid node identity')
+    # Match legacy Agent handling of a bare panel host:port.
+    if '://' not in origin:
+        origin = 'http://' + origin
     u = urllib.parse.urlsplit(origin)
     if u.scheme not in ('http', 'https') or not u.hostname or u.username or u.password or u.query or u.fragment or u.path not in ('', '/'):
         raise ValueError('Invalid panel origin')
     request = urllib.request.Request(origin.rstrip('/') + '/api/v1/node/port-reservations',
-        headers={'Authorization': 'Bearer ' + secret, 'Accept': 'application/json'})
+        headers={'Authorization': 'Bearer ' + secret, 'Accept': 'application/json',
+                 'User-Agent': 'Lunaris-Port-Guard/1.0'})
     with urllib.request.build_opener(NoRedirect()).open(request, timeout=8) as response:
         raw = response.read(MAX_BYTES + 1)
         if len(raw) > MAX_BYTES:

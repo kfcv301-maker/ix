@@ -45,6 +45,19 @@ class PortGuardTest(unittest.TestCase):
                     {'addr': '0.0.0.0:38228'}, {'addr': ':37722'}]
         self.assertEqual({54348, 38228, 37722}, guard.local_ports({'services': services}))
 
+    def test_panel_requests_identify_helper_and_support_legacy_bare_origin(self):
+        response = Mock()
+        response.read.return_value = b'{"schemaVersion":1,"reservedPorts":[38228]}'
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+        opener = Mock(); opener.open.return_value = response
+        with patch.object(guard.urllib.request, 'build_opener', return_value=opener):
+            self.assertEqual({38228}, guard.fetch_ports({'addr': 'panel.invalid:6365', 'secret': 'synthetic'}))
+        request = opener.open.call_args.args[0]
+        self.assertEqual('http://panel.invalid:6365/api/v1/node/port-reservations', request.full_url)
+        self.assertEqual('Lunaris-Port-Guard/1.0', request.get_header('User-agent'))
+        self.assertEqual('Bearer synthetic', request.get_header('Authorization'))
+
     def run_sync(self, fetch):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
