@@ -37,6 +37,7 @@ class NodeBootstrapTest(unittest.TestCase):
             # a mock installer, so permit the unprivileged CI test account.
             entry = (ROOT / 'node_install.sh').read_text(encoding='utf-8')
             entry = entry.replace('[[ "$EUID" -eq 0 ]] || fail "请以 root 执行"', ':')
+            entry = entry.replace('\nconfigure_port_reservations\n', '\n# Host mutation is tested separately in an isolated network namespace.\n')
             (work / 'entry.sh').write_text(entry, encoding='utf-8', newline='\n')
             bindir = work / 'bin'; bindir.mkdir()
             bashenv = work / 'bash-env.sh'

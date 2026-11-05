@@ -44,6 +44,13 @@ public class NodeAgentConfigController {
         return header != null && header.startsWith("Bearer ") ? header.substring(7) : null;
     }
 
+    @GetMapping(value = "/api/v1/node/port-reservations", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<?> ports(HttpServletRequest request) {
+        if (!"GET".equals(request.getMethod())) return response(HttpStatus.METHOD_NOT_ALLOWED, null);
+        JSONObject payload = configs.authenticatedPortReservations(bearer(request));
+        return response(payload == null ? HttpStatus.UNAUTHORIZED : HttpStatus.OK, payload);
+    }
+
     private ResponseEntity<?> response(HttpStatus status, Object payload) {
         return ResponseEntity.status(status).contentType(MediaType.APPLICATION_JSON)
                 .header(HttpHeaders.CACHE_CONTROL, "no-store, private, max-age=0")

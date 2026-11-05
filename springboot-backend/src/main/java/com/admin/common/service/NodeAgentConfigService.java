@@ -34,6 +34,7 @@ import java.util.concurrent.TimeUnit;
 public class NodeAgentConfigService {
     @Resource private NodeMapper nodeMapper;
     @Resource private UserMapper userMapper;
+    @Resource private ForwardPortReservationService portReservations;
     @Value("${jwt-secret}") private String jwtSecret;
     @Value("${agent.install.release:1.4.16}") private String agentInstallRelease;
 
@@ -71,16 +72,30 @@ public class NodeAgentConfigService {
         result.put("nodeId", node.getId());
         result.put("secret", node.getSecret());
         result.put("agentRelease", release);
+        result.put("reservedPorts", portReservations.reservedPorts(node.getId(), null).stream().sorted().toList());
         return result;
     }
 
     public JSONObject authenticatedRuntimeConfig(String secret) {
+        Node node = authenticatedNode(secret);
+        return node == null ? null : runtimeConfig(node);
+    }
+
+    /** Port-only endpoint also works when DDNS provider configuration is unavailable. */
+    public JSONObject authenticatedPortReservations(String secret) {
+        Node node = authenticatedNode(secret);
+        if (node == null) return null;
+        return JSONObject.of("schemaVersion", 1, "reservedPorts",
+                portReservations.reservedPorts(node.getId(), null).stream().sorted().toList());
+    }
+
+    private Node authenticatedNode(String secret) {
         if (StrUtil.isBlank(secret) || secret.length() > 256 || secret.contains("\n") || secret.contains("\r")) return null;
         Node node = nodeMapper.selectOne(new QueryWrapper<Node>().eq("secret", secret).last("LIMIT 1"));
         // MySQL collations may be case-insensitive; secrets never are.
         if (!authorizedNode(node) || !MessageDigest.isEqual(node.getSecret().getBytes(StandardCharsets.UTF_8),
                 secret.getBytes(StandardCharsets.UTF_8))) return null;
-        return runtimeConfig(node);
+        return node;
     }
 
     private boolean authorizedNode(Node node) {

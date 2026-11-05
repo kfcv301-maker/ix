@@ -33,4 +33,14 @@ class NodeAgentConfigControllerTest {
         mvc.perform(head("/api/v1/node/install-config/4")).andExpect(status().isMethodNotAllowed());
         verifyNoInteractions(service);
     }
+    @Test void portClaimsRequireNodeAuthorizationAndAreNeverCached() throws Exception {
+        when(service.authenticatedPortReservations("node-key")).thenReturn(
+                JSONObject.of("schemaVersion", 1, "reservedPorts", java.util.List.of(38228)));
+        mvc.perform(get("/api/v1/node/port-reservations").header("Authorization", "Bearer node-key"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.reservedPorts[0]").value(38228))
+                .andExpect(header().string("Cache-Control", "no-store, private, max-age=0"));
+        mvc.perform(get("/api/v1/node/port-reservations").param("token", "node-key"))
+                .andExpect(status().isUnauthorized());
+        mvc.perform(head("/api/v1/node/port-reservations")).andExpect(status().isMethodNotAllowed());
+    }
 }

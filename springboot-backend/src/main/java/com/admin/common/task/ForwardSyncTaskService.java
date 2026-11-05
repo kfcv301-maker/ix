@@ -358,11 +358,11 @@ public class ForwardSyncTaskService {
                 }
                 return;
             }
-            forwardSyncTaskMapper.markRetry(task.getId(), failure, nextRetryTime(task, now), now);
+            forwardSyncTaskMapper.markRetry(task.getId(), failure, nextRetryTime(task, now, failure), now);
         } catch (Exception exception) {
             String error = safeMessage(exception.getMessage(), exception.getClass().getSimpleName());
             log.warn("转发节点同步任务 {} 失败: {}", taskId, error);
-            forwardSyncTaskMapper.markRetry(taskId, error, nextRetryTime(task, now), now);
+            forwardSyncTaskMapper.markRetry(taskId, error, nextRetryTime(task, now, error), now);
         }
     }
 
@@ -751,6 +751,14 @@ public class ForwardSyncTaskService {
         int exponent = Math.min(6, Math.max(0, attempts - 1));
         long delay = Math.min(5 * 60 * 1000L, 5_000L * (1L << exponent));
         return now + delay;
+    }
+
+    private long nextRetryTime(ForwardSyncTask task, long now, String failure) {
+        long next = nextRetryTime(task, now);
+        // A transient outbound socket can disappear at any time. Keep the
+        // durable operation, but do not leave a freed port idle for five minutes.
+        return failure != null && failure.toLowerCase(java.util.Locale.ROOT).contains("address already in use")
+                ? Math.min(next, now + 30_000L) : next;
     }
 
     private boolean isSuccess(GostDto result) {

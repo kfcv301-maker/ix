@@ -20,6 +20,7 @@ require_root() { :; }
 detect_init_system() { INIT_SYSTEM=systemd; }
 apply_tcp_tuning() { :; }
 configure_tcp_tuning_guard() { :; }
+configure_port_reservations() { :; }
 write_service() { :; }
 configure_ddns() {
   printf '%s\n' "$DDNS_MODE" "$CF_RECORD_NAME" "$TCP_PROFILE_OVERRIDE" "$TCP_AUTO_TUNE" > "$INSTALL_DIR/options.txt"

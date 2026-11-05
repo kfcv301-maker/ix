@@ -21,6 +21,17 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ForwardSyncTaskServiceTest {
+    @Test void bindConflictsRetryPromptlyWithoutAcceleratingOtherFailures() {
+        ForwardSyncTaskService service = new ForwardSyncTaskService();
+        ForwardSyncTask task = new ForwardSyncTask(); task.setAttempts(12);
+        assertEquals(Long.valueOf(31_000L), ReflectionTestUtils.invokeMethod(service,
+                "nextRetryTime", task, 1_000L, "listen tcp: address already in use"));
+        assertEquals(Long.valueOf(301_000L), ReflectionTestUtils.invokeMethod(service,
+                "nextRetryTime", task, 1_000L, "node offline"));
+        task.setAttempts(0);
+        assertEquals(Long.valueOf(6_000L), ReflectionTestUtils.invokeMethod(service,
+                "nextRetryTime", task, 1_000L, "address already in use"));
+    }
     @Test void resumingOnALegacyAgentStopsBeforeLegacyCleanupOrResume() {
         ForwardSyncTaskService service = new ForwardSyncTaskService();
         UserTunnelAliasService aliases = mock(UserTunnelAliasService.class);
