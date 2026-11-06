@@ -26,14 +26,15 @@ class NodeIpObservationTest {
         assertNull(NodeIpObservation.accept(state,"node.example",ok("192.0.2.1","2001:db8::1","192.0.2.1"),160_000));
     }
 
-    @Test void dualStackChangeIsOneEventAfterTwoIndependentSamples() {
+    @Test void changeWaitsForSettlementWindowAndTwoIndependentSamples() {
         var state=baseline();
         assertNull(NodeIpObservation.accept(state,"node.example",ok("192.0.2.2","2001:db8::2"),160_000));
         assertEquals("confirming",state.getStatus());
         assertEquals(List.of("192.0.2.1"),state.getAddresses());
-        var event=NodeIpObservation.accept(state,"node.example",ok("2001:db8::2","192.0.2.2"),220_000);
-        assertEquals("CHANGE",event.kind()); assertEquals(160_000,event.observedAt()); assertEquals(220_000,event.confirmedAt());
-        assertNull(NodeIpObservation.accept(state,"node.example",ok("192.0.2.2","2001:db8::2"),280_000));
+        assertNull(NodeIpObservation.accept(state,"node.example",ok("2001:db8::2","192.0.2.2"),220_000));
+        var event=NodeIpObservation.accept(state,"node.example",ok("2001:db8::2","192.0.2.2"),280_000);
+        assertEquals("CHANGE",event.kind()); assertEquals(160_000,event.observedAt()); assertEquals(280_000,event.confirmedAt());
+        assertNull(NodeIpObservation.accept(state,"node.example",ok("192.0.2.2","2001:db8::2"),340_000));
     }
 
     @Test void transientErrorsClearCandidatesAndNeverEraseKnownAddresses() {
@@ -43,7 +44,7 @@ class NodeIpObservationTest {
             assertNull(NodeIpObservation.accept(state,"node.example",new NodeIpObservation.Result(failure,"dns",List.of()),220_000));
             assertEquals(List.of("192.0.2.1"),state.getAddresses());
             assertNull(NodeIpObservation.accept(state,"node.example",ok("192.0.2.2"),280_000));
-            assertEquals("CHANGE",NodeIpObservation.accept(state,"node.example",ok("192.0.2.2"),340_000).kind());
+            assertEquals("CHANGE",NodeIpObservation.accept(state,"node.example",ok("192.0.2.2"),400_000).kind());
         }
     }
 
@@ -63,13 +64,14 @@ class NodeIpObservationTest {
         assertEquals(0,state.getLastChangeAt());
     }
 
-    @Test void missingFamilyIsConfirmedButEmptyAnswerIsNeverAChange() {
+    @Test void missingFamilyNeverErasesCompleteBaselineOrCreatesChange() {
         var state=new NodeIpObservation.State();
         NodeIpObservation.accept(state,"node.example",ok("192.0.2.1","2001:db8::1"),100_000);
         NodeIpObservation.accept(state,"node.example",ok("192.0.2.1"),160_000);
-        assertEquals("CHANGE",NodeIpObservation.accept(state,"node.example",ok("192.0.2.1"),220_000).kind());
-        assertNull(NodeIpObservation.accept(state,"node.example",ok(),280_000));
-        assertEquals("no_records",state.getStatus()); assertEquals(List.of("192.0.2.1"),state.getAddresses());
+        assertNull(NodeIpObservation.accept(state,"node.example",ok("192.0.2.1"),400_000));
+        assertEquals("incomplete_families",state.getStatus());
+        assertNull(NodeIpObservation.accept(state,"node.example",ok(),460_000));
+        assertEquals("no_records",state.getStatus()); assertEquals(List.of("192.0.2.1","2001:db8::1"),state.getAddresses());
     }
 
     @Test void resolverRejectsUrlsAndNormalizesLiteralAddressesWithoutDns() {

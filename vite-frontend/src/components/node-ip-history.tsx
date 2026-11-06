@@ -13,7 +13,8 @@ const formatTime = (value: number, short = false) => value ? new Intl.DateTimeFo
 
 const states: Record<string, { label: string; tone: string; detail: string }> = {
   ok: { label: '解析正常', tone: 'good', detail: '最近一次观测成功' },
-  confirming: { label: '变化待确认', tone: 'amber', detail: '等待下一次观测确认，不提前计数' },
+  confirming: { label: '变化待确认', tone: 'amber', detail: '等待约两分钟并核对连续观测，合并 IPv4 / IPv6 先后变化' },
+  incomplete_families: { label: '双栈地址待确认', tone: 'amber', detail: 'IPv4 或 IPv6 暂时缺失，保留上次完整地址，不计次数' },
   pending: { label: '等待首次观测', tone: 'neutral', detail: '后台正在建立地址基线' },
   stale: { label: '数据待刷新', tone: 'amber', detail: '近期没有新的观测结果' },
   no_records: { label: '暂无解析记录', tone: 'amber', detail: '未获得 A / AAAA 记录，保留上次地址' },
@@ -27,6 +28,11 @@ const judgments: Record<string, string> = {
   CONTINUOUS: '运行时间连续', UNKNOWN: '无法判定机器变化',
 };
 const reasons: Record<string, string> = {
+  V4_ONLY_CHANGED: 'IPv4 已变化，IPv6 保持不变；按当前机器的地址分配规律，判断为仅换 IPv4。',
+  DUAL_STACK_CHANGED: 'IPv4、IPv6 在同一确认窗口内均发生变化，按当前机器的地址分配规律判断为疑似换机。',
+  DUAL_STACK_CHANGED_RESTART: 'IPv4、IPv6 均发生变化，附近还观察到运行时长重置或机器配置变化，进一步支持换机判断。',
+  INCOMPLETE_ADDRESS_FAMILIES: '缺少完整的 IPv4 / IPv6 前后对照，暂不能区分换机与换 IP。',
+  V6_ONLY_CHANGED: '仅 IPv6 变化，不符合当前的换 IPv4 或换机规律，暂不归类。',
   UPTIME_CONTINUOUS: '前后上报的系统运行时间连续，未发现换机证据。',
   BOOT_CHANGED: '重连前后的推算启动时间发生变化，可能换机，也可能系统重启。',
   CONFIG_CHANGED: '重连后连续两次观察到硬件配置明显不同，可能换机或调整了配置。',
@@ -36,7 +42,7 @@ const reasons: Record<string, string> = {
   INCONSISTENT_UPTIME: '运行时间上报不连续，证据不足，暂不判断换机。',
   RECONNECT_PENDING: '新的连接尚在等待第二次有效观测。',
   FIRST_SAMPLE: '刚开始记录机器运行时间，尚无足够前后对照。',
-  NO_METRICS: '缺少有效的运行时间上报，无法区分换机和换 IP。',
+  NO_METRICS: '缺少有效的运行时间上报，仅能依据完整的双栈地址变化判断。',
   NO_BASELINE: '没有可用于比较的历史基线。',
 };
 
@@ -134,11 +140,11 @@ export function NodeIpHistoryModal({ node, onClose }: { node: { id: number; name
           <div className="ip-classification-card">
             <div className="ip-section-heading"><h3>今日变化分类</h3><span className="ip-muted">机器判断为推测</span></div>
             <div className="ip-classification-grid">
-              <div><span className="ip-classification-icon is-blue"><ConsoleIcon name="globe" size={19}/></span><strong>{data.todayClassification?.ipOnlyLikely ?? '—'}</strong><span>倾向仅换 IP</span></div>
-              <div><span className="ip-classification-icon is-amber"><ConsoleIcon name="activity" size={19}/></span><strong>{data.todayClassification?.machineSuspected ?? '—'}</strong><span>疑似换机或重启</span></div>
+              <div><span className="ip-classification-icon is-blue"><ConsoleIcon name="globe" size={19}/></span><strong>{data.todayClassification?.ipOnlyLikely ?? '—'}</strong><span>仅换 IP</span></div>
+              <div><span className="ip-classification-icon is-amber"><ConsoleIcon name="activity" size={19}/></span><strong>{data.todayClassification?.machineSuspected ?? '—'}</strong><span>疑似换机</span></div>
               <div><span className="ip-classification-icon"><ConsoleIcon name="eye" size={19}/></span><strong>{data.todayClassification?.unknownIp ?? '—'}</strong><span>IP 已变 · 原因未明</span></div>
             </div>
-            <p className="ip-observation-note">IP 次数按地址变化计算；疑似换机单独计次，两者可能同时发生，不应相加。{data.todayClassification?.ipNearMachine ? `今日另有 ${data.todayClassification.ipNearMachine} 次 IP 变化伴随疑似换机或重启。` : ''}</p>
+            <p className="ip-observation-note">每个确认窗口只计一次地址变化；双栈一起变化归为疑似换机，重连不重复计数。旧记录保留原判定。{data.todayClassification?.ipNearMachine ? `今日另有 ${data.todayClassification.ipNearMachine} 次 IP 变化伴随疑似换机或重启。` : ''}</p>
           </div>
           <div className="ip-current-card">
             <div className="ip-section-heading"><div><span className="ip-eyebrow">当前地址</span><h3>{summary.target || '尚未配置地址'}</h3></div><span className={`ip-state is-${state.tone}`} title={state.detail}><i/>{summary.source === 'configured' && summary.status === 'ok' ? '配置地址已记录' : state.label}</span></div>
@@ -154,8 +160,8 @@ export function NodeIpHistoryModal({ node, onClose }: { node: { id: number; name
           <div className="ip-history-section"><div className="ip-section-heading"><h3>变化时间线 <span className="ip-count-badge">{data.events.length}{data.nextBeforeId ? '+' : ''}</span></h3><span className="ip-muted">最新记录在前</span></div>
             {!data.events.length ? <div className="ip-timeline-empty"><ConsoleIcon name="globe" size={30}/><strong>记录将从首次观测开始</strong><p>没有历史数据时不会补造记录，也不会把首次发现计作换 IP。</p></div> : <ol className="ip-timeline">
               {data.events.map(event => <li className={event.kind === 'CHANGE' ? 'is-change' : 'is-baseline'} key={event.id}>
-                <span className="ip-timeline-dot"/><div className="ip-event-heading"><div><strong>{event.kind === 'CHANGE' ? '检测到 IP 变化' : event.kind === 'TARGET_CHANGED' ? '监测地址已调整' : event.kind === 'MACHINE_SUSPECTED' ? '疑似换机或重启' : event.kind === 'RECONNECTED' ? '节点重新连接' : event.kind === 'OBSERVATION_GAP' ? '观测中断后恢复' : '首次记录地址'}</strong><span className="ip-event-tag">{event.kind === 'CHANGE' ? '地址已确认' : event.kind === 'MACHINE_SUSPECTED' ? '推测 · 未核实' : '不计 IP 次数'}</span></div><time dateTime={new Date(event.confirmedAt).toISOString()}>{formatTime(event.confirmedAt)}</time></div>
-                {(event.evidence || event.kind === 'CHANGE') && <div className={`ip-evidence ${event.evidence?.classification === 'MACHINE_SUSPECTED' ? 'is-amber' : ''}`}><strong>{judgments[event.evidence?.classification || 'UNKNOWN'] || judgments.UNKNOWN}</strong><p>{event.evidence ? reasons[event.evidence.reason] || '证据不足，暂不判断换机。' : '早期记录未采集运行时间，无法追溯判断机器是否变化。'}</p></div>}
+                <span className="ip-timeline-dot"/><div className="ip-event-heading"><div><strong>{event.kind === 'CHANGE' ? (event.evidence?.reason === 'V4_ONLY_CHANGED' ? '仅换 IPv4' : event.evidence?.reason.startsWith('DUAL_STACK_CHANGED') ? '疑似换机' : '检测到 IP 变化') : event.kind === 'TARGET_CHANGED' ? '监测地址已调整' : event.kind === 'MACHINE_SUSPECTED' ? '疑似换机或重启' : event.kind === 'RECONNECTED' ? '节点重新连接' : event.kind === 'OBSERVATION_GAP' ? '观测中断后恢复' : '首次记录地址'}</strong><span className="ip-event-tag">{event.kind === 'CHANGE' ? '地址已确认' : event.kind === 'MACHINE_SUSPECTED' ? '推测 · 未核实' : '不计 IP 次数'}</span></div><time dateTime={new Date(event.confirmedAt).toISOString()}>{formatTime(event.confirmedAt)}</time></div>
+                {(event.evidence || event.kind === 'CHANGE') && <div className={`ip-evidence ${event.evidence?.classification === 'MACHINE_SUSPECTED' ? 'is-amber' : ''}`}><strong>{event.evidence?.reason === 'V4_ONLY_CHANGED' ? '仅换 IPv4' : event.evidence?.reason.startsWith('DUAL_STACK_CHANGED') ? '疑似换机' : judgments[event.evidence?.classification || 'UNKNOWN'] || judgments.UNKNOWN}</strong><p>{event.evidence ? reasons[event.evidence.reason] || '证据不足，暂不判断换机。' : '早期记录未采集运行时间，无法追溯判断机器是否变化。'}</p></div>}
                 <p className="ip-event-target">{event.target}</p>
                 {event.kind === 'CHANGE' && <div className="ip-event-address"><span className="ip-event-side">变化前</span><AddressPills addresses={event.previousAddresses}/></div>}
                 <div className="ip-event-address"><span className="ip-event-side">{event.kind === 'CHANGE' ? '变化后' : '地址'}</span><AddressPills addresses={event.addresses}/></div>
@@ -164,8 +170,8 @@ export function NodeIpHistoryModal({ node, onClose }: { node: { id: number; name
             </ol>}
             {data.nextBeforeId && <div className="ip-load-more"><Button variant="flat" size="sm" isLoading={moreLoading} isDisabled={loading} onPress={() => node && void load(node.id, data.nextBeforeId!)}>查看更早记录</Button></div>}
           </div>
-          <div className="ip-history-explainer"><ConsoleIcon name="eye" size={17}/><p>约每分钟观测一次域名解析，连续两次检测到相同的新地址后计为一次变化。解析失败不计次数；检测时间不等于实际换 IP 时间，采样之间的变化可能未被记录。解析正常仅表示 DNS 查询成功，不能证明 DDNS 写入成功或转发连通。</p></div>
-          <div className="ip-history-explainer"><ConsoleIcon name="activity" size={17}/><p>机器判断只读取已有上报，不操作节点。重连后需要两次有效观测；运行时间或配置变化只能提示疑似换机，也可能是重启或配置调整。同配置、启动时间接近的换机可能无法识别。面板重启、数据缺失与旧版节点缺少指标时不强行判断；历史记录不补造。</p></div>
+          <div className="ip-history-explainer"><ConsoleIcon name="eye" size={17}/><p>约每分钟观测一次域名解析，变化后等待约两分钟，且新地址至少连续两次一致，再合并计次。缺失原有 IPv4 / IPv6 或解析失败时不计次数；检测时间不等于实际换 IP 时间，采样之间的变化可能未被记录。解析正常仅表示 DNS 查询成功，不能证明 DDNS 写入成功或转发连通。</p></div>
+          <div className="ip-history-explainer"><ConsoleIcon name="activity" size={17}/><p>按当前机器的地址分配规律：仅 IPv4 变化、IPv6 不变，记为仅换 IP；IPv4、IPv6 一起变化，记为疑似换机。运行时长与重连只补充证据，不单独增加换机次数。缺少完整双栈对照时待确认；超过确认窗口才到达的地址变化可能分开记录。只读取现有数据，不操作节点，旧历史不重新推断。</p></div>
         </> : !loading && !error && <div className="ip-timeline-empty">暂时没有可显示的记录</div>}
       </ModalBody>
       <ModalFooter className="ip-history-footer"><span>记录由面板持续保存 · 关闭页面后继续观测</span><Button variant="flat" size="sm" isLoading={loading} isDisabled={moreLoading} startContent={!loading && <ConsoleIcon name="refresh" size={15}/>} onPress={() => node && void load(node.id)}>刷新记录</Button><Button color="primary" size="sm" onPress={onClose}>完成</Button></ModalFooter>

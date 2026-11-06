@@ -91,20 +91,27 @@ public class NodeIpHistoryService {
             if (state.getContinuity()==null) state.setContinuity(new NodeContinuityObservation.State());
             var continuityEvent=NodeContinuityObservation.accept(state.getContinuity(),sample,now);
             long previousResolvedAt=state.getResolvedAt();
-            long previousCandidateSince=state.getCandidateSince();
+            long previousChangeStartedAt=state.getChangeStartedAt();
             var event=NodeIpObservation.accept(state,target,result,now);
-            if (state.getCandidateSince()>0 && state.getCandidateSince()!=previousCandidateSince)
+            if (state.getChangeStartedAt()>0 && state.getChangeStartedAt()!=previousChangeStartedAt)
                 state.setIpEvidenceStart(previousResolvedAt);
             jdbc.update("INSERT INTO node_ip_state (node_id,payload,checked_at) VALUES (?,?,?) "
                     + "ON DUPLICATE KEY UPDATE payload=VALUES(payload),checked_at=VALUES(checked_at)",
                     nodeId,JSON.toJSONString(state),state.getCheckedAt());
             if (event!=null) {
-                var evidence="CHANGE".equals(event.kind()) ? NodeContinuityObservation.classifyIp(state.getContinuity(),state.getIpEvidenceStart(),now) : null;
+                var evidence="CHANGE".equals(event.kind()) ? NodeAddressChangeClassification.classify(event,state.getContinuity(),state.getIpEvidenceStart(),now) : null;
                 jdbc.update("INSERT INTO node_ip_event (node_id,kind,target,source,previous_addresses,addresses,observed_at,confirmed_at,context_json) VALUES (?,?,?,?,?,?,?,?,?)",
                         nodeId,event.kind(),target,result.source(),JSON.toJSONString(event.previous()),
                         JSON.toJSONString(event.addresses()),event.observedAt(),event.confirmedAt(),evidence==null ? null : JSON.toJSONString(evidence));
             }
             if (continuityEvent!=null) {
+                // Runtime resets are supporting evidence, not another machine change.
+                // The confirmed address episode owns the replacement count.
+                if ("MACHINE_SUSPECTED".equals(continuityEvent.kind())) {
+                    var oldEvidence=continuityEvent.evidence();
+                    continuityEvent=new NodeContinuityObservation.Event("RECONNECTED",continuityEvent.observedAt(),now,
+                            new NodeContinuityObservation.Evidence("UNKNOWN",oldEvidence.reason(),oldEvidence.beforeUptime(),oldEvidence.afterUptime()));
+                }
                 jdbc.update("INSERT INTO node_ip_event (node_id,kind,target,source,previous_addresses,addresses,observed_at,confirmed_at,context_json) VALUES (?,?,?,?,?,?,?,?,?)",
                         nodeId,continuityEvent.kind(),target,result.source(),"[]",JSON.toJSONString(state.getAddresses()),
                         continuityEvent.observedAt(),continuityEvent.confirmedAt(),JSON.toJSONString(continuityEvent.evidence()));
@@ -204,13 +211,12 @@ public class NodeIpHistoryService {
         // Separate counts: an address change and a suspected replacement may be related, never sum them.
         Map<String,Long> changes=new LinkedHashMap<>();
         changes.put("ipOnlyLikely",0L); changes.put("machineSuspected",0L); changes.put("unknownIp",0L);
-        jdbc.query("SELECT kind,JSON_UNQUOTE(JSON_EXTRACT(context_json,'$.classification')) AS classification,COUNT(*) AS total "
-                + "FROM node_ip_event WHERE node_id=? AND confirmed_at>=? AND kind IN ('CHANGE','MACHINE_SUSPECTED') GROUP BY kind,classification",
+        jdbc.query("SELECT kind,JSON_UNQUOTE(JSON_EXTRACT(context_json,'$.classification')) AS classification,"
+                + "JSON_UNQUOTE(JSON_EXTRACT(context_json,'$.reason')) AS reason,COUNT(*) AS total "
+                + "FROM node_ip_event WHERE node_id=? AND confirmed_at>=? AND kind IN ('CHANGE','MACHINE_SUSPECTED') GROUP BY kind,classification,reason",
                 rs -> {
-                    String key="MACHINE_SUSPECTED".equals(rs.getString(1)) ? "machineSuspected"
-                            : "IP_ONLY_LIKELY".equals(rs.getString(2)) ? "ipOnlyLikely"
-                            : "MACHINE_SUSPECTED".equals(rs.getString(2)) ? "ipNearMachine" : "unknownIp";
-                    changes.merge(key,rs.getLong(3),Long::sum);
+                    String key=NodeAddressChangeClassification.counter(rs.getString(1),rs.getString(2),rs.getString(3));
+                    changes.merge(key,rs.getLong(4),Long::sum);
                 },nodeId,dayStart(0));
         response.put("todayClassification",changes);
         // Never return credentials, installation keys, or another tenant's infrastructure addresses.
