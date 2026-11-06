@@ -47,16 +47,19 @@ class NodeIpHistoryServiceTest {
             return 1;
         });
         long base=1_800_000_000_000L;
-        for (int i=0;i<5;i++) {
-            var sample=new NodeContinuityObservation.Sample("epoch",i<3 ? "a" : "b",base+i*60000L,i<3 ? 10000+i*60 : 5+(i-3)*60,2,0,0);
-            service.record(2L,"node.example",new NodeIpObservation.Result("ok","dns",List.of(i==0 ? "192.0.2.1" : "192.0.2.2")),base+i*60000L,sample);
+        for (int i=0;i<7;i++) {
+            var sample=new NodeContinuityObservation.Sample("epoch",i<4 ? "a" : "b",base+i*60000L,i<4 ? 10000+i*60 : 5+(i-4)*60,2,0,0);
+            service.record(2L,"node.example",new NodeIpObservation.Result("ok","dns",List.of(i==0 ? "192.0.2.1" : i<4 ? "192.0.2.2" : "192.0.2.3", i<4 ? "2001:db8::1" : "2001:db8::2")),base+i*60000L,sample);
         }
-        assertEquals(3,events.size());
-        assertEquals("BASELINE",events.get(0)[2]);assertEquals("CHANGE",events.get(1)[2]);assertEquals("MACHINE_SUSPECTED",events.get(2)[2]);
+        assertEquals(4,events.size());
+        assertEquals("BASELINE",events.get(0)[2]);assertEquals("CHANGE",events.get(1)[2]);assertEquals("RECONNECTED",events.get(2)[2]);assertEquals("CHANGE",events.get(3)[2]);
         assertEquals("IP_ONLY_LIKELY",JSON.parseObject((String)events.get(1)[9]).getString("classification"));
         assertEquals("BOOT_CHANGED",JSON.parseObject((String)events.get(2)[9]).getString("reason"));
+        assertEquals("UNKNOWN",JSON.parseObject((String)events.get(2)[9]).getString("classification"));
+        assertEquals("V4_ONLY_CHANGED",JSON.parseObject((String)events.get(1)[9]).getString("reason"));
+        assertEquals("DUAL_STACK_CHANGED_RESTART",JSON.parseObject((String)events.get(3)[9]).getString("reason"));
         assertFalse(((String)events.get(2)[9]).contains("session"));
-        verify(nodes,times(5)).selectById(2L);verifyNoMoreInteractions(nodes);
+        verify(nodes,times(7)).selectById(2L);verifyNoMoreInteractions(nodes);
     }
 
     @Test void tunnelAccessNeverGrantsInfrastructureHistoryAccess() {

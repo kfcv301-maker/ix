@@ -7,6 +7,7 @@ import java.util.Objects;
 /** DNS observations are not an assertion that the provider accepted a DDNS write. */
 public final class NodeIpObservation {
     private NodeIpObservation() {}
+    static final long CHANGE_WINDOW_MILLIS = 120_000;
 
     @Data
     public static class State {
@@ -15,6 +16,7 @@ public final class NodeIpObservation {
         private List<String> addresses = List.of();
         private List<String> candidate = List.of();
         private long candidateSince;
+        private long changeStartedAt;
         private long startedAt;
         private long baselineAt;
         private long checkedAt;
@@ -38,6 +40,7 @@ public final class NodeIpObservation {
             state.addresses = List.of();
             state.candidate = List.of();
             state.candidateSince = 0;
+            state.changeStartedAt = 0;
             state.baselineAt = 0;
         }
         state.checkedAt = now;
@@ -46,6 +49,7 @@ public final class NodeIpObservation {
         if (!"ok".equals(result.status()) || result.addresses().isEmpty()) {
             state.candidate = List.of();
             state.candidateSince = 0;
+            state.changeStartedAt = 0;
             if ("ok".equals(result.status())) state.status = "no_records";
             return null; // Failure is never an address removal or a change.
         }
@@ -57,17 +61,30 @@ public final class NodeIpObservation {
             return new Event(newTarget && hadBaseline ? "TARGET_CHANGED" : "BASELINE", List.of(), addresses, now, now);
         }
         if (state.addresses.equals(addresses)) {
-            state.candidate = List.of(); state.candidateSince = 0;
+            state.candidate = List.of(); state.candidateSince = 0; state.changeStartedAt = 0;
             return null;
         }
+        // A temporarily absent A/AAAA family cannot establish a replacement.
+        // Retain the last complete baseline until both families return.
+        if (NodeAddressChangeClassification.dualStack(state.addresses)
+                && !NodeAddressChangeClassification.dualStack(addresses)) {
+            state.candidate = List.of(); state.candidateSince = 0; state.changeStartedAt = 0;
+            state.status = "incomplete_families";
+            return null;
+        }
+        // Restore an older persisted candidate without inventing a fresh event.
+        if (state.changeStartedAt == 0)
+            state.changeStartedAt = state.candidateSince > 0 ? state.candidateSince : now;
         if (!state.candidate.equals(addresses)) {
             state.candidate = addresses; state.candidateSince = now; state.status = "confirming";
             return null;
         }
-        if (now - state.candidateSince < 30_000) { state.status = "confirming"; return null; }
-        Event event = new Event("CHANGE", state.addresses, addresses, state.candidateSince, now);
+        if (now - state.candidateSince < 30_000 || now - state.changeStartedAt < CHANGE_WINDOW_MILLIS) {
+            state.status = "confirming"; return null;
+        }
+        Event event = new Event("CHANGE", state.addresses, addresses, state.changeStartedAt, now);
         state.addresses = addresses; state.lastChangeAt = now;
-        state.candidate = List.of(); state.candidateSince = 0;
+        state.candidate = List.of(); state.candidateSince = 0; state.changeStartedAt = 0;
         return event;
     }
 }
