@@ -1,57 +1,64 @@
-# Lunaris → NodeAddressSync 开发契约（2026-11-07）
+# 机场地址同步：双方配对与在线启用
 
-开发分支：`feat/optional-airport-sync-20261107`。仅开发与隔离验证；没有部署或修改真实绑定。
+此功能由服务器节点向 Lunaris 上报公网 IPv4，再由 Lunaris 更新机场插件明确授权的节点地址。支持多个机场连接，每个转发节点独立选择一个连接和授权映射。普通用户不可见，默认不启用节点同步。
 
-## 范围
+当前为开发分支 `feat/optional-airport-sync-20261107`，PR #13。未部署生产、未修改 main 或真实绑定、未停止旧 reporter、未重启节点。真实新 AWS 安装与生产完整链路仍待验收。
 
-- 每个逻辑转发节点有独立管理员开关，默认关闭；明确填写接收端 HTTPS 地址、binding_id 和独立密钥。普通用户无读写权限。
-- 机场接收端仍由 NodeAddressSync 1.1.2 的显式绑定控制目标集合，只更新 host；不得按名称匹配或修改端口、SNI、倍率、权限。
-- 固定安装命令与 URL 保持不变，Agent 二进制不变。原生 install-script/{id} 在原 Agent 安装后追加可选采集器；install-config/{id} 仅在勾选 AWS 模式时携带可校验的采集器资源，稳定 node_install.sh 剥离该资源后再交给旧版 Agent 安装器，随后安装采集器。未勾选/旧面板保持原行为。
+## 管理员操作
 
-## 来源与限制
+1. 在转发节点的「机场同步 → 管理机场连接」复制本面板地址和持久面板标识。
+2. 在机场 NodeAddressSync 插件添加允许接入的转发面板，填写该地址与标识；生成独立配对 Token，并授权具体转发节点编号到机场节点的映射。机场连接初始暂停，须明确启用。
+3. 回到 Lunaris，填写连接名称、机场 HTTPS 地址、机场提供的 `ns2.<连接UUID>.<64位密钥>` Token，点击「保存并测试连接」。连接 ID 自动识别；高级选项保留分开填写的兼容形式。
+4. 为转发节点选择已配对机场及授权映射，开启上报并保存。机场地址、Token、开关以后都可以在线修改，不需要更换节点安装命令或重装转发核心。
+5. 新安装节点预置待命采集组件，未开启时不访问 IMDS、不上报 IP。旧节点若缺少组件，在已保存并确认 SSH 指纹的 VPS 列表中选择对应机器，点击「在线启用上报」。执行前校验服务器既有节点身份，只写采集器及其 systemd 单元，不修改 Agent 二进制/配置或重启 Agent。没有已配置 SSH 的机器需先加入 VPS 管理；组件不会凭空出现在旧节点上。
+6. 查看「当前可信来源」和「机场最后确认」。组件安装成功或面板接收成功，都不等于机场地址已经更新。
 
-旧 Agent 指标未携带公网 IP；现网 AWS1 的面板连接实际使用 IPv6，经 Cloudflare。不能由该连接推导公网 IPv4，不能用 DDNS 代替可信上报。提供两个显式来源模式：
+机场地址目前支持根路径 HTTPS/443，要求插件实现下面的 v2 协议。并非任意未适配机场都能直接使用。最多100条映射/连接，不按节点名称猜测目标。
 
-- `aws-imds`：可选 Python 采集器使用 IMDSv2 获取 public-ipv4、instance-id、内核 boot_id，每十秒先向面板确认仍启用，再凭既有节点 secret 上报。机场密钥完全不下发。GET/POST `/api/v1/node/address-observation` 均由节点密钥独立认证，校验账号可用与精确密钥。GET 返回 `{code:0,data:{enabled,installEnabled,sourceMode}}`（明确勾选但暂时阻断时 installEnabled=true，允许新机先安装timer等待修复；enabled=false时不采样、不上报）；POST `{ip,instanceId,observedAt,bootId}`，回执 `{code:0,data:{accepted:true,ip}}` 只代表面板受理；管理员看到机场回执才显示同步完成。
-- `peer`：使用当前认证 WebSocket 的可信公网 IPv4 和新鲜心跳。运维来源配置默认为 off；只有验证代理链及出口等于入口后才启用 direct/trusted-proxy。读取 Spring forwarded-header 包装前的原始请求，右向左剥离明确配置的可信代理；IPv6/未知来源不发送。此模式不覆盖当前 AWS1。
+## 双方协议
 
-每个逻辑节点至少两次不同的新鲜样本、跨度至少十秒；面板五秒调度。健康小批量正常链路目标六十秒内，非外部故障 SLA。独立于 IP 历史两分钟分类窗口，历史计数和原转发业务不变。
+持久 `relay_panel_id` 由面板数据库生成并随备份恢复；机场授权该标识与独立密钥。地址用于定位/展示，不能仅凭来源 URL 或 IP 放行。机场不主动回调任意 Relay URL。复合 Token 只方便复制粘贴，实际 HTTP Bearer 仍为64位小写十六进制密钥。
 
-AWS 采集器仅支持 systemd + Python3 的 HTTPS 面板（443），适合 Debian12。新增机器自动随原生安装链安装；已有机器开启后仍须单独补装该轻量组件，保存设置不会安装或重启 Agent。采集器需既有 config.json 为 root 拥有且0600；不擅自改配置权限。停用/解绑不访问 IMDS、不 POST，已装 timer 保留轮询以支持重新启用。旧面板404不安装新组件。
+`POST https://<机场>/api/v1/node-address-sync/connection/check`
 
-## 接收契约
+Bearer 连接密钥，JSON 为 `{connection_id, relay_panel_id}`。
 
-`POST https://<管理员明确配置主机>/api/v1/node-address-sync/report`
+成功 `data` 包含 `protocol_version:2,status:authorized,connection_id,relay_panel_id,server_time,mappings:[{relay_node_id,binding_id,label,enabled}]`。Lunaris 校验身份，只展示授权给当前节点的启用映射。测试不会修改机场节点地址。
 
-`Authorization: Bearer <独立绑定密钥>`
+`POST https://<机场>/api/v1/node-address-sync/connection/report`
 
-```json
-{"binding_id":"<明确绑定UUID>","ip":"<可信公网IPv4>","observed_at":1800000000}
-```
+Bearer 同一连接密钥，JSON 为 `{connection_id,relay_panel_id,relay_node_id,binding_id,ip,observed_at}`。机场每次重新检查连接、身份、绑定和目标权限，不能靠之前的连接测试绕过撤权。
 
-observed_at 为实际心跳观测 UTC 秒，重试同一事件保持不变。实例锁定的绑定不适用于不断更换云实例：面板不伪造 instance_id，不绕过 403；需要接收端明确使用无实例锁定的逻辑绑定。
+仅 HTTP200、回执身份/节点/绑定/IP完全一致且 `status` 为 updated/unchanged/duplicate 才确认成功。401/403/409/422暂停，网络/429/5xx有界退避重试，人工 host 冲突不能静默覆盖。连接编辑使授权快照失效，重新测试后才能继续；Token轮换保留节点安装身份。
 
-仅 HTTP 200 且 data.status 为 updated/unchanged/duplicate 且 data.ip 等于发送 IP 才确认成功。401/403/409/422 阻止继续自动覆盖并显示管理员处理状态；429/5xx/网络故障退避重试。错误响应正文不写日志或展示，避免反射密钥。
+旧版 endpoint + binding Token 协议仍独立保留，可在界面显式切换到面板配对；不自动迁移已有绑定，也不扩大旧 Token 的权限。
 
-## 持久性及安全
+## 节点上报与换机
 
-每个节点一条持久化最新待投递状态，状态与设置以数据库行锁串行化，防重复并发发送；新地址取代旧地址，过期事件重新等待新鲜确认，服务重启从持久状态恢复。禁用/解绑返回成功后不再发出新请求；已经被接收端接受的请求不可撤回。
+AWS 组件用 IMDSv2 获取 public-ipv4、instance-id，并读内核 boot_id。仅使用现有节点 secret 与 Relay 通信，机场地址/密钥不会下发到节点。旧 Agent 通过 IPv6 或 Cloudflare 连面板不妨碍此采集。
 
-密钥用面板 JWT_SECRET 及节点ID/接收地址/binding_id派生的 AES-GCM 加密，浏览器仅接收 hasToken，不返回密文或明文；不进入节点配置、安装命令或 Git。接收地址限制 HTTPS 固定路径、443、无用户信息/查询/片段；DNS 结果全量校验并固定到本次连接，拒绝内网/保留地址，禁止重定向/系统代理/自动重试，保留 TLS 主机名校验并限制超时和响应大小。
+节点接口为 GET/POST `/api/v1/node/address-observation`。GET 返回 `observerInstallable,installEnabled,enabled,sourceMode`：新版本允许预置待命组件，但只有 enabled 且 aws-imds 才采样和POST；旧面板404不安装组件。POST `{ip,instanceId,observedAt,bootId}`，回执 accepted 仅代表面板受理。身份认证、账号状态、时间、公网IPv4、规范bootUUID和2KiB请求体均检查。
 
-## 验收
+新旧机器共用固定安装身份时，独立持久表记录活动身份与已退役身份。两个不同身份同时上报先暂停投递；仅剩一个身份持续上报、其他身份静默20秒后才接管，再经过两次间隔10秒稳定确认。退役身份不能重新覆盖；重存设置、解绑再绑定、面板重启不会清空退役记录。最多保留256个身份后保护性暂停，避免通过无限历史淘汰放旧实例回来。更换节点密钥会重建信任基线，但该操作会改变安装身份，不能用作日常换机方案。
 
-必须分别覆盖默认关闭、非管理员禁止、首次认证连接、旧版安装链不变、不同心跳稳定确认、换机重连、旧连接撤销、持久化重启恢复、禁用/解绑、换绑定不能沿用旧密钥、过期/乱序、人工修改409、DNS重绑定/重定向、无密钥回显。已完成隔离的新目录安装、真实独立子进程重启、真实 systemd-analyze 单位语法检查；HTTP/systemctl 执行采用 fixture。未在新 AWS 实例安装整个桥接链，也未切换真实绑定；不得将隔离验收冒充生产成功。
+此机制区分正常替换/重叠实例，不是 AWS 签名证明。掌握 root 或节点密钥的主体仍能伪造上报；不能把它当成对失陷节点的身份认证。持续双机上报时不承诺自动判断哪一台是管理员想要的新机，而是显式显示冲突。
 
+连接来源 peer 模式仍可选，但必须由运维核验代理链与入口/出口关系并启用，默认关闭；不由 IPv6 或 DDNS 猜 IPv4。
 
-## 当前验证与发布边界
+## 时延口径
 
-- Java 全量430项通过（含27项新增测试），覆盖真实H2事务、持久重启、并发禁用、绑定唯一性、受理回执和目的地址校验。
-- 54项前端现有测试、生产构建通过；本机浏览器1440/390宽度通过默认关闭、AWS模式保存、保存后密钥清空、解绑、普通用户不可见，无页面运行时异常。
-- 稳定入口8项、旧安装器11项通过；采集器Linux隔离16项通过（包含阻断期间首装后自动恢复）；接收端生产1.1.2精确源码的18项隔离语义检查通过。
-- 默认不启用任何真实绑定。发布前需协调同一绑定唯一写源、备份、面板与固定Git入口同步发布、已有机器只补装采集器而不重装Agent，并做单节点首报/接收回执/真实host独立回读。
-- 本次不更新 main、不部署面板、不停旧 reporter、不重启节点。完整新机自动安装尚需独立上线验收，公开固定URL在开发分支提交后仍指向原 main。
+统一从真实公网IPv4变化开始，到机场 Server.host 事务写入成功为止。健康网络、组件已就绪、有效授权和正常单实例条件下，目标30秒内、最长60秒验收。
 
-采集器源码与后端 Docker 上下文内资源须保持逐字节一致；修改后运行 `python tests/airport_observer_packaging_test.py`。已有节点可从管理员同步设置下载校验过的纯采集脚本，执行 `sudo python3 airport_address_reporter.py --install --root /etc/flux-panel-agent`，该动作不安装或重启 Agent。
+采集器每轮完成后5秒运行；面板5秒调度，两次不同新鲜报告跨度至少10秒。换机额外20秒静默确认。去除小批量调度翻页时的空转等待。接口调用有超时上限，正常小批量链路的时间预算不等于外部故障SLA。服务器关机、IMDS故障、网络断开、授权错误、双机冲突或大批量故障排队时必须展示异常，不能伪报按时成功。
 
-节点观察 POST 在 JSON 解析前限制 2KiB（含 chunked），bootId 必须为规范 UUID。出站 HTTP 使用 Apache 2026-10-12 发布的稳定 HttpClient 5.6.5 及配套 HttpCore 5.4.4，显式覆盖旧 Boot BOM；[官方发布说明](https://hc.apache.org/news.html)。
+已增加虚拟时钟下的正常IP变化30秒、换机60秒回归；这不是生产实测延迟承诺，真实端到端仍需上线前单节点验收。
+
+## 安全与发布
+
+管理员权限在服务端查数据库；密钥 AES-GCM 加密保存，不回显、不入浏览器存储、不进入安装命令。请求目标HTTPS、固定路径、DNS全量公网校验并固定解析、禁止重定向和系统代理；连接检查响应32KiB，投递8KiB。数据库行锁串行化连接/节点配置和投递，停用返回后不再发新请求；已被机场接受的请求不能撤回。
+
+在线准备使用固定受限模板，SSH凭据只在后端解密；必须有已确认主机指纹，远端先核对 config.json 中节点密钥摘要，选错服务器拒绝安装。任务结果不泄露远端输出或密钥；执行失败不重装Agent。任务仅内存跟踪，面板重启后可检查首报或重新运行幂等准备。
+
+固定 node_install.sh、install-script/{id} 和 backend_install.sh URL 不变。新版安装器与面板协调发布后，新节点才会获得待命组件；当前 main 未更新。采集器源码和后端资源须逐字节一致。
+
+上线前需完成真实新机固定命令安装、已有机器在线准备、SSH失败/选错节点保护、IP变化时间线、机场实际host独立回读及唯一写源切换。不可同时启用旧直报程序和新桥接写同一绑定。本轮没有执行上述生产变更。

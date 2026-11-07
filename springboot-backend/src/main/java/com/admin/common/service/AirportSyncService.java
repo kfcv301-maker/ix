@@ -30,16 +30,20 @@ public class AirportSyncService {
     private final AirportSyncTransport transport;
     private final TransactionTemplate transactions;
     private final String key;
+    private final AirportConnectionService connections;
     private final ExecutorService workers=Executors.newFixedThreadPool(4,r->{Thread t=new Thread(r,"airport-sync");t.setDaemon(true);return t;});
     private final AtomicBoolean running=new AtomicBoolean();
     private long cursor;
     Clock clock=Clock.systemUTC();
     public AirportSyncService(JdbcTemplate jdbc,NodeMapper nodes,UserMapper users,AirportSyncTransport transport,
-                              PlatformTransactionManager manager,@Value("${jwt-secret}") String key) {
+                              PlatformTransactionManager manager,@Value("${jwt-secret}") String key,AirportConnectionService connections) {
         this.jdbc=jdbc;this.nodes=nodes;this.users=users;this.transport=transport;
-        this.transactions=new TransactionTemplate(manager);this.key=key;
+        this.transactions=new TransactionTemplate(manager);this.key=key;this.connections=connections;
     }
-    public record Settings(Long nodeId,boolean enabled,String endpoint,String bindingId,String token,Long revision,String sourceMode) {
+    public record Settings(Long nodeId,boolean enabled,String endpoint,String bindingId,String token,Long revision,String sourceMode,String connectionProfileId) {
+        public Settings(Long nodeId,boolean enabled,String endpoint,String bindingId,String token,Long revision,String sourceMode) {
+            this(nodeId,enabled,endpoint,bindingId,token,revision,sourceMode,"");
+        }
         @Override public String toString() { return "AirportSyncSettings[redacted]"; }
     }
     private void admin(Long userId) {
@@ -67,7 +71,8 @@ public class AirportSyncService {
     public Map<String,Object> save(Long userId,Settings settings) {
         admin(userId);node(settings.nodeId());
         if (settings.revision()==null || settings.revision()<0) throw new IllegalArgumentException("请刷新设置后重试");
-        String endpoint=AirportAddressPolicy.endpoint(settings.endpoint());
+        String profile=settings.connectionProfileId()==null?"":settings.connectionProfileId();
+        String endpoint=profile.isEmpty()?AirportAddressPolicy.endpoint(settings.endpoint()):"";
         String binding=settings.bindingId()==null ? "" : settings.bindingId().trim().toLowerCase(Locale.ROOT);
         if (!binding.matches("[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}")) throw new IllegalArgumentException("请输入有效的绑定 ID");
         String token=settings.token()==null ? "" : settings.token();
@@ -83,11 +88,18 @@ public class AirportSyncService {
                 AirportSyncState state=new AirportSyncState();
                 state.endpoint=endpoint;state.bindingId=binding;state.enabled=settings.enabled();state.revision=settings.revision()+1;
                 state.sourceMode=settings.sourceMode();
+                state.connectionProfileId=profile;
+                if (!profile.isEmpty()) {
+                    var c=connections.load(profile,true);
+                    if (c==null || (state.enabled && !connections.allowed(c,settings.nodeId(),binding))) throw new IllegalArgumentException("请先测试机场连接，选择授权给此节点的映射");
+                    state.endpoint=c.origin+"/api/v1/node-address-sync/connection/report";state.connectionRevision=c.revision;
+                }
                 boolean same=old!=null && endpoint.equals(old.endpoint) && binding.equals(old.bindingId);
                 state.encryptedToken=token.isEmpty() && same ? old.encryptedToken : token.isEmpty() ? "" : crypto(settings.nodeId(),endpoint,binding).encrypt(token);
-                if (state.enabled && state.encryptedToken.isEmpty()) throw new IllegalArgumentException("启用或更换绑定时请提供独立绑定密钥");
+                if (!profile.isEmpty()) state.encryptedToken="";
+                if (profile.isEmpty() && state.enabled && state.encryptedToken.isEmpty()) throw new IllegalArgumentException("启用或更换绑定时请提供独立绑定密钥");
                 state.status=state.enabled?"waiting_source":"disabled";
-                String destination=AirportSyncState.digest(endpoint+":"+binding);
+                String destination=AirportSyncState.digest((profile.isEmpty()?endpoint:state.endpoint)+":"+binding);
                 if (old==null) jdbc.update("INSERT INTO node_airport_sync (node_id,destination_key,enabled,payload) VALUES (?,?,?,?)",
                         settings.nodeId(),destination,state.enabled?1:0,JSON.toJSONString(state));
                 else jdbc.update("UPDATE node_airport_sync SET destination_key=?,enabled=?,payload=? WHERE node_id=?",
@@ -107,6 +119,7 @@ public class AirportSyncService {
     private Map<String,Object> view(long id,AirportSyncState state) {
         Map<String,Object> out=new LinkedHashMap<>();
         out.put("nodeId",id);out.put("enabled",state.enabled);out.put("endpoint",state.endpoint);out.put("bindingId",state.bindingId);
+        out.put("connectionProfileId",state.connectionProfileId);
         out.put("hasToken",!state.encryptedToken.isEmpty());out.put("revision",state.revision);out.put("sourceMode",state.sourceMode);
         out.put("status",state.enabled && "aws-imds".equals(state.sourceMode) && state.reportedSample==null && "waiting_source".equals(state.status) ? "waiting_observer" : state.status);
         out.put("lastIp",state.lastIp);out.put("lastSuccessAt",state.lastSuccessAt);
@@ -123,7 +136,7 @@ public class AirportSyncService {
     public Map<String,Object> observationPolicy(long id) {
         var state=load(id,false);
         boolean selected=state!=null && state.enabled && "aws-imds".equals(state.sourceMode);
-        return Map.of("installEnabled",selected,"enabled",selected && !state.blocked,
+        return Map.of("observerInstallable",true,"installEnabled",selected,"enabled",selected && !state.blocked,
                 "sourceMode",state==null?"off":state.sourceMode);
     }
     public boolean needsReporter(long id) {
@@ -131,6 +144,10 @@ public class AirportSyncService {
         return state!=null && state.enabled && "aws-imds".equals(state.sourceMode);
     }
     public record Report(String ip,String instanceId,long observedAt,String bootId) { }
+    private AirportObserverIdentity observer(long id,boolean lock) {
+        var rows=jdbc.query("SELECT payload FROM airport_observer_identity WHERE node_id=?"+(lock?" FOR UPDATE":""),(r,n)->r.getString(1),id);
+        return rows.isEmpty()?null:JSON.parseObject(rows.getFirst(),AirportObserverIdentity.class);
+    }
     public boolean report(Node node,Report report) {
         if (report==null || !AirportAddressPolicy.publicV4(report.ip()) || report.instanceId()==null
                 || !report.instanceId().matches("i-[a-f0-9]{8,32}") || report.bootId()==null
@@ -139,17 +156,28 @@ public class AirportSyncService {
         return Boolean.TRUE.equals(transactions.execute(tx->{
             var state=load(node.getId(),true);
             if (state==null || !state.enabled || state.blocked || !"aws-imds".equals(state.sourceMode)) return false;
-            // Repeated HTTP requests do not count as a second sample. Server receipt time drives stability.
-            if (report.observedAt()<=state.reportObservedAt) {
+            String identity=report.instanceId()+":"+report.bootId(),digest=AirportSyncState.digest(node.getSecret());
+            var fence=observer(node.getId(),true);boolean fresh=fence==null;
+            if (fresh) fence=new AirportObserverIdentity();
+            // Repeated requests cannot keep a dead instance alive or count as another sample.
+            if (identity.equals(fence.active) && report.observedAt()<=fence.remoteAt) {
                 if (report.observedAt()==state.reportObservedAt && state.reportedSample!=null
                         && report.ip().equals(state.reportedSample.ip())
-                        && (report.instanceId()+":"+report.bootId()).equals(state.reportedSample.connection())) return true;
+                        && identity.equals(state.reportedSample.connection()) && !fence.conflict) return true;
                 throw new IllegalArgumentException("Stale observation");
             }
-            state.reportObservedAt=report.observedAt();
-            state.reportedSample=new AirportSyncState.Sample(report.ip(),clock.millis(),report.instanceId()+":"+report.bootId(),AirportSyncState.digest(node.getSecret()));
+            boolean accepted=fence.accept(identity,digest,report.observedAt(),clock.millis());
+            if (fresh) jdbc.update("INSERT INTO airport_observer_identity (node_id,payload) VALUES (?,?)",node.getId(),JSON.toJSONString(fence));
+            else jdbc.update("UPDATE airport_observer_identity SET payload=? WHERE node_id=?",JSON.toJSONString(fence),node.getId());
+            if (accepted) {
+                state.reportObservedAt=report.observedAt();
+                state.reportedSample=new AirportSyncState.Sample(report.ip(),clock.millis(),identity,digest);
+            } else if (fence.conflict) {
+                state.reportedSample=null;state.pendingIp="";state.pendingAt=0;state.candidate="";
+                state.status="source_conflict";
+            }
             jdbc.update("UPDATE node_airport_sync SET payload=? WHERE node_id=?",JSON.toJSONString(state),node.getId());
-            return true;
+            return accepted;
         }));
     }
     @PreDestroy public void close() { workers.shutdownNow(); }
@@ -157,7 +185,11 @@ public class AirportSyncService {
         if (!running.compareAndSet(false,true)) return;
         try {
             List<Long> ids=jdbc.queryForList("SELECT node_id FROM node_airport_sync WHERE enabled=1 AND node_id>? ORDER BY node_id LIMIT 64",Long.class,cursor);
-            if (ids.isEmpty()) { cursor=0;running.set(false);return; }
+            if (ids.isEmpty()) {
+                cursor=0;
+                ids=jdbc.queryForList("SELECT node_id FROM node_airport_sync WHERE enabled=1 ORDER BY node_id LIMIT 64",Long.class);
+                if (ids.isEmpty()) { running.set(false);return; }
+            }
             cursor=ids.getLast();
             CompletableFuture<?>[] jobs=ids.stream().map(id->CompletableFuture.runAsync(()->{
                 try { process(id); } catch (RuntimeException failure) { /* Durable state remains for the next tick; no secret-bearing errors. */ }
@@ -168,20 +200,40 @@ public class AirportSyncService {
     void process(long id) {
         transactions.executeWithoutResult(tx->{
             AirportSyncState state=load(id,true);
-            if (state==null || !state.enabled || state.blocked) return;
+            if (state==null || !state.enabled) return;
+            AirportConnectionService.Connection connection=null;
+            if (!state.connectionProfileId.isEmpty()) {
+                connection=connections.delivery(state.connectionProfileId);
+                if (connection==null || !connections.allowed(connection,id,state.bindingId)) {
+                    state.status="blocked_connection";
+                    jdbc.update("UPDATE node_airport_sync SET payload=? WHERE node_id=?",JSON.toJSONString(state),id);return;
+                }
+                if (connection.revision!=state.connectionRevision || "blocked_connection".equals(state.status)) {
+                    state.connectionRevision=connection.revision;state.blocked=false;state.pendingIp="";state.candidate="";state.nextAttemptAt=0;
+                }
+            }
+            if (state.blocked) return;
             Node node=nodes.selectById(id);
             if (node==null) { jdbc.update("DELETE FROM node_airport_sync WHERE node_id=?",id);return; }
             long now=clock.millis();
             var observation=observation(id,state,now);
+            var fence="aws-imds".equals(state.sourceMode)?observer(id,false):null;
+            if (fence!=null && fence.conflict) {
+                state.status="source_conflict";state.pendingIp="";
+                jdbc.update("UPDATE node_airport_sync SET payload=? WHERE node_id=?",JSON.toJSONString(state),id);return;
+            }
             User owner=node.getOwnerUserId()==null ? null : users.selectById(node.getOwnerUserId());
             if (node.getOwnerUserId()!=null && (owner==null || !Objects.equals(owner.getStatus(),1))) observation=null;
             if (observation!=null && (node.getSecret()==null || !AirportSyncState.digest(node.getSecret()).equals(observation.credentialDigest()))) observation=null;
             if (state.observe(observation,now)) {
                 String result;
                 try {
-                    String token=crypto(id,state.endpoint,state.bindingId).decryptString(state.encryptedToken);
                     // Binding settings and delivery serialize on this row, independent of forwarding tables/threads.
-                    result=transport.send(state.endpoint,state.bindingId,token,state.pendingIp,state.pendingAt/1000);
+                    if (connection!=null) result=connections.send(connection,id,state.bindingId,state.pendingIp,state.pendingAt/1000);
+                    else {
+                        String token=crypto(id,state.endpoint,state.bindingId).decryptString(state.encryptedToken);
+                        result=transport.send(state.endpoint,state.bindingId,token,state.pendingIp,state.pendingAt/1000);
+                    }
                 } catch (RuntimeException unavailable) { result="blocked_credential"; }
                 state.completed(result,clock.millis());
             }

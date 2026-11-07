@@ -9,6 +9,8 @@ import java.util.Objects;
 public class AirportSyncState {
     public String endpoint="", bindingId="", encryptedToken="";
     public String sourceMode="peer";
+    public String connectionProfileId="";
+    public long connectionRevision;
     public Sample reportedSample;
     public long reportObservedAt;
     public boolean enabled;

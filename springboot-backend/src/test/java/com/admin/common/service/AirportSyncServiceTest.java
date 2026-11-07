@@ -37,7 +37,7 @@ class AirportSyncServiceTest {
         var ordinary=new User();ordinary.setId(20L);ordinary.setRoleId(1);ordinary.setStatus(1);when(users.selectById(20L)).thenReturn(ordinary);
         service=newService();at(0);when(transport.send(anyString(),anyString(),anyString(),anyString(),anyLong())).thenReturn("synced");
     }
-    AirportSyncService newService() { return new AirportSyncService(jdbc,nodes,users,transport,manager,"isolated-fixture-encryption-key"); }
+    AirportSyncService newService() { return new AirportSyncService(jdbc,nodes,users,transport,manager,"isolated-fixture-encryption-key",new AirportConnectionService(jdbc,users,transport,manager,"isolated-fixture-encryption-key")); }
     void at(long elapsed) { service.clock=Clock.fixed(Instant.ofEpochMilli(base+elapsed),ZoneOffset.UTC); }
     AirportSyncService.Settings settings(long id,boolean enabled,long rev,String key) {
         return new AirportSyncService.Settings(id,enabled,endpoint,binding,key,rev,"aws-imds");
@@ -112,5 +112,60 @@ class AirportSyncServiceTest {
             Thread.sleep(100);assertFalse(disabling.isDone());finish.countDown();sending.get(2,TimeUnit.SECONDS);disabling.get(2,TimeUnit.SECONDS);
             service.process(1);verify(transport,times(1)).send(anyString(),anyString(),anyString(),anyString(),anyLong());
         }
+    }
+    @Test void oldMachineCannotOverwriteAfterHandoverEvenAfterSettingsResaveAndRestart() {
+        service.save(10L,settings(1,true,0,token));report(0,"8.8.4.4");report(10000,"8.8.4.4");
+        at(20000);assertFalse(service.report(node,new AirportSyncService.Report("8.8.8.8","i-abcdef01234567890",(base+20000)/1000,boot)));
+        service.process(1);assertEquals("source_conflict",service.get(10L,1L).get("status"));
+        at(55000);assertTrue(service.report(node,new AirportSyncService.Report("8.8.8.8","i-abcdef01234567890",(base+55000)/1000,boot)));service.process(1);
+        at(65000);assertTrue(service.report(node,new AirportSyncService.Report("8.8.8.8","i-abcdef01234567890",(base+65000)/1000,boot)));service.process(1);
+        verify(transport).send(endpoint,binding,token,"8.8.8.8",(base+65000)/1000);
+        service.save(10L,settings(1,true,1,""));service.close();service=newService();at(80000);
+        assertFalse(service.report(node,new AirportSyncService.Report("8.8.4.4","i-1234567890abcdef0",(base+80000)/1000,boot)));service.process(1);
+        verify(transport,times(2)).send(anyString(),anyString(),anyString(),anyString(),anyLong());
+    }
+    @Test void healthyFiveSecondPollingUpdatesWithinThirtySecondsAndReplacementWithinSixty() {
+        service.save(10L,settings(1,true,0,token));report(0,"8.8.4.4");report(10000,"8.8.4.4");
+        long changedAt=10001;
+        for(long t=15000;t<=30000;t+=5000) report(t,"8.8.8.8");
+        assertEquals("8.8.8.8",service.get(10L,1L).get("lastIp"));
+        assertTrue((Long)service.get(10L,1L).get("lastSuccessAt")-base-changedAt<=30000);
+        long replacedAt=30001;
+        for(long t=35000;t<=70000;t+=5000) {
+            at(t);service.report(node,new AirportSyncService.Report("1.1.1.1","i-abcdef01234567890",(base+t)/1000,boot));service.process(1);
+        }
+        assertEquals("1.1.1.1",service.get(10L,1L).get("lastIp"));
+        assertTrue((Long)service.get(10L,1L).get("lastSuccessAt")-base-replacedAt<=60000);
+    }
+    @Test void v2ConnectionOnlineDisableAndCredentialEditGateAllDeliveries() {
+        var connections=new AirportConnectionService(jdbc,users,transport,manager,"isolated-fixture-encryption-key");
+        String remote="33333333-3333-3333-3333-333333333333";
+        var c=connections.save(10L,new AirportConnectionService.Settings("","airport","https://airport.example",remote,token,true,0L));String id=(String)c.get("id");
+        var check=com.alibaba.fastjson2.JSONObject.of("protocol_version",2,"status","authorized","server_time",1800000000,"connection_id",remote,"relay_panel_id",connections.panelId(),
+                "mappings",List.of(com.alibaba.fastjson2.JSONObject.of("binding_id",binding,"relay_node_id",1,"label","node","enabled",true)));
+        when(transport.exchange(anyString(),anyString(),anyString(),any())).thenReturn(new AirportSyncTransport.Reply("ok",com.alibaba.fastjson2.JSONObject.of("data",check).toJSONString()));
+        connections.check(10L,id,1);
+        service.save(10L,new AirportSyncService.Settings(1L,true,"",binding,"",0L,"aws-imds",id));
+        var receipt=com.alibaba.fastjson2.JSONObject.of("protocol_version",2,"status","updated","updated",1,"connection_id",remote,"relay_panel_id",connections.panelId(),"relay_node_id",1,"binding_id",binding,"ip","8.8.4.4");
+        when(transport.exchange(anyString(),anyString(),anyString(),any())).thenReturn(new AirportSyncTransport.Reply("ok",com.alibaba.fastjson2.JSONObject.of("data",receipt).toJSONString()));
+        report(0,"8.8.4.4");report(10000,"8.8.4.4");assertEquals("synced",service.get(10L,1L).get("status"));
+        clearInvocations(transport);
+        connections.save(10L,new AirportConnectionService.Settings(id,"airport","https://airport.example",remote,"",false,2L));
+        report(15000,"8.8.8.8");report(30000,"8.8.8.8");verifyNoInteractions(transport);
+        assertEquals("blocked_connection",service.get(10L,1L).get("status"));
+    }
+    @Test void successfulRecheckAfterAirportAuthorizationRepairUnblocksWithoutNodeReinstallation() {
+        var connections=new AirportConnectionService(jdbc,users,transport,manager,"isolated-fixture-encryption-key");
+        String remote="33333333-3333-3333-3333-333333333333";
+        String id=(String)connections.save(10L,new AirportConnectionService.Settings("","airport","https://airport.example",remote,token,true,0L)).get("id");
+        var check=com.alibaba.fastjson2.JSONObject.of("protocol_version",2,"status","authorized","server_time",1800000000,"connection_id",remote,"relay_panel_id",connections.panelId(),
+                "mappings",List.of(com.alibaba.fastjson2.JSONObject.of("binding_id",binding,"relay_node_id",1,"label","node","enabled",true)));
+        var good=new AirportSyncTransport.Reply("ok",com.alibaba.fastjson2.JSONObject.of("data",check).toJSONString());
+        when(transport.exchange(anyString(),anyString(),anyString(),any())).thenReturn(good);connections.check(10L,id,1);
+        service.save(10L,new AirportSyncService.Settings(1L,true,"",binding,"",0L,"aws-imds",id));
+        when(transport.exchange(anyString(),anyString(),anyString(),any())).thenReturn(new AirportSyncTransport.Reply("blocked_403",""));
+        report(0,"8.8.4.4");report(10000,"8.8.4.4");assertEquals(false,service.observationPolicy(1).get("enabled"));
+        when(transport.exchange(anyString(),anyString(),anyString(),any())).thenReturn(good);connections.check(10L,id,2);
+        at(20000);service.process(1);assertEquals(true,service.observationPolicy(1).get("enabled"));
     }
 }

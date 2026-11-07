@@ -75,7 +75,7 @@ public class NodeAgentConfigService {
         result.put("agentRelease", release);
         result.put("reservedPorts", portReservations.reservedPorts(node.getId(), null).stream().sorted().toList());
         if (airportReporterInstaller!=null) {
-            JSONObject reporter=airportReporterInstaller.installation(node.getId());
+            JSONObject reporter=airportReporterInstaller.bundle();
             if (reporter!=null) result.put("airportAddressReporter",reporter);
         }
         return result;

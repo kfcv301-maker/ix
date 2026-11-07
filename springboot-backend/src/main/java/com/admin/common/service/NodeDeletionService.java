@@ -72,6 +72,7 @@ public class NodeDeletionService {
         deletionMapper.deleteNodeReservations(id);
         deletionMapper.deleteNodeCursors(id);
         deletionMapper.deleteNodeAirportSync(id);
+        deletionMapper.deleteNodeAirportObserver(id);
         if (nodeMapper.deleteById(id) != 1) throw new IllegalStateException("节点删除失败");
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override public void afterCommit() {

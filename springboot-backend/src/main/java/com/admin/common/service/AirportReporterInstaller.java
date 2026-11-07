@@ -12,6 +12,9 @@ public class AirportReporterInstaller {
     public AirportReporterInstaller(AirportSyncService sync) { this.sync=sync; }
     public JSONObject installation(long nodeId) {
         if (!sync.needsReporter(nodeId)) return null;
+        return bundle();
+    }
+    public JSONObject bundle() {
         try (var source=new ClassPathResource("node-runtime/airport_address_reporter.py").getInputStream()) {
             byte[] bytes=source.readAllBytes();
             return JSONObject.of("enabled",true,"scriptBase64",Base64.getEncoder().encodeToString(bytes),
@@ -19,8 +22,7 @@ public class AirportReporterInstaller {
         } catch (java.io.IOException missing) { throw new IllegalStateException("Address reporter package unavailable"); }
     }
     public String shell(long nodeId) {
-        JSONObject config=installation(nodeId);
-        if (config==null) return "";
+        JSONObject config=bundle();
         return "\n# Optional node-to-panel address observer; never restarts the Agent.\n"
                 +"command -v python3 >/dev/null || { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3; }\n"
                 +"airport_observer=$(mktemp) || exit 1\n"

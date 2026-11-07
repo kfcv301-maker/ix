@@ -12,10 +12,10 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 class AirportReporterInstallerTest {
-    @Test void disabledNodesKeepNativeInstallerExactlyFreeOfObserver() {
+    @Test void newInstallationsIncludeDormantCapabilityForOnlineEnablement() {
         var sync=mock(AirportSyncService.class);var installer=new AirportReporterInstaller(sync);
-        assertNull(installer.installation(1));assertEquals("",installer.shell(1));
-        assertFalse(nativeScript(installer).contains("airport_observer"));
+        assertNull(installer.installation(1));assertNotNull(installer.bundle());
+        assertTrue(nativeScript(installer).contains("airport_observer"));
     }
     @Test void enabledNativeAndGitConfigPathsContainSameReviewedSourceWithoutAirportToken() throws Exception {
         var sync=mock(AirportSyncService.class);when(sync.needsReporter(1)).thenReturn(true);

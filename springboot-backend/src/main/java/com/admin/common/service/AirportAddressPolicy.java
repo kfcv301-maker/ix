@@ -51,14 +51,22 @@ public final class AirportAddressPolicy {
         } catch (RuntimeException invalid) { return false; }
     }
     public static String endpoint(String value) {
+        return endpoint(value,"/api/v1/node-address-sync/report");
+    }
+    public static String origin(String value) {
+        if (value==null) throw new IllegalArgumentException("请输入机场 HTTPS 地址");
+        String origin=value.trim().replaceAll("/+$", "");
+        return endpoint(origin+"/api/v1/node-address-sync/report").replace("/api/v1/node-address-sync/report", "");
+    }
+    public static String endpoint(String value,String path) {
         try {
             URI uri=URI.create(value);
             if (!"https".equals(uri.getScheme()) || uri.getHost()==null || uri.getHost().length()>253
                     || !uri.getHost().matches("(?i)[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?")
                     || uri.getRawUserInfo()!=null || uri.getRawQuery()!=null || uri.getRawFragment()!=null
                     || (uri.getPort()!=-1 && uri.getPort()!=443)
-                    || !"/api/v1/node-address-sync/report".equals(uri.getRawPath())) throw new IllegalArgumentException();
-            return "https://"+uri.getHost().toLowerCase(Locale.ROOT)+"/api/v1/node-address-sync/report";
+                    || !path.equals(uri.getRawPath())) throw new IllegalArgumentException();
+            return "https://"+uri.getHost().toLowerCase(Locale.ROOT)+path;
         } catch (RuntimeException invalid) {
             throw new IllegalArgumentException("请输入 HTTPS 接收地址，路径为 /api/v1/node-address-sync/report，端口为 443");
         }

@@ -57,14 +57,26 @@ export const createNode = (data: any) => Network.post("/node/create", data);
 export const getNodeList = () => Network.post("/node/list");
 export interface AirportSyncSettings {
   nodeId: number; enabled: boolean; endpoint: string; bindingId: string; hasToken: boolean;
+  connectionProfileId: string;
   revision: number; status: string; lastIp: string; sourceIp: string; lastSuccessAt: number;
   sourceMode: 'peer' | 'aws-imds';
   nextAttemptAt: number; attempts: number;
 }
 export const getAirportSync = (nodeId: number) => Network.post<AirportSyncSettings>('/node/airport-sync/get', { nodeId });
-export const saveAirportSync = (data: Pick<AirportSyncSettings, 'nodeId' | 'enabled' | 'endpoint' | 'bindingId' | 'revision' | 'sourceMode'> & { token: string }) => Network.post<AirportSyncSettings>('/node/airport-sync/save', data);
+export const saveAirportSync = (data: Pick<AirportSyncSettings, 'nodeId' | 'enabled' | 'endpoint' | 'bindingId' | 'revision' | 'sourceMode' | 'connectionProfileId'> & { token: string }) => Network.post<AirportSyncSettings>('/node/airport-sync/save', data);
+export interface AirportConnection {
+  id: string; name: string; origin: string; connectionId: string; hasToken: boolean; enabled: boolean;
+  revision: number; status: string; checkedAt: number;
+  bindings: { bindingId: string; relayNodeId: number; name: string }[];
+}
+export const getAirportConnections = () => Network.post<{ panelId: string; connections: AirportConnection[] }>('/node/airport-sync/connections');
+export const saveAirportConnection = (data: Pick<AirportConnection, 'id' | 'name' | 'origin' | 'connectionId' | 'enabled' | 'revision'> & { token: string }) => Network.post<AirportConnection>('/node/airport-sync/connection/save', data);
+export const checkAirportConnection = (id: string, revision: number) => Network.post<AirportConnection>('/node/airport-sync/connection/check', { id, revision });
 export const removeAirportSync = (nodeId: number, revision: number) => Network.post('/node/airport-sync/remove', { nodeId, revision });
 export const getAirportObserver = (nodeId: number) => Network.post<{ scriptBase64: string; sha256: string }>('/node/airport-sync/observer', { nodeId });
+export interface AirportObserverTargets { status: string; hosts: { id: number; name: string; host: string }[] }
+export const getAirportObserverTargets = (nodeId: number) => Network.post<AirportObserverTargets>('/node/airport-sync/observer/targets', { nodeId });
+export const installAirportObserver = (nodeId: number, hostId: number) => Network.post<string>('/node/airport-sync/observer/install', { nodeId, hostId });
 export interface NodeIpSummary {
   nodeId: number; target: string; ddnsEnabled: boolean; source: 'dns' | 'configured';
   status: string; addresses: string[]; checkedAt: number; resolvedAt: number;

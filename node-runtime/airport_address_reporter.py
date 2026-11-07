@@ -111,6 +111,8 @@ def policy(panel, secret, for_install=False):
         raise
     if type(data.get('enabled')) is not bool:
         raise ValueError('Invalid enabled flag')
+    if for_install and data.get('observerInstallable') is True:
+        return 'enabled'
     if data.get('sourceMode') not in ('off', 'peer', 'aws-imds'):
         raise ValueError('Invalid source mode')
     install_enabled = data.get('installEnabled', data['enabled'])
@@ -195,7 +197,7 @@ def install(root):
     )
     timer = (
         '[Unit]\nDescription=Refresh optional Lunaris AWS IPv4 observation\n\n'
-        '[Timer]\nOnBootSec=2s\nOnUnitInactiveSec=10s\nAccuracySec=1s\n'
+        '[Timer]\nOnBootSec=2s\nOnUnitInactiveSec=5s\nAccuracySec=1s\n'
         'Unit=' + UNIT_NAME + '.service\n\n[Install]\nWantedBy=timers.target\n'
     )
     atomic(destination, contents, 0o700)
@@ -205,7 +207,7 @@ def install(root):
                     ['systemctl', 'enable', '--now', UNIT_NAME + '.timer'],
                     ['systemctl', 'start', UNIT_NAME + '.service']):
         subprocess.run(command, check=True, capture_output=True, timeout=35)
-    return {'status': 'installed', 'installed': True, 'intervalSeconds': 10,
+    return {'status': 'installed', 'installed': True, 'intervalSeconds': 5,
             'agentRestarted': False}
 
 

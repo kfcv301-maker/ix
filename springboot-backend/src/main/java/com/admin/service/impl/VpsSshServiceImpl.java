@@ -149,6 +149,33 @@ public class VpsSshServiceImpl implements VpsSshService {
         }
     }
 
+    @Override public CommandResult installAddressObserver(VpsHost host,String password,String scriptBase64,String expectedNodeDigest) throws Exception {
+        String program=observerProgram(scriptBase64,expectedNodeDigest);
+        try (SshConnection connection=connect(host,password);Session session=connection.client.startSession();Session.Command command=session.exec("python3 -")) {
+            // Fixed Python program over encrypted stdin, never a shell parameter or browser-provided script.
+            Future<?> output=stream(command.getInputStream(),ignored->{}),errors=stream(command.getErrorStream(),ignored->{});
+            command.getOutputStream().write(program.getBytes(StandardCharsets.UTF_8));command.getOutputStream().close();
+            command.join(90,TimeUnit.SECONDS);
+            if (command.getExitStatus()==null) { command.close();return new CommandResult(false,"在线启用超时，请检查采集器状态",connection.fingerprint); }
+            output.get(5,TimeUnit.SECONDS);errors.get(5,TimeUnit.SECONDS);
+            boolean ok=command.getExitStatus()==0;
+            return new CommandResult(ok,ok?"上报组件已就绪，转发核心未重启":"上报组件未就绪，请检查节点身份、Python3、配置权限和面板连接",connection.fingerprint);
+        }
+    }
+    static String observerProgram(String scriptBase64,String expectedNodeDigest) {
+        if (scriptBase64==null || scriptBase64.length()>180000 || !scriptBase64.matches("[A-Za-z0-9+/=]+")
+                || expectedNodeDigest==null || !expectedNodeDigest.matches("[a-f0-9]{64}")) throw new IllegalArgumentException("无效的上报组件");
+        return "import base64,hashlib,hmac,os,tempfile,runpy,fcntl,stat,sys\n"
+                +"lock=os.open('/run/lunaris-address-observer-install.lock',os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)\n"
+                +"info=os.fstat(lock)\nassert os.geteuid()==0 and info.st_uid==0 and stat.S_ISREG(info.st_mode) and not info.st_mode & 0o077\n"
+                +"fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)\n"
+                +"with tempfile.TemporaryDirectory(prefix='lunaris-observer-') as work:\n"
+                +" p=work+'/observer.py'\n with open(p,'wb') as f: f.write(base64.b64decode('"+scriptBase64+"',validate=True))\n"
+                +" module=runpy.run_path(p)\n module['require_root']()\n _,secret=module['read_identity']('/etc/flux-panel-agent')\n"
+                +" if not hmac.compare_digest(hashlib.sha256(secret.encode()).hexdigest(),'"+expectedNodeDigest+"'): sys.exit(42)\n"
+                +" result=module['install']('/etc/flux-panel-agent')\n sys.exit(0 if result.get('installed') is True else 43)\n";
+    }
+
     private Future<?> stream(InputStream source, Consumer<String> outputConsumer) {
         return STREAM_EXECUTOR.submit(() -> {
             byte[] buffer = new byte[4096];

@@ -251,7 +251,7 @@ raise SystemExit(m.main(['--once','--root',root]))
         unit = (units / (self.module.UNIT_NAME + '.service')).read_text()
         timer = (units / (self.module.UNIT_NAME + '.timer')).read_text()
         self.assertIn('--once --root ' + str(self.root), unit)
-        self.assertIn('OnUnitInactiveSec=10s', timer)
+        self.assertIn('OnUnitInactiveSec=5s', timer)
         self.assertNotIn(self.identity['secret'], unit + timer)
         self.assertFalse(any('flux-panel-agent' in ' '.join(c) for c in commands))
         for name, data in protected.items():
@@ -282,6 +282,25 @@ raise SystemExit(m.main(['--once','--root',root]))
             run.assert_not_called()
         self.assertEqual(list(units.iterdir()), [])
         self.assertFalse((self.root / 'airport_address_reporter.py').exists())
+
+    def test_preinstalled_standby_can_be_enabled_online_without_installing_again(self):
+        units = self.base / 'systemd'
+        units.mkdir()
+        active = self.base / 'active-systemd'
+        active.mkdir()
+        self.policy = {'enabled': False, 'observerInstallable': True, 'sourceMode': 'off'}
+        with mock.patch.object(self.module, 'UNIT_DIR', units), \
+             mock.patch.object(self.module, 'SYSTEMD_ACTIVE', active), \
+             mock.patch.object(self.module.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)):
+            self.assertTrue(self.module.install(self.root)['installed'])
+        before = {p.name: p.read_bytes() for p in units.iterdir()}
+        self.assertFalse(self.module.locked_once(self.root)['reported'])
+        self.assertEqual(self.posts, [])
+        self.policy.update(enabled=True, sourceMode='aws-imds')
+        self.assertTrue(self.module.locked_once(self.root)['reported'])
+        self.policy['enabled'] = False
+        self.assertFalse(self.module.locked_once(self.root)['reported'])
+        self.assertEqual(before, {p.name: p.read_bytes() for p in units.iterdir()})
 
     def test_blocked_but_opted_in_new_host_installs_then_recovers(self):
         units = self.base / 'systemd'

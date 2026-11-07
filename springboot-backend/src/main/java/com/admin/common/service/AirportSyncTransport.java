@@ -26,11 +26,20 @@ public class AirportSyncTransport {
         catch (Exception unavailable) { if(request!=null)request.cancel(true);throw new UnknownHostException("Destination resolution unavailable"); }
     }
     public String send(String endpoint,String binding,String token,String ip,long observedAt) {
+        Reply reply=exchange(endpoint,"/api/v1/node-address-sync/report",token,
+                JSONObject.of("binding_id",binding,"ip",ip,"observed_at",observedAt));
+        return "ok".equals(reply.status()) ? receipt(reply.body(),ip) : reply.status();
+    }
+    public record Reply(String status,String body) {
+        @Override public String toString() { return "AirportReply["+status+"]"; }
+    }
+    public Reply exchange(String endpoint,String path,String token,JSONObject payload) {
         try {
-            URI uri=URI.create(AirportAddressPolicy.endpoint(endpoint));
+            if (!Set.of("/api/v1/node-address-sync/report","/api/v1/node-address-sync/connection/check","/api/v1/node-address-sync/connection/report").contains(path)) return new Reply("blocked_destination","");
+            URI uri=URI.create(AirportAddressPolicy.endpoint(endpoint,path));
             InetAddress[] addresses=resolve(uri.getHost());
-            if (addresses.length==0 || addresses.length>16) return "blocked_destination";
-            for (InetAddress address:addresses) if (!AirportAddressPolicy.publicAddress(address)) return "blocked_destination";
+            if (addresses.length==0 || addresses.length>16) return new Reply("blocked_destination","");
+            for (InetAddress address:addresses) if (!AirportAddressPolicy.publicAddress(address)) return new Reply("blocked_destination","");
             // Resolution is pinned for this one request; the HTTP layer cannot re-resolve to private space.
             DnsResolver pinned=new DnsResolver() {
                 public InetAddress[] resolve(String host) throws UnknownHostException {
@@ -51,26 +60,27 @@ public class AirportSyncTransport {
                             .setResponseTimeout(Timeout.ofSeconds(3)).build()).build()) {
                 HttpPost request=new HttpPost(uri);
                 request.setHeader("Authorization","Bearer "+token);
-                request.setEntity(new StringEntity(JSONObject.of("binding_id",binding,"ip",ip,"observed_at",observedAt).toJSONString(),ContentType.APPLICATION_JSON));
+                request.setEntity(new StringEntity(payload.toJSONString(),ContentType.APPLICATION_JSON));
                 // Bound total time as well as socket inactivity. Cancels slow-drip responses.
                 var deadline=java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r->{Thread t=new Thread(r,"airport-request-deadline");t.setDaemon(true);return t;});
                 var cancel=deadline.schedule(request::cancel,8,java.util.concurrent.TimeUnit.SECONDS);
                 try {
                     return client.execute(request,response->{
                         int code=response.getCode();
-                        if (Set.of(401,403,409,422).contains(code)) return "blocked_"+code;
-                        if (code>=300 && code<400) return "blocked_redirect";
-                        if (code!=200) return "retry_http";
-                        if (response.getEntity()==null) return "retry_receipt";
+                        if (Set.of(401,403,409,422).contains(code)) return new Reply("blocked_"+code,"");
+                        if (code>=300 && code<400) return new Reply("blocked_redirect","");
+                        if (code!=200) return new Reply("retry_http","");
+                        if (response.getEntity()==null) return new Reply("retry_receipt","");
                         try (var stream=response.getEntity().getContent()) {
-                            byte[] body=stream.readNBytes(8193);
-                            if (body.length>8192) return "retry_receipt";
-                            return receipt(new String(body,StandardCharsets.UTF_8),ip);
+                            int limit=path.endsWith("/check")?32768:8192;
+                            byte[] body=stream.readNBytes(limit+1);
+                            if (body.length>limit) return new Reply("retry_receipt","");
+                            return new Reply("ok",new String(body,StandardCharsets.UTF_8));
                         }
                     });
                 } finally { cancel.cancel(false);deadline.shutdownNow(); }
             }
-        } catch (Exception failure) { return "retry_transport"; } // Never log token, remote response, or exception text.
+        } catch (Exception failure) { return new Reply("retry_transport",""); } // Never log token, remote response, or exception text.
     }
     static String receipt(String body,String ip) {
         try {

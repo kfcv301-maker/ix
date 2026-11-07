@@ -1,0 +1,50 @@
+{
+  "scope": "generated only in independent SQLite-memory fixtures; no credentials or production identities",
+  "check": {
+    "http_status": 200,
+    "request": {
+      "connection_id": "fb06945f-d8ed-4833-a9ff-2dc7ae0e62cc",
+      "relay_panel_id": "11111111-1111-4111-8111-111111111111"
+    },
+    "body": {
+      "data": {
+        "protocol_version": 2,
+        "status": "authorized",
+        "connection_id": "fb06945f-d8ed-4833-a9ff-2dc7ae0e62cc",
+        "relay_panel_id": "11111111-1111-4111-8111-111111111111",
+        "server_time": 1794030359,
+        "mappings": [
+          {
+            "relay_node_id": 18,
+            "binding_id": "3f5d9182-f0aa-4f37-bde2-d1028cceed17",
+            "label": "Relay mapping",
+            "enabled": true
+          }
+        ]
+      }
+    }
+  },
+  "report": {
+    "http_status": 200,
+    "request": {
+      "connection_id": "fb06945f-d8ed-4833-a9ff-2dc7ae0e62cc",
+      "relay_panel_id": "11111111-1111-4111-8111-111111111111",
+      "relay_node_id": 18,
+      "binding_id": "3f5d9182-f0aa-4f37-bde2-d1028cceed17",
+      "ip": "8.8.8.8",
+      "observed_at": 1794030339
+    },
+    "body": {
+      "data": {
+        "protocol_version": 2,
+        "connection_id": "fb06945f-d8ed-4833-a9ff-2dc7ae0e62cc",
+        "relay_panel_id": "11111111-1111-4111-8111-111111111111",
+        "relay_node_id": 18,
+        "binding_id": "3f5d9182-f0aa-4f37-bde2-d1028cceed17",
+        "status": "updated",
+        "updated": 2,
+        "ip": "8.8.8.8"
+      }
+    }
+  }
+}
