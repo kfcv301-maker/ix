@@ -38,6 +38,13 @@ beforeEach(() => {
   } };
 });
 
+test('legacy minimal theme preferences retain the neutral minimal appearance', () => {
+  localStorage.setItem(themeKey, 'legacy-minimal');
+  assert.equal(preferences.getPanelTheme(), 'minimal');
+  preferences.applyPanelTheme(preferences.getPanelTheme());
+  assert.equal(document.documentElement.getAttribute('data-panel-theme'), 'minimal');
+});
+
 test('explicit appearance is independent of the OS; system mode follows it', () => {
   for (const systemDark of [true, false]) {
     assert.equal(preferences.resolvePanelAppearance('light', systemDark), 'light');
@@ -91,9 +98,9 @@ test('theme controls still update mounted subscribers when browser storage is bl
   const received = [];
   const unsubscribe = preferences.subscribePanelPreferences(value => received.push(value));
   preferences.savePanelAppearance('dark');
-  preferences.savePanelTheme('nvenix-minimal');
-  assert.deepEqual(received.at(-1), { theme: 'nvenix-minimal', appearance: 'dark' });
-  assert.equal(document.documentElement.getAttribute('data-panel-theme'), 'nvenix-minimal');
+  preferences.savePanelTheme('minimal');
+  assert.deepEqual(received.at(-1), { theme: 'minimal', appearance: 'dark' });
+  assert.equal(document.documentElement.getAttribute('data-panel-theme'), 'minimal');
   unsubscribe();
 });
 

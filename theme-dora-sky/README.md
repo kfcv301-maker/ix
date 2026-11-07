@@ -122,7 +122,7 @@ Authorization: <token>
 要求：Node.js 18 或更高版本。
 
 ```bash
-cd H:/ny/flux-panel/theme-dora-sky
+cd theme-dora-sky
 npm install
 npm run dev
 ```

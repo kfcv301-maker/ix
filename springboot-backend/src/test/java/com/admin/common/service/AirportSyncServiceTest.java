@@ -46,6 +46,38 @@ class AirportSyncServiceTest {
         at(elapsed);assertTrue(service.report(node,new AirportSyncService.Report(ip,"i-1234567890abcdef0",(base+elapsed)/1000,boot)));service.process(1L);
     }
     @AfterEach void close() { service.close();jdbc.execute("DROP ALL OBJECTS"); }
+    @Test void saturatedWorkersRetryNextNodeWithoutWaitingForWholeBatchOrDuplicatingWork() throws Exception {
+        service.close();
+        var entered=new CountDownLatch(8);var releaseOthers=new CountDownLatch(1);
+        var releaseFirst=new CountDownLatch(1);var othersExited=new CountDownLatch(7);
+        var ninth=new CountDownLatch(1);var firstExited=new CountDownLatch(1);
+        var active=ConcurrentHashMap.<Long>newKeySet();var duplicate=new java.util.concurrent.atomic.AtomicBoolean();
+        for(long id=1;id<=9;id++) jdbc.update("INSERT INTO node_airport_sync VALUES(?,?,1,'{}')",id,String.format("%064d",id));
+        service=new AirportSyncService(jdbc,nodes,users,transport,manager,"test-key",
+                new AirportConnectionService(jdbc,users,transport,manager,"test-key")) {
+            @Override void process(long id) {
+                if(!active.add(id)) duplicate.set(true);
+                try {
+                    if(id<=8) {
+                        entered.countDown();
+                        if(id==1) releaseFirst.await(5,TimeUnit.SECONDS);
+                        else releaseOthers.await(5,TimeUnit.SECONDS);
+                    } else ninth.countDown();
+                } catch(InterruptedException stopped) { Thread.currentThread().interrupt(); }
+                finally { active.remove(id);if(id==1) firstExited.countDown();else if(id<=8) othersExited.countDown(); }
+            }
+        };
+        try {
+            service.tick();assertTrue(entered.await(2,TimeUnit.SECONDS));
+            service.tick();assertEquals(1,ninth.getCount(),"saturation must not queue stale work");
+            releaseOthers.countDown();assertTrue(othersExited.await(2,TimeUnit.SECONDS));
+            // Workers can be between completing process() and accepting a new task; retry ticks until ready.
+            long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(2);
+            while(ninth.getCount()!=0 && System.nanoTime()<deadline) { service.tick();ninth.await(10,TimeUnit.MILLISECONDS); }
+            assertEquals(0,ninth.getCount(),"one slow node must not hold the rest of the batch");
+            assertEquals(1,firstExited.getCount());assertFalse(duplicate.get());
+        } finally { releaseOthers.countDown();releaseFirst.countDown();assertTrue(firstExited.await(2,TimeUnit.SECONDS)); }
+    }
     @Test void defaultOffAndOrdinaryOwnerHasNoAccess() {
         assertEquals(false,service.get(10L,1L).get("enabled"));
         assertEquals(false,service.observationPolicy(1).get("enabled"));

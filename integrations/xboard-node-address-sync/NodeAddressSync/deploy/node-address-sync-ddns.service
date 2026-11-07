@@ -1,0 +1,22 @@
+[Unit]
+Description=Xboard centralized authoritative DDNS synchronization
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=6
+
+[Service]
+Type=simple
+# Install only after the plugin files, additive migration and private backup are verified.
+ExecStart=/usr/bin/docker exec -u www xboard-standby-web php /www/plugins/NodeAddressSync/bin/worker.php
+# docker exec itself does not forward SIGTERM to the container process.
+ExecStop=/usr/bin/docker exec -u www xboard-standby-web php /www/plugins/NodeAddressSync/bin/stop-worker.php
+Restart=always
+RestartSec=5
+TimeoutStopSec=25
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

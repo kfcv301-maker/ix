@@ -1,0 +1,10 @@
+{
+  "name": "节点公网 IP 同步",
+  "code": "node_address_sync",
+  "version": "2.1.0",
+  "type": "feature",
+  "description": "授权允许上报的转发面板，以面板身份、独立密钥和节点映射同步连接 IP；保留 DDNS 与旧实例来源，按绑定隔离。",
+  "author": "Local",
+  "require": {"xboard": ">=1.0.0"},
+  "config": {}
+}

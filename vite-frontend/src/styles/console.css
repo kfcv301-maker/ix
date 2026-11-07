@@ -207,7 +207,7 @@
   --panel-text:#fae8f2; --panel-muted:#c8a8b9; --panel-border:#55404d;
   --panel-accent:#f7a8cb; --panel-accent-soft:#513042; --panel-shadow:0 8px 24px #0002;
 }
-:root.dark[data-panel-theme='nvenix-minimal'] {
+:root.dark[data-panel-theme='minimal'] {
   --panel-bg:#101012; --panel-surface:#18181b; --panel-surface-soft:#242427;
   --panel-sidebar:#18181b; --panel-sidebar-ink:#f4f4f5; --panel-header:#18181b;
   --panel-text:#f4f4f5; --panel-muted:#a1a1aa; --panel-border:#303036;

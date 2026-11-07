@@ -56,6 +56,10 @@ panel-updater:
   token: ${PANEL_UPDATER_TOKEN:}
 
 panel:
+  # Private warm-up only: disables scheduled jobs, not API writes or startup migrations.
+  # A warm-up instance must not receive node WebSockets or node-management requests.
+  background-jobs:
+    enabled: ${PANEL_BACKGROUND_JOBS_ENABLED:true}
   initial-admin:
     username: ${PANEL_INITIAL_ADMIN_USERNAME:}
     password: ${PANEL_INITIAL_ADMIN_PASSWORD:}

@@ -31,7 +31,12 @@ public class AirportSyncService {
     private final TransactionTemplate transactions;
     private final String key;
     private final AirportConnectionService connections;
-    private final ExecutorService workers=Executors.newFixedThreadPool(4,r->{Thread t=new Thread(r,"airport-sync");t.setDaemon(true);return t;});
+    // No waiting batch: a slow destination must not stop idle workers serving other nodes.
+    // Reserve four of the default twelve database connections for normal panel requests.
+    private final ExecutorService workers=new ThreadPoolExecutor(8,8,0,TimeUnit.SECONDS,
+            new SynchronousQueue<>(),r->{Thread t=new Thread(r,"airport-sync");t.setDaemon(true);return t;},
+            new ThreadPoolExecutor.AbortPolicy());
+    private final Set<Long> inFlight=ConcurrentHashMap.newKeySet();
     private final AtomicBoolean running=new AtomicBoolean();
     private long cursor;
     Clock clock=Clock.systemUTC();
@@ -181,21 +186,32 @@ public class AirportSyncService {
         }));
     }
     @PreDestroy public void close() { workers.shutdownNow(); }
-    @Scheduled(initialDelay=5000,fixedDelay=5000) public void tick() {
+    @Scheduled(initialDelay=5000,fixedDelay=5000,scheduler="airportSyncScheduler") public void tick() {
         if (!running.compareAndSet(false,true)) return;
         try {
             List<Long> ids=jdbc.queryForList("SELECT node_id FROM node_airport_sync WHERE enabled=1 AND node_id>? ORDER BY node_id LIMIT 64",Long.class,cursor);
             if (ids.isEmpty()) {
                 cursor=0;
                 ids=jdbc.queryForList("SELECT node_id FROM node_airport_sync WHERE enabled=1 ORDER BY node_id LIMIT 64",Long.class);
-                if (ids.isEmpty()) { running.set(false);return; }
+                if (ids.isEmpty()) return;
             }
-            cursor=ids.getLast();
-            CompletableFuture<?>[] jobs=ids.stream().map(id->CompletableFuture.runAsync(()->{
-                try { process(id); } catch (RuntimeException failure) { /* Durable state remains for the next tick; no secret-bearing errors. */ }
-            },workers)).toArray(CompletableFuture[]::new);
-            CompletableFuture.allOf(jobs).whenComplete((r,e)->running.set(false));
-        } catch (RuntimeException failure) { running.set(false); }
+            for (Long id:ids) {
+                if (!inFlight.add(id)) { cursor=id;continue; }
+                try {
+                    workers.execute(()->{
+                        try { process(id); }
+                        catch (RuntimeException failure) { /* Durable state remains for the next tick; no secret-bearing errors. */ }
+                        finally { inFlight.remove(id); }
+                    });
+                    cursor=id;
+                } catch (RejectedExecutionException busy) {
+                    inFlight.remove(id);
+                    // Retry this node first next tick; never silently queue stale observations.
+                    break;
+                }
+            }
+        } catch (RuntimeException failure) { /* Retry the durable queue next tick. */ }
+        finally { running.set(false); }
     }
     void process(long id) {
         transactions.executeWithoutResult(tx->{
