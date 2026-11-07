@@ -71,6 +71,7 @@ public class NodeDeletionService {
         entryNodeMapper.delete(new QueryWrapper<TunnelEntryNode>().eq("node_id", id));
         deletionMapper.deleteNodeReservations(id);
         deletionMapper.deleteNodeCursors(id);
+        deletionMapper.deleteNodeAirportSync(id);
         if (nodeMapper.deleteById(id) != 1) throw new IllegalStateException("节点删除失败");
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override public void afterCommit() {

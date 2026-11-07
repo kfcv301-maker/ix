@@ -35,6 +35,7 @@ public class NodeAgentConfigService {
     @Resource private NodeMapper nodeMapper;
     @Resource private UserMapper userMapper;
     @Resource private ForwardPortReservationService portReservations;
+    @Resource private AirportReporterInstaller airportReporterInstaller;
     @Value("${jwt-secret}") private String jwtSecret;
     @Value("${agent.install.release:1.4.16}") private String agentInstallRelease;
 
@@ -73,6 +74,10 @@ public class NodeAgentConfigService {
         result.put("secret", node.getSecret());
         result.put("agentRelease", release);
         result.put("reservedPorts", portReservations.reservedPorts(node.getId(), null).stream().sorted().toList());
+        if (airportReporterInstaller!=null) {
+            JSONObject reporter=airportReporterInstaller.installation(node.getId());
+            if (reporter!=null) result.put("airportAddressReporter",reporter);
+        }
         return result;
     }
 
@@ -89,7 +94,7 @@ public class NodeAgentConfigService {
                 portReservations.reservedPorts(node.getId(), null).stream().sorted().toList());
     }
 
-    private Node authenticatedNode(String secret) {
+    public Node authenticatedNode(String secret) {
         if (StrUtil.isBlank(secret) || secret.length() > 256 || secret.contains("\n") || secret.contains("\r")) return null;
         Node node = nodeMapper.selectOne(new QueryWrapper<Node>().eq("secret", secret).last("LIMIT 1"));
         // MySQL collations may be case-insensitive; secrets never are.

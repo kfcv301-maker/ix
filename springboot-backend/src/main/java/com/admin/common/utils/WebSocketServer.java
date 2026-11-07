@@ -58,6 +58,20 @@ public class WebSocketServer extends TextWebSocketHandler {
 
     private static final String observationEpoch = java.util.UUID.randomUUID().toString();
 
+    /** Server-observed IP only; never exposes it in browser metrics or asks the Agent for work. */
+    public static com.admin.common.service.AirportSyncState.Sample airportSample(Long nodeId,long now) {
+        WebSocketSession session=nodeSessions.get(nodeId);
+        NodeMetricSnapshot snapshot=latestNodeMetrics.get(nodeId);
+        if (session==null || snapshot==null || !session.isOpen() || !session.getId().equals(snapshot.sessionId())
+                || Boolean.TRUE.equals(session.getAttributes().get("monitorRetired"))
+                || now<snapshot.receivedAt() || now-snapshot.receivedAt()>MAX_SNAPSHOT_AGE_MS) return null;
+        Object ip=session.getAttributes().get(com.admin.config.AirportPeerSource.ATTRIBUTE);
+        Object secret=session.getAttributes().get("nodeSecret");
+        if (!(ip instanceof String) || !(secret instanceof String) || nodeSessions.get(nodeId)!=session) return null;
+        return new com.admin.common.service.AirportSyncState.Sample((String)ip,snapshot.receivedAt(),
+                observationEpoch+":"+session.getId(),com.admin.common.service.AirportSyncState.digest((String)secret));
+    }
+
     /** Read existing reports only. Never sends commands or changes Agent connection state. */
     public static com.admin.common.service.NodeContinuityObservation.Sample continuitySample(Long nodeId, long now) {
         NodeMetricSnapshot snapshot=latestNodeMetrics.get(nodeId);

@@ -45,6 +45,9 @@ public class WebSocketInterceptor extends HttpSessionHandshakeInterceptor {
     @Resource
     BrowserWebSocketOriginPolicy browserWebSocketOriginPolicy;
 
+    @Resource
+    AirportPeerSource airportPeerSource;
+
     @Override
     public void afterHandshake(ServerHttpRequest request, ServerHttpResponse response, WebSocketHandler wsHandler, Exception ex) {
 
@@ -70,6 +73,8 @@ public class WebSocketInterceptor extends HttpSessionHandshakeInterceptor {
             }
             attributes.put("id", node.getId());
             attributes.put("nodeSecret", secret);
+            String verifiedPeer=airportPeerSource==null ? null : airportPeerSource.resolveRequest(servletRequest);
+            if (verifiedPeer!=null) attributes.put(AirportPeerSource.ATTRIBUTE,verifiedPeer);
             attributes.put("nodeVersion", version);
             attributes.put("http",http);
             attributes.put("tls",tls);

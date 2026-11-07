@@ -324,7 +324,19 @@ python3 - "$WORK/config.json" <<'PY'
 import json,sys
 path=sys.argv[1]
 with open(path) as source: data=json.load(source)
+reporter=data.pop('airportAddressReporter',None)
+if reporter is not None:
+    import base64,hashlib,pathlib
+    if not isinstance(reporter,dict) or reporter.get('enabled') is not True: raise ValueError('Invalid optional observer')
+    script=base64.b64decode(reporter['scriptBase64'],validate=True)
+    if len(script)>131072 or hashlib.sha256(script).hexdigest()!=reporter.get('sha256'): raise ValueError('Invalid optional observer digest')
+    pathlib.Path(path).with_name('airport-address-reporter.py').write_bytes(script)
 data.pop('reservedPorts',None)
 with open(path,'w') as target: json.dump(data,target)
 PY
 AGENT_RELEASE="$RELEASE" AGENT_RELEASE_BASE="$BASE" bash "$WORK/install.sh" --config-file "$WORK/config.json"
+
+# Optional node-to-panel observer; legacy panels omit the field and keep the old behavior.
+if [[ -f "$WORK/airport-address-reporter.py" ]]; then
+  python3 "$WORK/airport-address-reporter.py" --install --root /etc/flux-panel-agent
+fi

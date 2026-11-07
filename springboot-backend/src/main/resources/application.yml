@@ -72,6 +72,12 @@ agent:
   install:
     release: ${AGENT_INSTALL_RELEASE:1.4.16}
 
+# Opt-in bridge; capture transport identity before Spring rewrites forwarded headers.
+# Never enable until the actual proxy chain and ingress/egress IP equivalence are verified.
+airport-sync:
+  source-mode: ${AIRPORT_SYNC_SOURCE_MODE:off}
+  trusted-proxies: ${AIRPORT_SYNC_TRUSTED_PROXIES:}
+
 vps:
   credential-key: ${VPS_CREDENTIAL_KEY:}
   backend-install:

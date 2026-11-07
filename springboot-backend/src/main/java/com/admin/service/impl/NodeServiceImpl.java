@@ -90,6 +90,9 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
     private NodeAgentConfigService agentConfigService;
 
     @Resource
+    private com.admin.common.service.AirportReporterInstaller airportReporterInstaller;
+
+    @Resource
     private TunnelEntryNodeMapper tunnelEntryNodeMapper;
 
     @Resource
@@ -652,6 +655,7 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
         } else {
             command.append(" --disable-ddns");
         }
+        if (airportReporterInstaller!=null) command.append(airportReporterInstaller.shell(node.getId()));
         return R.ok(command.toString());
     }
 

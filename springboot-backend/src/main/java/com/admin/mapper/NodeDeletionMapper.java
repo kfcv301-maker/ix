@@ -26,6 +26,9 @@ public interface NodeDeletionMapper {
     @Delete("DELETE FROM flow_report_cursor WHERE node_id = #{id}")
     int deleteNodeCursors(Long id);
 
+    @Delete("DELETE FROM node_airport_sync WHERE node_id = #{id}")
+    int deleteNodeAirportSync(Long id);
+
     @Delete("DELETE FROM forward_port_reservation WHERE node_id = #{id}")
     int deleteNodeReservations(Long id);
 }

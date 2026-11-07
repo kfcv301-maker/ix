@@ -55,6 +55,16 @@ export const getRealtimeNodes = () => Network.post<RealtimeNode[]>("/realtime/no
 // 节点CRUD操作 - 全部使用POST请求
 export const createNode = (data: any) => Network.post("/node/create", data);
 export const getNodeList = () => Network.post("/node/list");
+export interface AirportSyncSettings {
+  nodeId: number; enabled: boolean; endpoint: string; bindingId: string; hasToken: boolean;
+  revision: number; status: string; lastIp: string; sourceIp: string; lastSuccessAt: number;
+  sourceMode: 'peer' | 'aws-imds';
+  nextAttemptAt: number; attempts: number;
+}
+export const getAirportSync = (nodeId: number) => Network.post<AirportSyncSettings>('/node/airport-sync/get', { nodeId });
+export const saveAirportSync = (data: Pick<AirportSyncSettings, 'nodeId' | 'enabled' | 'endpoint' | 'bindingId' | 'revision' | 'sourceMode'> & { token: string }) => Network.post<AirportSyncSettings>('/node/airport-sync/save', data);
+export const removeAirportSync = (nodeId: number, revision: number) => Network.post('/node/airport-sync/remove', { nodeId, revision });
+export const getAirportObserver = (nodeId: number) => Network.post<{ scriptBase64: string; sha256: string }>('/node/airport-sync/observer', { nodeId });
 export interface NodeIpSummary {
   nodeId: number; target: string; ddnsEnabled: boolean; source: 'dns' | 'configured';
   status: string; addresses: string[]; checkedAt: number; resolvedAt: number;

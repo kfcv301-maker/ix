@@ -4,6 +4,7 @@ No service, DNS record or real installation is touched. Synthetic credentials
 must only travel in the private panel request / JSON file, never release args.
 """
 import hashlib
+import base64
 import json
 import os
 from pathlib import Path
@@ -24,6 +25,7 @@ import json,os,sys
 from pathlib import Path
 data=json.load(open(sys.argv[1]))
 assert 'reservedPorts' not in data
+assert 'airportAddressReporter' not in data
 assert os.path.getsize(sys.argv[1]) <= 65536
 Path(os.environ['BOOTSTRAP_RESULT']).write_text(json.dumps({'secret':data['secret'],'record':data['ddns']['recordName'],'panel':data['panelUrl'],'release':os.environ['AGENT_RELEASE'],'base':os.environ['AGENT_RELEASE_BASE']}))
 PY
@@ -32,7 +34,7 @@ PY
 
 @unittest.skipUnless(BASH, 'bash required')
 class NodeBootstrapTest(unittest.TestCase):
-    def exercise(self, *, record='one.example.invalid', reject=False, corrupt=False, panel='https://panel.example.invalid', reserved_ports=None):
+    def exercise(self, *, record='one.example.invalid', reject=False, corrupt=False, panel='https://panel.example.invalid', reserved_ports=None, reporter=False, bad_reporter=False):
         with tempfile.TemporaryDirectory(prefix='node-bootstrap-') as folder:
             work = Path(folder)
             # Root is required by the real entry. The isolated copy only runs
@@ -50,6 +52,9 @@ class NodeBootstrapTest(unittest.TestCase):
             response = {'schemaVersion': 1, 'nodeId': 27, 'secret': 'private-node-secret', 'agentRelease': '1.4.15',
                         'ddns': {'enabled': True, 'provider': 'cloudflare', 'apiToken': 'private-cloudflare-token', 'recordName': record, 'intervalSeconds': 60}}
             if reserved_ports is not None: response['reservedPorts'] = reserved_ports
+            if reporter:
+                observer = b'import os,sys,pathlib\nassert sys.argv[1:]==["--install","--root","/etc/flux-panel-agent"]\npathlib.Path(os.environ["BOOTSTRAP_FIXTURES"],"observer-installed").write_text("isolated")\n'
+                response['airportAddressReporter'] = {'enabled': True, 'scriptBase64': base64.b64encode(observer).decode(), 'sha256': '0'*64 if bad_reporter else hashlib.sha256(observer).hexdigest()}
             (work / 'response.json').write_text(json.dumps(response))
             (work / 'release.sh').write_text(MOCK_RELEASE, newline='\n')
             digest = '0' * 64 if corrupt else hashlib.sha256((work / 'release.sh').read_bytes()).hexdigest()
@@ -75,6 +80,7 @@ shutil.copyfile(source,out)
             (bindir / 'curl').write_text(mock, encoding='utf-8', newline='\n'); (bindir / 'curl').chmod(0o755)
             result = work / 'result.json'
             env = dict(os.environ, PATH=str(bindir) + os.pathsep + os.environ.get('PATH', ''), BOOTSTRAP_BIN=str(bindir), BASH_ENV=str(bashenv), BOOTSTRAP_FIXTURES=str(work), BOOTSTRAP_RESULT=str(result), BOOTSTRAP_REJECT='1' if reject else '0')
+            if os.name == 'nt': env['MSYS2_ARG_CONV_EXCL'] = '/etc/flux-panel-agent'
             process = subprocess.run([BASH, str(work / 'entry.sh'), '--panel', panel, '--node-id', '27', '--install-key', KEY], env=env, capture_output=True, text=True, encoding='utf-8', timeout=20)
             log = process.stdout + process.stderr
             for secret in (KEY, 'private-cloudflare-token', 'private-node-secret'):
@@ -84,7 +90,25 @@ shutil.copyfile(source,out)
                 self.assertNotIn(KEY, ' '.join(args))
                 self.assertNotIn('private-cloudflare-token', ' '.join(args))
             data = json.loads(result.read_text()) if result.exists() else None
+            if data is not None: data['observerInstalled'] = (work/'observer-installed').exists()
             return process.returncode, data, requests, log
+
+    def test_optional_reporter_installs_after_legacy_agent_without_changing_command(self):
+        code, result, requests, log = self.exercise(reporter=True)
+        self.assertEqual(code, 0, log)
+        self.assertTrue(result['observerInstalled'])
+        self.assertEqual(result['release'], '1.4.15')
+        self.assertEqual(len(requests), 3)
+
+    def test_old_panel_does_not_install_optional_reporter(self):
+        code, result, _, log = self.exercise()
+        self.assertEqual(code, 0, log)
+        self.assertFalse(result['observerInstalled'])
+
+    def test_corrupt_optional_package_never_executes(self):
+        code, result, _, _ = self.exercise(reporter=True, bad_reporter=True)
+        self.assertNotEqual(code, 0)
+        self.assertIsNone(result)
 
     def test_same_command_fetches_latest_domain_without_exposing_credentials(self):
         for domain in ('one.example.invalid', 'changed.example.invalid'):
