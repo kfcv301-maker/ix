@@ -87,6 +87,7 @@ public class CheckGostConfigAsync {
         }
         Node node = nodeService.getById(node_id);
         if (node != null) {
+            com.admin.common.service.TrafficPoolInventory.record(node.getId(),gostConfig,System.currentTimeMillis());
             if (isDuplicateInventory(node.getId(), gostConfig)) {
                 log.debug("节点 {} 的配置清单未变化，跳过重复全量对账", node.getId());
             } else {

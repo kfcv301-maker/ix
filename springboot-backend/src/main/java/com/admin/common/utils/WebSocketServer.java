@@ -58,6 +58,16 @@ public class WebSocketServer extends TextWebSocketHandler {
 
     private static final String observationEpoch = java.util.UUID.randomUUID().toString();
 
+    /** Passive counters only, for administrator pool estimates; never asks an Agent for work. */
+    public static com.admin.common.service.TrafficPoolState.TrafficSample trafficPoolSample(Long nodeId,long now) {
+        var sample=continuitySample(nodeId,now);
+        var snapshot=latestNodeMetrics.get(nodeId);
+        if(sample==null || snapshot==null || !sample.session().equals(snapshot.sessionId()))return null;
+        var rx=snapshot.summary().getLong("bytes_received");var tx=snapshot.summary().getLong("bytes_transmitted");
+        if(rx==null || tx==null || rx<0 || tx<0)return null;
+        return new com.admin.common.service.TrafficPoolState.TrafficSample(snapshot.receivedAt(),sample.uptime(),rx,tx);
+    }
+
     /** Server-observed IP only; never exposes it in browser metrics or asks the Agent for work. */
     public static com.admin.common.service.AirportSyncState.Sample airportSample(Long nodeId,long now) {
         WebSocketSession session=nodeSessions.get(nodeId);

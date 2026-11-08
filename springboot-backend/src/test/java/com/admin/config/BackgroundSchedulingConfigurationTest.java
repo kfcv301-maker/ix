@@ -28,6 +28,7 @@ class BackgroundSchedulingConfigurationTest {
             assertNull(context.getStartupFailure());assertNotNull(context.getBean(Job.class));
             assertTrue(context.getBeansOfType(ScheduledAnnotationBeanPostProcessor.class).isEmpty());
             assertFalse(context.containsBean("airportSyncScheduler"));
+            assertFalse(context.containsBean("trafficPoolScheduler"));
         });
     }
 }

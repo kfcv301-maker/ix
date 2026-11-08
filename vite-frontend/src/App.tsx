@@ -15,6 +15,7 @@ const DashboardPage = lazy(() => import("@/pages/dashboard"));
 const ForwardPage = lazy(() => import("@/pages/forward"));
 const TunnelPage = lazy(() => import("@/pages/tunnel"));
 const NodePage = lazy(() => import("@/pages/node"));
+const TrafficPoolsPage = lazy(() => import("@/pages/traffic-pools"));
 const UserPage = lazy(() => import("@/pages/user"));
 const ProfilePage = lazy(() => import("@/pages/profile"));
 const LimitPage = lazy(() => import("@/pages/limit"));
@@ -111,6 +112,7 @@ function App() {
   return (
     <PageErrorBoundary key={location.pathname}>
     <Routes>
+      <Route path="/traffic-pools" element={<ProtectedRoute><Suspense fallback={<PageFallback />}><TrafficPoolsPage /></Suspense></ProtectedRoute>}/>
       <Route path="/" element={<LoginRoute />} />
       <Route 
         path="/change-password" 
