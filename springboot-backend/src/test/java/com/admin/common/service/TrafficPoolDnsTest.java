@@ -47,4 +47,9 @@ class TrafficPoolDnsTest {
         provider.adopt(zone,record("8.8.8.8","manual"),domain,owner,"fixture");assertEquals(List.of("GET","PATCH"),methods);
         assertThrows(IllegalStateException.class,()->provider.adopt(zone,record("8.8.8.8","lunaris-pool/someone-else"),domain,owner,"fixture"));assertEquals(2,methods.size());
     }
+    @Test void sameTextInTxtRecordCannotBeMistakenForAnAddressRecord() {
+        var txt=new TrafficPoolDns.Record(id,"TXT",domain,"8.8.8.8",owner,false);
+        var plan=dns.plan(List.of(txt),owner,List.of("8.8.8.8"),true);
+        assertEquals(1,plan.size());assertEquals("add",plan.getFirst().get("action"));
+    }
 }

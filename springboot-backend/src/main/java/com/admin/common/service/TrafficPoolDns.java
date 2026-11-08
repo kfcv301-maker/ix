@@ -44,7 +44,8 @@ public class TrafficPoolDns {
     }
     public Record create(String zone,String domain,String ip,int ttl,String owner,String token) {
         var r=request("POST",path(zone),token,JSONObject.of("type",ip.contains(":")?"AAAA":"A","name",domain,"content",ip,"ttl",ttl,"proxied",false,"comment",owner)).getJSONObject("result");
-        if(r==null || !ip.equals(normalize(r.getString("content"))) || !domain.equalsIgnoreCase(r.getString("name")) || !owner.equals(r.getString("comment")) || r.getBooleanValue("proxied")) throw new IllegalStateException("新增 DNS 记录未获正确回执");
+        if(r==null || r.getString("id")==null || !r.getString("id").matches("[a-f0-9]{32}") || !(ip.contains(":")?"AAAA":"A").equals(r.getString("type"))
+                || !ip.equals(normalize(r.getString("content"))) || !domain.equalsIgnoreCase(r.getString("name")) || !owner.equals(r.getString("comment")) || r.getBooleanValue("proxied")) throw new IllegalStateException("新增 DNS 记录未获正确回执");
         return new Record(r.getString("id"),r.getString("type"),domain,ip,owner,false);
     }
     public void delete(String zone,Record record,String domain,String owner,String token) {
@@ -78,7 +79,7 @@ public class TrafficPoolDns {
             throw new IllegalStateException("该域名存在未托管或代理记录，请使用专用空子域名；不会覆盖或删除原记录");
         if(desired.isEmpty() && keepLast)return List.of();
         var changes=new ArrayList<Map<String,String>>();
-        for(String ip:desired) if(records.stream().noneMatch(r->owner.equals(r.comment()) && ip.equals(normalize(r.content()))))changes.add(Map.of("action","add","ip",ip));
+        for(String ip:desired) if(records.stream().noneMatch(r->owner.equals(r.comment()) && (ip.contains(":")?"AAAA":"A").equals(r.type()) && ip.equals(normalize(r.content()))))changes.add(Map.of("action","add","ip",ip));
         for(var r:records) if(owner.equals(r.comment()) && Set.of("A","AAAA").contains(r.type()) && !desired.contains(normalize(r.content())))changes.add(Map.of("action","remove","ip",normalize(r.content()),"recordId",r.id()));
         return changes; // Additions are always performed before removals.
     }
