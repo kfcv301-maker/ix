@@ -1,9 +1,12 @@
 # Traffic pools and inventory groups
 
-Administrators use **流量池** in the sidebar to collect nodes, configure allowances,
-bind existing administrator tunnels and manage a dedicated DNS entry name.
-The separate **DDNS 管理** sidebar opens the DNS-focused view of the same members,
-settings and audit records; it does not create a second competing DNS writer.
+Administrators use **节点流量池管理** in the sidebar to collect nodes, configure
+allowances, and bind existing administrator tunnels. Each pool has one dedicated
+entry domain shared by all of its eligible nodes. Select the pool and open
+**入口解析** to see that domain, review its candidate addresses and manage its
+automatic DNS updates. A pool can be saved before configuring its entry domain.
+Another pool cannot use the same domain. Members are added explicitly; inventory
+groups can be used to select several nodes at once.
 **节点分组** and **服务器分组** classify the two inventories independently; sharing a
 group name does not link a VPS to a forwarding identity or change permissions.
 Ordinary users cannot call these endpoints or read the provider credentials.

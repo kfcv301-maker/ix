@@ -112,8 +112,7 @@ function App() {
   return (
     <PageErrorBoundary key={location.pathname}>
     <Routes>
-      <Route path="/traffic-pools" element={<ProtectedRoute><Suspense fallback={<PageFallback />}><TrafficPoolsPage key="pools" /></Suspense></ProtectedRoute>}/>
-      <Route path="/ddns" element={<ProtectedRoute><Suspense fallback={<PageFallback />}><TrafficPoolsPage key="ddns" dnsOnly /></Suspense></ProtectedRoute>}/>
+      <Route path="/traffic-pools" element={<ProtectedRoute><Suspense fallback={<PageFallback />}><TrafficPoolsPage /></Suspense></ProtectedRoute>}/>
       <Route path="/" element={<LoginRoute />} />
       <Route 
         path="/change-password" 
