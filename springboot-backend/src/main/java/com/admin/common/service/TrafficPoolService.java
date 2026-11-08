@@ -29,7 +29,7 @@ public class TrafficPoolService {
     private final TunnelIngressNodeResolver ingress;private final TrafficPoolDns dns;private final TrafficPoolObserver observer;
     private final TransactionTemplate tx;private final String key;
     private final AtomicBoolean running=new AtomicBoolean();
-    private final ExecutorService worker=new ThreadPoolExecutor(4,4,0,TimeUnit.SECONDS,new SynchronousQueue<>(),r->{var t=new Thread(r,"traffic-pool");t.setDaemon(true);return t;},new ThreadPoolExecutor.AbortPolicy());
+    private final ExecutorService worker=new ThreadPoolExecutor(2,2,0,TimeUnit.SECONDS,new SynchronousQueue<>(),r->{var t=new Thread(r,"traffic-pool");t.setDaemon(true);return t;},new ThreadPoolExecutor.AbortPolicy());
     private final Set<String> inFlight=ConcurrentHashMap.newKeySet();private String cursor="";
     Clock clock=Clock.systemUTC();long startedAt=System.currentTimeMillis();
     public TrafficPoolService(JdbcTemplate jdbc,NodeGroupService groups,NodeMapper nodes,TunnelMapper tunnels,ForwardMapper forwards,
@@ -171,7 +171,7 @@ public class TrafficPoolService {
     }
     String fingerprint(List<TrafficPoolDns.Record> records){return AirportSyncState.digest(JSON.toJSONString(records.stream().sorted(Comparator.comparing(TrafficPoolDns.Record::id)).toList()));}
     boolean canAdopt(TrafficPoolState p,List<TrafficPoolDns.Record> records){
-        if(records.isEmpty() || records.size()>64 || records.stream().anyMatch(r->"CNAME".equals(r.type())))return false;
+        if(records.isEmpty() || records.size()>512 || records.stream().anyMatch(r->"CNAME".equals(r.type())))return false;
         var ips=new HashSet<String>();for(var m:members(p.id)){var n=nodes.selectById(m.nodeId);if(n!=null)ips.addAll(observer.addresses(n));}
         var candidates=records.stream().filter(r->Set.of("A","AAAA").contains(r.type())).toList();
         return candidates.stream().anyMatch(r->!owner(p).equals(r.comment())) && candidates.stream().allMatch(r->!r.proxied() && ips.contains(TrafficPoolDns.normalize(r.content()))

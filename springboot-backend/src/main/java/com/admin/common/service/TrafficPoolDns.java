@@ -30,7 +30,7 @@ public class TrafficPoolDns {
     }
     public List<Record> list(String zone,String domain,String token) {
         var result=new ArrayList<Record>();
-        for(int page=1;page<=4;page++) {
+        for(int page=1;page<=8;page++) {
             var reply=request("GET",path(zone)+"?name="+URLEncoder.encode(domain,java.nio.charset.StandardCharsets.UTF_8)+"&per_page=100&page="+page,token,null);
             var rows=reply.getJSONArray("result");if(rows==null)throw new IllegalStateException("DNS 回执无效");
             for(int i=0;i<rows.size();i++) {

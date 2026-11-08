@@ -2,6 +2,8 @@
 
 Administrators use **流量池** in the sidebar to collect nodes, configure allowances,
 bind existing administrator tunnels and manage a dedicated DNS entry name.
+The separate **DDNS 管理** sidebar opens the DNS-focused view of the same members,
+settings and audit records; it does not create a second competing DNS writer.
 **节点分组** and **服务器分组** classify the two inventories independently; sharing a
 group name does not link a VPS to a forwarding identity or change permissions.
 Ordinary users cannot call these endpoints or read the provider credentials.
@@ -55,6 +57,8 @@ It never rewrites a running listener to add a peer. New nodes reuse the existing
 missing-service recovery mechanism. They wait for an actual post-recovery Agent
 inventory and probe confirmation before being published in DNS. Older Agents may
 take approximately ten minutes to send their next periodic inventory.
+Inventory evidence is scoped to the current authenticated control connection;
+a replacement machine cannot reuse a previous machine's cached service list.
 
 Members can enter maintenance mode, which withdraws their DNS candidacy while
 retaining identities, usage, tunnel membership, reservations and old connections.

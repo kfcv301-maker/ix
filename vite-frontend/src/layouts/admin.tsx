@@ -134,6 +134,7 @@ export default function AdminLayout({
       adminOnly: false
     },
     { path: '/traffic-pools', label: '流量池', group: 'forwarding', adminOnly: true, icon: <ConsoleIcon name="globe" size={20}/> },
+    { path: '/ddns', label: 'DDNS 管理', group: 'forwarding', adminOnly: true, icon: <ConsoleIcon name="globe" size={20}/> },
     {
       path: '/node',
       label: '节点监控',
@@ -325,8 +326,8 @@ export default function AdminLayout({
 
   const groups = [
     { label: '工作台', items: filteredMenuItems.filter(item => item.path === '/dashboard') },
-    { label: '业务管理', items: filteredMenuItems.filter(item => ['/forward', '/tunnel', '/traffic-pools', '/node', '/vps'].includes(item.path)) },
-    { label: '系统与账户', items: filteredMenuItems.filter(item => !['/dashboard', '/forward', '/tunnel', '/traffic-pools', '/node', '/vps'].includes(item.path)) },
+    { label: '业务管理', items: filteredMenuItems.filter(item => ['/forward', '/tunnel', '/traffic-pools', '/ddns', '/node', '/vps'].includes(item.path)) },
+    { label: '系统与账户', items: filteredMenuItems.filter(item => !['/dashboard', '/forward', '/tunnel', '/traffic-pools', '/ddns', '/node', '/vps'].includes(item.path)) },
   ];
   const commandItems = filteredMenuItems.filter(item => (item.label + item.path).toLowerCase().includes(commandQuery.toLowerCase().trim()));
   const collapsed = sidebarCollapsed && !isMobile;
