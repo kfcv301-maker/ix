@@ -20,6 +20,7 @@ const paths: Record<string, ReactNode> = {
   arrow: <path d="M5 12h14m-5-5 5 5-5 5"/>,
   theme: <><path d="M21 12a9 9 0 1 1-9-9c1 0 2 .2 3 .5a3 3 0 0 0 5.5 5.5c.3 1 .5 2 .5 3Z"/><path d="M7 11h.01M10 7h.01M7 16h.01"/></>,
   logout: <><path d="M9 3H4v18h5m5-14 5 5-5 5m-7-5h12"/></>,
+  'traffic-pools': <><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></>,
   edit: <><path d="m14 5 5 5M3 21l5-1L21 7a2 2 0 0 0-5-5L3 15v6Z"/></>,
   activity: <path d="M2 12h5l3-8 4 16 3-8h5"/>,
   more: <><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></>,
