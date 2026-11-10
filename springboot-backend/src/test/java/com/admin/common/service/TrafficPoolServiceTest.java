@@ -88,6 +88,21 @@ class TrafficPoolServiceTest {
         service.process(id);at(20000);service.process(id);assertTrue(dns.records.isEmpty());
         assertTrue(((List<?>)service.get(9L,id).get("desiredAddresses")).isEmpty());
     }
+    @Test void legacyDirectTunnelCanKeepItsIngressEvenWhenStoredAsOutNode(){
+        var tunnel=new Tunnel();tunnel.setId(10L);tunnel.setType(1);tunnel.setInNodeId(1L);tunnel.setOutNodeId(1L);
+        when(tunnels.selectById(10L)).thenReturn(tunnel);when(ingress.resolveNodeIds(tunnel)).thenReturn(Set.of(1L,2L));
+        jdbc.update("INSERT INTO tunnel_entry_node(tunnel_id,node_id,created_time,status) VALUES(10,1,1,1),(10,2,1,1)");
+        var pool=service.save(9L,settings("",0,false,inputs(),List.of(10L)));
+        assertEquals(List.of(10L),pool.get("tunnelIds"));
+        assertEquals(List.of(1L,2L),jdbc.queryForList("SELECT node_id FROM tunnel_entry_node ORDER BY id",Long.class));
+        verifyNoInteractions(ports,forwards);
+    }
+    @Test void chainedTunnelStillRejectsItsActualEgressAsPoolMember(){
+        var tunnel=new Tunnel();tunnel.setId(10L);tunnel.setType(2);tunnel.setInNodeId(1L);tunnel.setOutNodeId(2L);
+        when(tunnels.selectById(10L)).thenReturn(tunnel);when(ingress.resolveNodeIds(tunnel)).thenReturn(Set.of(1L));
+        assertThrows(IllegalArgumentException.class,()->service.save(9L,settings("",0,false,inputs(),List.of(10L))));
+        assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM traffic_pool",Integer.class));
+    }
     @Test void changingIpAddsConfirmedNewAddressBeforeDeletingOldAddress(){
         var id=create(true);service.process(id);at(20000);service.process(id);
         when(observer.addresses(nodes.selectById(1L))).thenReturn(List.of("8.8.4.4"));

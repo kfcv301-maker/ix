@@ -138,11 +138,14 @@ public class TrafficPoolService {
             if(id==null || jdbc.queryForList("SELECT id FROM tunnel WHERE id=? FOR UPDATE",id).isEmpty())throw new IllegalArgumentException("隧道不存在");
             var tunnel=tunnels.selectById(id);
             if(tunnel.getOwnerUserId()!=null)throw new IllegalArgumentException("只能绑定管理员创建的隧道");
-            if(desired.isEmpty() || tunnel.getOutNodeId()!=null && desired.contains(tunnel.getOutNodeId()))throw new IllegalArgumentException("池不能为空，且不能包含隧道出口节点");
+            if(desired.isEmpty() || Objects.equals(tunnel.getType(),2) && tunnel.getOutNodeId()!=null && desired.contains(tunnel.getOutNodeId()))throw new IllegalArgumentException("池不能为空，且不能包含隧道出口节点");
             var owner=jdbc.queryForList("SELECT pool_id FROM traffic_pool_tunnel WHERE tunnel_id=?",String.class,id);
             if(!owner.isEmpty() && !p.id.equals(owner.getFirst()))throw new IllegalArgumentException("隧道已绑定其他流量池");
-            if(!desired.containsAll(ingress.resolveNodeIds(tunnel)))throw new IllegalArgumentException("请将隧道现有全部入口加入池，保留旧连接");
+            var existing=ingress.resolveNodeIds(tunnel);
+            if(!desired.containsAll(existing))throw new IllegalArgumentException("请将隧道现有全部入口加入池，保留旧连接");
             if(owner.isEmpty())jdbc.update("INSERT INTO traffic_pool_tunnel VALUES(?,?)",id,p.id);
+            // Linking the existing topology does not need to touch its port claims.
+            if(existing.containsAll(desired))continue;
             long now=clock.millis();
             for(Long node:desired)if(jdbc.queryForList("SELECT id FROM tunnel_entry_node WHERE tunnel_id=? AND node_id=?",id,node).isEmpty())
                 jdbc.update("INSERT INTO tunnel_entry_node(tunnel_id,node_id,created_time,status) VALUES(?,?,?,1)",id,node,now);
