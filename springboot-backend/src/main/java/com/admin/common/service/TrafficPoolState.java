@@ -7,7 +7,7 @@ public class TrafficPoolState {
     public String id="",name="",mode="individual",direction="both",domain="",zoneId="",encryptedToken="",dnsStatus="disabled";
     public long revision,quotaBytes,checkedAt,lastSyncedAt;
     public int resetDay=1,probePort=443,failureThreshold=3,recoveryThreshold=2,ttl=60;
-    public boolean dnsEnabled,keepLastAddress=true;
+    public boolean dnsEnabled,keepLastAddress;
     public List<Long> tunnelIds=new ArrayList<>();
     public static class Member {
         public long nodeId,quotaBytes,usedBytes,lastRx,lastTx,lastAt,bootAt;

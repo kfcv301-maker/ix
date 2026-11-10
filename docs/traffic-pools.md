@@ -29,26 +29,24 @@ adopted. Stop other automatic writers before adopting their records.
 
 Checks run around every 20 seconds under normal load, on an isolated scheduler.
 The defaults require three failed checks to withdraw an address and two
-successful checks before adding it. Probes use public numeric addresses, bounded
-parallel sockets and a configured TCP port. A socket connection tests TCP
-reachability, not a full application transaction or every UDP forwarding path.
-Unknown or cancelled probes do not count as failures. Startup has a two-minute
-withdrawal grace period. A lost control heartbeat alone does not withdraw an
-already healthy TCP endpoint.
-
-Address observations use a fresh, credential-matched existing AWS IMDS report
-where available, otherwise the configured node address or its own DDNS hostname.
-They do not infer ingress addresses from arbitrary outbound-IP metrics.
-Private and mixed public/private answers are rejected. No node software is
-upgraded or restarted to add this feature.
+successful checks before adding it. Each participating member must have a public
+IP literal in the node's **服务器地址** field. The pool probes that IP and the
+configured TCP port directly; the pool domain, node hostname, node DDNS record,
+and reported source addresses are not probe targets. A socket connection tests
+TCP reachability, not a full application transaction or every UDP forwarding path.
+Each successful check also needs an online node and a report received from its
+current authenticated Agent session in the last 30 seconds. A stale report or
+offline node counts as a failure even if TCP still responds. Unknown or cancelled
+probes do not count as TCP failures. Startup has a two-minute withdrawal grace
+period for previously eligible addresses. No node software upgrade is required.
 
 Adds occur before deletes. Deletion rechecks the exact provider record ID,
 type, name, value and ownership comment. Each reconciliation has a bounded write
 budget, so larger changes can continue over subsequent checks. Provider failures
 are shown as errors and retried; a successful state requires a provider readback.
-When every member is unhealthy, the default holds existing records and reports
-the condition. Disabling this protection allows all owned address records to be
-removed. DNS TTL is at least 60 seconds; client cache expiry is separate from
+When every member is unhealthy, the default also withdraws the last owned
+address. Administrators can opt in to retain existing records in that situation.
+DNS TTL is at least 60 seconds; client cache expiry is separate from
 provider acceptance. Disabling automation leaves existing records in place.
 
 ## Tunnel membership and active connections

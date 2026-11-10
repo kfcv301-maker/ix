@@ -37,14 +37,16 @@ class TrafficPoolServiceTest {
         new TrafficPoolMigration(jdbc).migrate();new TrafficPoolMigration(jdbc).migrate();
         var admin=new User();admin.setId(9L);admin.setRoleId(0);admin.setStatus(1);when(users.selectById(9L)).thenReturn(admin);
         var ordinary=new User();ordinary.setId(8L);ordinary.setRoleId(1);ordinary.setStatus(1);when(users.selectById(8L)).thenReturn(ordinary);
-        for(long id=1;id<=2;id++){var n=new Node();n.setId(id);n.setName("node "+id);n.setServerIp(id==1?"8.8.8.8":"1.1.1.1");n.setPortSta(10000);n.setPortEnd(60000);when(nodes.selectById(id)).thenReturn(n);when(observer.addresses(n)).thenReturn(List.of(n.getServerIp()));}
+        for(long id=1;id<=2;id++){var n=new Node();n.setId(id);n.setName("node "+id);n.setServerIp(id==1?"8.8.8.8":"1.1.1.1");n.setStatus(1);n.setPortSta(10000);n.setPortEnd(60000);when(nodes.selectById(id)).thenReturn(n);when(observer.addresses(n)).thenReturn(List.of(n.getServerIp()));}
         when(observer.probe(anyString(),anyInt())).thenReturn(true);
+        when(observer.reported(anyLong(),anyLong())).thenReturn(true);
         when(observer.probeAll(anyCollection(),anyInt())).thenAnswer(call->{var result=new HashMap<String,Boolean>();for(String ip:(Collection<String>)call.getArgument(0))result.put(ip,observer.probe(ip,call.getArgument(1)));return result;});
         var tm=new DataSourceTransactionManager(ds);groups=new NodeGroupService(jdbc,users,nodes,tm);
         service=new TrafficPoolService(jdbc,groups,nodes,tunnels,forwards,ports,ingress,dns,observer,tm,"isolated-test-key");service.startedAt=now-120000;at(0);
     }
     void at(long elapsed){service.clock=Clock.fixed(Instant.ofEpochMilli(now+elapsed),ZoneOffset.UTC);when(observer.metrics(anyLong(),anyLong())).thenReturn(new TrafficPoolState.TrafficSample(now+elapsed,100+elapsed/1000,100+elapsed,200+elapsed));}
-    TrafficPoolService.Settings settings(String id,long revision,boolean dnsOn,List<TrafficPoolService.MemberInput> members,List<Long> tunnelIds){return new TrafficPoolService.Settings(id,"fixture pool",revision,"individual","both",0,1,"pool.example.com","a".repeat(32),id.isEmpty()?"fixture-token-"+"x".repeat(32):"",dnsOn,dnsOn?"pool.example.com":"",10000,3,2,60,true,members,tunnelIds);}
+    TrafficPoolService.Settings settings(String id,long revision,boolean dnsOn,List<TrafficPoolService.MemberInput> members,List<Long> tunnelIds){return settings(id,revision,dnsOn,members,tunnelIds,false);}
+    TrafficPoolService.Settings settings(String id,long revision,boolean dnsOn,List<TrafficPoolService.MemberInput> members,List<Long> tunnelIds,boolean keepLast){return new TrafficPoolService.Settings(id,"fixture pool",revision,"individual","both",0,1,"pool.example.com","a".repeat(32),id.isEmpty()?"fixture-token-"+"x".repeat(32):"",dnsOn,dnsOn?"pool.example.com":"",10000,3,2,60,keepLast,members,tunnelIds);}
     List<TrafficPoolService.MemberInput> inputs(){return List.of(new TrafficPoolService.MemberInput(1,true,0,null),new TrafficPoolService.MemberInput(2,true,0,null));}
     String create(boolean enabled){return (String)service.save(9L,settings("",0,enabled,inputs(),List.of())).get("id");}
     @AfterEach void close(){service.close();jdbc.execute("DROP ALL OBJECTS");}
@@ -109,16 +111,47 @@ class TrafficPoolServiceTest {
         at(40000);service.process(id);at(60000);service.process(id);assertTrue(dns.actions.contains("add:8.8.4.4"));assertFalse(dns.actions.contains("remove:8.8.8.8"));
         at(80000);service.process(id);assertTrue(dns.actions.indexOf("add:8.8.4.4")<dns.actions.indexOf("remove:8.8.8.8"));
     }
-    @Test void missingControlHeartbeatAndUnknownProbeDoNotWithdrawHealthyDataPlane(){
+    @Test void unknownProbeOrMissingByteCountersDoNotCountAsLostAgentReports(){
         var id=create(true);service.process(id);at(20000);service.process(id);
         at(40000);when(observer.metrics(anyLong(),anyLong())).thenReturn(null);service.process(id);assertEquals(2,dns.records.size());
         when(observer.probeAll(anyCollection(),anyInt())).thenReturn(Map.of());
         for(long t=60000;t<=140000;t+=20000){at(t);service.process(id);}assertEquals(2,dns.records.size());assertTrue(dns.actions.stream().noneMatch(a->a.startsWith("remove:")));
     }
-    @Test void simultaneousFailuresHoldExistingRecordsByDefault(){
-        var id=create(true);service.process(id);at(20000);service.process(id);when(observer.probe(anyString(),anyInt())).thenReturn(false);
+    @Test void optedInLastAddressProtectionCanHoldExistingRecords(){
+        var id=(String)service.save(9L,settings("",0,true,inputs(),List.of(),true)).get("id");service.process(id);at(20000);service.process(id);when(observer.probe(anyString(),anyInt())).thenReturn(false);
         for(long t=40000;t<=100000;t+=20000){at(t);service.process(id);}
         assertEquals(2,dns.records.size());assertEquals("all_unhealthy_held",service.get(9L,id).get("dnsStatus"));
+    }
+    @Test void staleReportsWithdrawEvenWhileTheDirectTcpPortStillResponds(){
+        var id=create(true);service.process(id);at(20000);service.process(id);assertEquals(2,dns.records.size());
+        when(observer.reported(eq(1L),anyLong())).thenReturn(false);
+        at(40000);service.process(id);at(60000);service.process(id);assertEquals(2,dns.records.size());
+        at(80000);service.process(id);assertEquals(List.of("1.1.1.1"),dns.records.stream().map(TrafficPoolDns.Record::content).toList());
+        assertEquals("report_stale",service.members(id).getFirst().status);
+        when(observer.reported(eq(1L),anyLong())).thenReturn(true);
+        at(100000);service.process(id);assertEquals(1,dns.records.size());
+        at(120000);service.process(id);assertEquals(2,dns.records.size());
+    }
+    @Test void offlineNodesAreWithdrawnEvenWithoutTcpResultsIncludingTheLastAddress(){
+        var id=create(true);service.process(id);at(20000);service.process(id);assertEquals(2,dns.records.size());
+        nodes.selectById(1L).setStatus(0);nodes.selectById(2L).setStatus(0);
+        for(long t=40000;t<=80000;t+=20000){at(t);service.process(id);}
+        assertTrue(dns.records.isEmpty());assertEquals("synced",service.get(9L,id).get("dnsStatus"));
+        assertTrue(service.members(id).stream().allMatch(m->"offline".equals(m.status)));
+    }
+    @Test void newlyBoundAddressWaitsForItsOwnRecentReportBeforeAutomaticPublication(){
+        var id=(String)service.save(9L,settings("",0,true,List.of(inputs().getFirst()),List.of())).get("id");
+        service.process(id);at(20000);service.process(id);assertEquals(1,dns.records.size());
+        service.save(9L,settings(id,1,true,inputs(),List.of()));when(observer.reported(eq(2L),anyLong())).thenReturn(false);
+        at(40000);service.process(id);at(60000);service.process(id);assertEquals(1,dns.records.size());
+        when(observer.reported(eq(2L),anyLong())).thenReturn(true);
+        at(80000);service.process(id);assertEquals(1,dns.records.size());
+        at(100000);service.process(id);assertEquals(2,dns.records.size());
+    }
+    @Test void domainOnlyNodeCannotBeBoundAsAnActiveDnsMember(){
+        var node=nodes.selectById(2L);node.setServerIp("node.example.com");when(observer.addresses(node)).thenReturn(List.of());
+        assertThrows(IllegalArgumentException.class,()->service.save(9L,settings("",0,true,inputs(),List.of())));
+        assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM traffic_pool",Integer.class));
     }
     @Test void adoptionRequiresUnchangedPreviewAndCurrentMemberAddresses(){
         var id=create(false);dns.records.add(new TrafficPoolDns.Record("f".repeat(32),"A","pool.example.com","8.8.8.8","manual",false));

@@ -119,6 +119,7 @@ public class TrafficPoolService {
                 if(jdbc.queryForList("SELECT id FROM node WHERE id=? FOR UPDATE",input.nodeId()).isEmpty())throw new IllegalArgumentException("节点不存在");
                 var selectedNode=nodes.selectById(input.nodeId());
                 if(!domain.isEmpty() && domain.equalsIgnoreCase(NodeAddressResolver.target(selectedNode)))throw new IllegalArgumentException("池入口域名不能与成员自身的地址或 DDNS 域名相同，避免多个程序争写和循环解析");
+                if(input.enabled() && observer.addresses(selectedNode).isEmpty())throw new IllegalArgumentException("参与解析的池成员必须在节点管理填写公网服务器 IP");
                 var ownership=jdbc.queryForList("SELECT pool_id FROM traffic_pool_member WHERE node_id=?",String.class,input.nodeId());
                 if(!ownership.isEmpty() && !p.id.equals(ownership.getFirst()))throw new IllegalArgumentException("节点已属于其他流量池");
                 var m=old.stream().filter(x->x.nodeId==input.nodeId()).findFirst().orElseGet(TrafficPoolState.Member::new);
@@ -208,29 +209,31 @@ public class TrafficPoolService {
     void process(String id) {
         tx.executeWithoutResult(t->{
             var p=load(id,true);long now=clock.millis();if(now-p.checkedAt<20000)return;var rows=members(id);
-            var resolved=new HashMap<Long,List<String>>();var allIps=new TreeSet<String>();
-            for(var m:rows){var n=nodes.selectById(m.nodeId);if(n!=null && m.enabled && (m.quotaBytes==0 || m.usedBytes<m.quotaBytes)){var ips=observer.addresses(n);resolved.put(m.nodeId,ips);allIps.addAll(ips);}}
+            var allIps=new TreeSet<String>();
+            for(var m:rows){var n=nodes.selectById(m.nodeId);if(n!=null && m.enabled && Objects.equals(n.getStatus(),1) && (m.quotaBytes==0 || m.usedBytes<m.quotaBytes))allIps.addAll(observer.addresses(n));}
             var probes=observer.probeAll(allIps,p.probePort);
             for(var m:rows) {
-                var sample=observer.metrics(m.nodeId,now);m.account(sample,now,p.resetDay,p.direction);
+                long observedAt=clock.millis();var sample=observer.metrics(m.nodeId,observedAt);m.account(sample,observedAt,p.resetDay,p.direction);
                 var node=nodes.selectById(m.nodeId);
                 if(node==null || !m.enabled || m.quotaBytes>0 && m.usedBytes>=m.quotaBytes) {
-                    m.health.values().forEach(h->h.eligible=false);m.status=node==null?"missing":!m.enabled?"maintenance":"exhausted";member(m);continue;
+                    m.health.values().forEach(h->{h.eligible=false;h.successes=0;});m.status=node==null?"missing":!m.enabled?"maintenance":"exhausted";member(m);continue;
                 }
                 if(now-m.lastProbeAt<20000)continue;
-                var addresses=resolved.getOrDefault(m.nodeId,List.of());var before=TrafficPoolDns.desired(List.of(m));
-                boolean ready=rulesReady(p,m.nodeId);
+                var addresses=observer.addresses(node);var before=TrafficPoolDns.desired(List.of(m));
+                boolean online=Objects.equals(node.getStatus(),1),reported=online && observer.reported(m.nodeId,observedAt);
+                boolean ready=reported && !addresses.isEmpty() && rulesReady(p,m.nodeId);
                 for(String ip:addresses)m.health.computeIfAbsent(ip,k->new TrafficPoolState.Health());
                 m.health.entrySet().removeIf(e->!e.getValue().eligible && !addresses.contains(e.getKey()) && now-e.getValue().checkedAt>1800000);
                 for(var h:m.health.entrySet()) {
-                    // An existing data-plane endpoint stays healthy even if its control heartbeat is delayed.
-                    if(addresses.contains(h.getKey()) && !probes.containsKey(h.getKey()))continue;
-                    boolean ok=addresses.contains(h.getKey()) && (h.getValue().eligible || sample!=null && ready) && Boolean.TRUE.equals(probes.get(h.getKey()));
+                    boolean bound=addresses.contains(h.getKey());
+                    // Unknown probes are not failures; known offline/stale reporting is a failure even without a probe result.
+                    if(bound && reported && !probes.containsKey(h.getKey()))continue;
+                    boolean ok=bound && reported && (h.getValue().eligible || ready) && Boolean.TRUE.equals(probes.get(h.getKey()));
                     if(now-startedAt<120000 && !ok && h.getValue().eligible)continue;
                     h.getValue().observe(ok,now,p.failureThreshold,p.recoveryThreshold);
                 }
-                m.lastProbeAt=now;m.status=!ready?"waiting_rules":m.health.values().stream().anyMatch(h->h.eligible)?"healthy":"confirming";
-                member(m);if(!before.equals(TrafficPoolDns.desired(List.of(m))))event(id,"health_changed","节点 "+m.nodeId+" 的入口候选已变化");
+                m.lastProbeAt=now;m.status=addresses.isEmpty()?"ip_missing":!online?"offline":!reported?"report_stale":m.health.values().stream().anyMatch(h->h.eligible)?"healthy":!ready?"waiting_rules":"confirming";
+                member(m);if(!before.equals(TrafficPoolDns.desired(List.of(m))))event(id,"health_changed","节点 "+m.nodeId+(!online?" 离线，已撤下入口候选":!reported?" 停止上报，已撤下入口候选":" 的入口候选已变化"));
             }
             p.checkedAt=now;
             if(!p.dnsEnabled){p.dnsStatus="disabled";persist(p);return;}
