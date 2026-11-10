@@ -1,7 +1,7 @@
 import Network from './network';
 
 export interface NodeGroup { id:string; name:string; revision:number; nodeIds:number[];hostIds:number[] }
-export interface PoolMember { nodeId:number; name:string; enabled:boolean; quotaBytes:number; usedBytes:number; status:string; lastReportAt:number; addresses:{ip:string;eligible:boolean;failures:number;successes:number}[] }
+export interface PoolMember { nodeId:number; name:string; enabled:boolean; serverIp?:string; quotaBytes:number; usedBytes:number; status:string; lastReportAt:number; addresses:{ip:string;eligible:boolean;failures:number;successes:number}[] }
 export interface TrafficPool { id:string;name:string;revision:number;mode:'individual'|'shared';direction:'in'|'out'|'both';quotaBytes:number;resetDay:number;domain:string;zoneId:string;hasToken:boolean;dnsEnabled:boolean;dnsStatus:string;probePort:number;failureThreshold:number;recoveryThreshold:number;ttl:number;keepLastAddress:boolean;checkedAt:number;lastSyncedAt:number;tunnelIds:number[];members:PoolMember[];usedBytes:number;totalBytes:number;remainingBytes:number;desiredAddresses:string[];accounting:'estimate' }
 export type PoolInput=Pick<TrafficPool,'id'|'name'|'revision'|'mode'|'direction'|'quotaBytes'|'resetDay'|'domain'|'zoneId'|'dnsEnabled'|'probePort'|'failureThreshold'|'recoveryThreshold'|'ttl'|'keepLastAddress'|'tunnelIds'> & {token:string;dnsAcknowledgement:string;members:{nodeId:number;enabled:boolean;quotaBytes:number;usedBytes?:number}[]};
 export const listTrafficPools=()=>Network.post<TrafficPool[]>('/traffic-pool/list');

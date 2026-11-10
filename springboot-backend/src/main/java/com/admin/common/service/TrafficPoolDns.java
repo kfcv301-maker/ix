@@ -70,14 +70,13 @@ public class TrafficPoolDns {
         var address=AirportAddressPolicy.literal(ip);return address==null?"":address.getHostAddress();
     }
     public static List<String> desired(Collection<TrafficPoolState.Member> members) {
-        return members.stream().filter(m->m.enabled && (m.quotaBytes==0 || m.usedBytes<m.quotaBytes))
+        return members.stream().filter(m->m.enabled)
                 .flatMap(m->m.health.entrySet().stream()).filter(e->e.getValue().eligible).map(Map.Entry::getKey).distinct().sorted().toList();
     }
-    public List<Map<String,String>> plan(List<Record> records,String owner,List<String> desired,boolean keepLast) {
+    public List<Map<String,String>> plan(List<Record> records,String owner,List<String> desired) {
         if(records.stream().anyMatch(r->"CNAME".equals(r.type())))throw new IllegalStateException("入口域名已有 CNAME，请使用独立的流量池子域名");
         if(records.stream().anyMatch(r->Set.of("A","AAAA").contains(r.type()) && (!owner.equals(r.comment()) || r.proxied())))
             throw new IllegalStateException("该域名存在未托管或代理记录，请使用专用空子域名；不会覆盖或删除原记录");
-        if(desired.isEmpty() && keepLast)return List.of();
         var changes=new ArrayList<Map<String,String>>();
         for(String ip:desired) if(records.stream().noneMatch(r->owner.equals(r.comment()) && (ip.contains(":")?"AAAA":"A").equals(r.type()) && ip.equals(normalize(r.content()))))changes.add(Map.of("action","add","ip",ip));
         for(var r:records) if(owner.equals(r.comment()) && Set.of("A","AAAA").contains(r.type()) && !desired.contains(normalize(r.content())))changes.add(Map.of("action","remove","ip",normalize(r.content()),"recordId",r.id()));

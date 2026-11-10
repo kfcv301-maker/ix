@@ -117,10 +117,17 @@ class TrafficPoolServiceTest {
         when(observer.probeAll(anyCollection(),anyInt())).thenReturn(Map.of());
         for(long t=60000;t<=140000;t+=20000){at(t);service.process(id);}assertEquals(2,dns.records.size());assertTrue(dns.actions.stream().noneMatch(a->a.startsWith("remove:")));
     }
-    @Test void optedInLastAddressProtectionCanHoldExistingRecords(){
+    @Test void evenLegacyHoldSettingDoesNotLeaveOfflineAddressesPublished(){
         var id=(String)service.save(9L,settings("",0,true,inputs(),List.of(),true)).get("id");service.process(id);at(20000);service.process(id);when(observer.probe(anyString(),anyInt())).thenReturn(false);
+        assertEquals(2,dns.records.size());
         for(long t=40000;t<=100000;t+=20000){at(t);service.process(id);}
-        assertEquals(2,dns.records.size());assertEquals("all_unhealthy_held",service.get(9L,id).get("dnsStatus"));
+        assertTrue(dns.records.isEmpty());assertEquals("synced",service.get(9L,id).get("dnsStatus"));
+    }
+    @Test void legacyMemberAndSharedPoolAllowancesDoNotAffectOnlineDns(){
+        var members=List.of(new TrafficPoolService.MemberInput(1,true,10,20L),new TrafficPoolService.MemberInput(2,true,10,20L));
+        var settings=new TrafficPoolService.Settings("","fixture pool",0,"shared","both",10,1,"pool.example.com","a".repeat(32),"fixture-token-"+"x".repeat(32),true,"pool.example.com",10000,3,2,60,false,members,List.of());
+        var id=(String)service.save(9L,settings).get("id");service.process(id);at(20000);service.process(id);
+        assertEquals(Set.of("8.8.8.8","1.1.1.1"),new HashSet<>(dns.records.stream().map(TrafficPoolDns.Record::content).toList()));
     }
     @Test void staleReportsWithdrawEvenWhileTheDirectTcpPortStillResponds(){
         var id=create(true);service.process(id);at(20000);service.process(id);assertEquals(2,dns.records.size());

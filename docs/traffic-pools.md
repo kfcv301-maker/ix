@@ -1,10 +1,9 @@
 # Traffic pools and inventory groups
 
-Administrators use **节点流量池管理** in the sidebar to collect nodes, configure
-allowances, and bind existing administrator tunnels. Each pool has one dedicated
-entry domain shared by all of its eligible nodes. Select the pool and open
-**入口解析** to see that domain, review its candidate addresses and manage its
-automatic DNS updates. A pool can be saved before configuring its entry domain.
+Administrators use **节点流量池管理** to group nodes behind one entry domain.
+The main view shows that domain, each bound server IP, and its online status.
+Use **解析详情** for a DNS preview or to adopt existing records. A pool can be
+saved before configuring its entry domain.
 Another pool cannot use the same domain. Members are added explicitly; inventory
 groups can be used to select several nodes at once.
 **节点分组** and **服务器分组** classify the two inventories independently; sharing a
@@ -44,8 +43,9 @@ Adds occur before deletes. Deletion rechecks the exact provider record ID,
 type, name, value and ownership comment. Each reconciliation has a bounded write
 budget, so larger changes can continue over subsequent checks. Provider failures
 are shown as errors and retried; a successful state requires a provider readback.
-When every member is unhealthy, the default also withdraws the last owned
-address. Administrators can opt in to retain existing records in that situation.
+When every member is unhealthy, the pool withdraws the last owned address.
+Legacy allowance and last-address settings are retained as compatibility data;
+they do not affect DNS decisions.
 DNS TTL is at least 60 seconds; client cache expiry is separate from
 provider acceptance. Disabling automation leaves existing records in place.
 
@@ -61,33 +61,12 @@ take approximately ten minutes to send their next periodic inventory.
 Inventory evidence is scoped to the current authenticated control connection;
 a replacement machine cannot reuse a previous machine's cached service list.
 
-Members can enter maintenance mode, which withdraws their DNS candidacy while
-retaining identities, usage, tunnel membership, reservations and old connections.
+Clearing an existing member's checkbox stops publishing its IP while retaining
+its identity, tunnel membership, reservations and old connections.
 Removing members/tunnels is intentionally not a destructive shortcut: service
 cleanup and final retirement require a separate drain workflow. This version
 does not claim to transfer an established connection between machines or enforce
 a hard byte limit on live streams.
-
-## Allowance estimates
-
-Individual allowance mode shows remaining configured bytes per node, then sums
-those remainders. Shared mode compares the member sum against one configured
-pool allowance. A server's unused provider allowance is not transferable unless
-the provider itself supports sharing. Zero means no configured allowance.
-
-Counters come from existing passive node reports. The first report establishes
-a baseline; administrators can calibrate **已用** explicitly. Positive deltas are
-persisted, duplicate samples are ignored, and machine/counter resets preserve the
-period's existing used total. The monthly boundary uses Asia/Shanghai; short
-months clamp the reset day to the last calendar day. Missing observations across
-a boundary establish a new baseline instead of assigning old-period traffic to
-the new period. Editing a reset day preserves accumulated usage.
-
-Every screen labels these figures as panel estimates. Interface selection,
-unobserved resets, period gaps and provider rules can differ from billing. They
-are separate from customer billing multipliers. Allowance exhaustion affects DNS
-candidacy, not existing streams; last-address protection may retain an exhausted
-address. Consult the provider bill for exact usage.
 
 ## Deployment
 

@@ -80,13 +80,14 @@ public class TrafficPoolService {
             used=Math.addExact(used,m.usedBytes);total=Math.addExact(total,m.quotaBytes);
             var node=nodes.selectById(m.nodeId);var d=new LinkedHashMap<String,Object>();
             d.put("nodeId",m.nodeId);d.put("name",node==null?"已删除节点":node.getName());d.put("enabled",m.enabled);
+            d.put("serverIp",node==null?"":observer.addresses(node).stream().findFirst().orElse(""));
             d.put("quotaBytes",m.quotaBytes);d.put("usedBytes",m.usedBytes);d.put("status",m.status);d.put("lastReportAt",m.lastAt);
             d.put("addresses",m.health.entrySet().stream().map(e->Map.of("ip",e.getKey(),"eligible",e.getValue().eligible,"failures",e.getValue().failures,"successes",e.getValue().successes)).toList());
             detail.add(d);
         }
         result.put("members",detail);result.put("usedBytes",used);result.put("totalBytes","shared".equals(p.mode)?p.quotaBytes:total);
         result.put("remainingBytes","shared".equals(p.mode)?Math.max(0,p.quotaBytes-used):rows.stream().filter(m->m.quotaBytes>0).mapToLong(m->Math.max(0,m.quotaBytes-m.usedBytes)).sum());
-        result.put("accounting","estimate");result.put("desiredAddresses",desired(p,rows));
+        result.put("accounting","estimate");result.put("desiredAddresses",TrafficPoolDns.desired(rows));
         return result;
     }
     public Map<String,Object> save(Long user,Settings s) {
@@ -168,7 +169,7 @@ public class TrafficPoolService {
             var p=load(id,true);if(p.domain.isEmpty() || p.encryptedToken.isEmpty())throw new IllegalArgumentException("请先保存域名、Zone ID 和令牌");
             var records=dns.list(p.zoneId,p.domain,crypto(p).decryptString(p.encryptedToken));
             var result=new LinkedHashMap<String,Object>();result.put("domain",p.domain);result.put("records",records);result.put("revision",p.revision);result.put("fingerprint",fingerprint(records));
-            try{result.put("changes",dns.plan(records,owner(p),desired(p,members(id)),p.keepLastAddress));result.put("blockedReason","");}
+            try{result.put("changes",dns.plan(records,owner(p),TrafficPoolDns.desired(members(id))));result.put("blockedReason","");}
             catch(IllegalStateException blocked){result.put("changes",List.of());result.put("blockedReason",blocked.getMessage());}
             result.put("canAdopt",canAdopt(p,records));return result;
         });
@@ -210,13 +211,13 @@ public class TrafficPoolService {
         tx.executeWithoutResult(t->{
             var p=load(id,true);long now=clock.millis();if(now-p.checkedAt<20000)return;var rows=members(id);
             var allIps=new TreeSet<String>();
-            for(var m:rows){var n=nodes.selectById(m.nodeId);if(n!=null && m.enabled && Objects.equals(n.getStatus(),1) && (m.quotaBytes==0 || m.usedBytes<m.quotaBytes))allIps.addAll(observer.addresses(n));}
+            for(var m:rows){var n=nodes.selectById(m.nodeId);if(n!=null && m.enabled && Objects.equals(n.getStatus(),1))allIps.addAll(observer.addresses(n));}
             var probes=observer.probeAll(allIps,p.probePort);
             for(var m:rows) {
                 long observedAt=clock.millis();var sample=observer.metrics(m.nodeId,observedAt);m.account(sample,observedAt,p.resetDay,p.direction);
                 var node=nodes.selectById(m.nodeId);
-                if(node==null || !m.enabled || m.quotaBytes>0 && m.usedBytes>=m.quotaBytes) {
-                    m.health.values().forEach(h->{h.eligible=false;h.successes=0;});m.status=node==null?"missing":!m.enabled?"maintenance":"exhausted";member(m);continue;
+                if(node==null || !m.enabled) {
+                    m.health.values().forEach(h->{h.eligible=false;h.successes=0;});m.status=node==null?"missing":"maintenance";member(m);continue;
                 }
                 if(now-m.lastProbeAt<20000)continue;
                 var addresses=observer.addresses(node);var before=TrafficPoolDns.desired(List.of(m));
@@ -237,11 +238,10 @@ public class TrafficPoolService {
             }
             p.checkedAt=now;
             if(!p.dnsEnabled){p.dnsStatus="disabled";persist(p);return;}
-            var desired=desired(p,rows);
+            var desired=TrafficPoolDns.desired(rows);
             try {
                 String token=crypto(p).decryptString(p.encryptedToken);var records=dns.list(p.zoneId,p.domain,token);
-                var changes=dns.plan(records,owner(p),desired,p.keepLastAddress);
-                if(desired.isEmpty() && p.keepLastAddress){p.dnsStatus="all_unhealthy_held";persist(p);return;}
+                var changes=dns.plan(records,owner(p),desired);
                 long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(8);
                 for(var change:changes.subList(0,Math.min(16,changes.size()))) {
                     if(System.nanoTime()>deadline)break;
@@ -250,7 +250,7 @@ public class TrafficPoolService {
                     event(id,"dns_"+change.get("action"),change.get("ip"));
                 }
                 var after=dns.list(p.zoneId,p.domain,token);
-                p.dnsStatus=dns.plan(after,owner(p),desired,false).isEmpty()?"synced":"syncing";
+                p.dnsStatus=dns.plan(after,owner(p),desired).isEmpty()?"synced":"syncing";
                 if("synced".equals(p.dnsStatus))p.lastSyncedAt=clock.millis();
             } catch(RuntimeException failed) {p.dnsStatus="dns_error";}
             persist(p);
@@ -263,8 +263,5 @@ public class TrafficPoolService {
         for(Long tunnel:p.tunnelIds)for(var f:forwards.selectList(new QueryWrapper<Forward>().eq("tunnel_id",tunnel).eq("status",1)))
             if(names.stream().noneMatch(n->n.startsWith(f.getId()+"_") && n.endsWith("_tcp")) || names.stream().noneMatch(n->n.startsWith(f.getId()+"_") && n.endsWith("_udp")))return false;
         return true;
-    }
-    List<String> desired(TrafficPoolState p,List<TrafficPoolState.Member> rows){
-        return "shared".equals(p.mode) && p.quotaBytes>0 && rows.stream().mapToLong(m->m.usedBytes).sum()>=p.quotaBytes?List.of():TrafficPoolDns.desired(rows);
     }
 }

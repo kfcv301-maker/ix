@@ -10,15 +10,14 @@ class TrafficPoolDnsTest {
     TrafficPoolDns dns=new TrafficPoolDns();
     TrafficPoolDns.Record record(String ip,String comment){return new TrafficPoolDns.Record(id,"A",domain,ip,comment,false);}
     @Test void foreignRecordsAndCnamesStopAllAutomaticWrites() {
-        assertThrows(IllegalStateException.class,()->dns.plan(List.of(record("8.8.8.8","manual")),owner,List.of("1.1.1.1"),true));
-        assertThrows(IllegalStateException.class,()->dns.plan(List.of(new TrafficPoolDns.Record(id,"CNAME",domain,"target.example.com","",false)),owner,List.of(),false));
-        assertThrows(IllegalStateException.class,()->dns.plan(List.of(new TrafficPoolDns.Record(id,"A",domain,"8.8.8.8",owner,true)),owner,List.of("8.8.8.8"),true));
+        assertThrows(IllegalStateException.class,()->dns.plan(List.of(record("8.8.8.8","manual")),owner,List.of("1.1.1.1")));
+        assertThrows(IllegalStateException.class,()->dns.plan(List.of(new TrafficPoolDns.Record(id,"CNAME",domain,"target.example.com","",false)),owner,List.of()));
+        assertThrows(IllegalStateException.class,()->dns.plan(List.of(new TrafficPoolDns.Record(id,"A",domain,"8.8.8.8",owner,true)),owner,List.of("8.8.8.8")));
     }
-    @Test void lastAddressProtectionAndAddBeforeDeleteAreDeterministic() {
+    @Test void emptyHealthySetRemovesLastRecordAndNewAddressesAreAddedFirst() {
         var records=List.of(record("8.8.8.8",owner));
-        assertTrue(dns.plan(records,owner,List.of(),true).isEmpty());
-        assertEquals("remove",dns.plan(records,owner,List.of(),false).getFirst().get("action"));
-        var plan=dns.plan(records,owner,List.of("1.1.1.1"),true);
+        assertEquals("remove",dns.plan(records,owner,List.of()).getFirst().get("action"));
+        var plan=dns.plan(records,owner,List.of("1.1.1.1"));
         assertEquals(List.of("add","remove"),plan.stream().map(c->c.get("action")).toList());
     }
     @Test void deletionRequiresCurrentExactOwnershipAndCannotDeleteExternallyEditedRecords() {
@@ -31,12 +30,12 @@ class TrafficPoolDnsTest {
         var provider=new TrafficPoolDns(){@Override JSONObject request(String method,String path,String token,JSONObject body){return JSONObject.of("result",JSONObject.of("id",id,"name","other.example.com","content","8.8.8.8","comment",owner));}};
         assertThrows(IllegalStateException.class,()->provider.create(zone,domain,"8.8.8.8",60,owner,"fixture"));
     }
-    @Test void maintenanceAndIndividualQuotaExcludeAddressesWithoutTouchingServices() {
+    @Test void disablingAMemberExcludesItsAddressButLegacyQuotaDoesNot() {
         var member=new TrafficPoolState.Member();member.quotaBytes=100;member.usedBytes=99;
         var h=new TrafficPoolState.Health();h.eligible=true;member.health.put("8.8.8.8",h);
         assertEquals(List.of("8.8.8.8"),TrafficPoolDns.desired(List.of(member)));
         member.enabled=false;assertTrue(TrafficPoolDns.desired(List.of(member)).isEmpty());
-        member.enabled=true;member.usedBytes=100;assertTrue(TrafficPoolDns.desired(List.of(member)).isEmpty());
+        member.enabled=true;member.usedBytes=100;assertEquals(List.of("8.8.8.8"),TrafficPoolDns.desired(List.of(member)));
     }
     @Test void adoptionChangesOnlyCommentAfterExactRecordRecheck() {
         var methods=new ArrayList<String>();
@@ -49,7 +48,7 @@ class TrafficPoolDnsTest {
     }
     @Test void sameTextInTxtRecordCannotBeMistakenForAnAddressRecord() {
         var txt=new TrafficPoolDns.Record(id,"TXT",domain,"8.8.8.8",owner,false);
-        var plan=dns.plan(List.of(txt),owner,List.of("8.8.8.8"),true);
+        var plan=dns.plan(List.of(txt),owner,List.of("8.8.8.8"));
         assertEquals(1,plan.size());assertEquals("add",plan.getFirst().get("action"));
     }
 }
