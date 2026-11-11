@@ -51,10 +51,10 @@ public class NodeIpHistoryService {
     public void observeNodes() {
         if (!observing.compareAndSet(false,true)) return;
         try {
-        List<Node> batch = nodes.selectList(new QueryWrapper<Node>().gt("id",cursor).orderByAsc("id").last("LIMIT 64"));
+        List<Node> batch = nodes.selectList(monitoredNodes().gt("id",cursor).orderByAsc("id").last("LIMIT 64"));
         if (batch.isEmpty()) {
             cursor=0;
-            batch=nodes.selectList(new QueryWrapper<Node>().orderByAsc("id").last("LIMIT 64"));
+            batch=nodes.selectList(monitoredNodes().orderByAsc("id").last("LIMIT 64"));
         }
         List<CompletableFuture<Void>> pending = new ArrayList<>();
         for (Node node : batch) {
@@ -135,7 +135,7 @@ public class NodeIpHistoryService {
 
     Node managedNode(User user, Long nodeId) {
         Node node=nodeId==null ? null : nodes.selectById(nodeId);
-        if (node==null || !Objects.equals(user.getRoleId(),0)) {
+        if (node==null || !Objects.equals(user.getRoleId(),0) || nodes.countPoolHost(nodeId)!=0) {
             throw new SecurityException("仅管理员可查看节点 IP 记录");
         }
         return node;
@@ -143,9 +143,13 @@ public class NodeIpHistoryService {
 
     private long dayStart(int daysAgo) { return LocalDate.now(clock.withZone(ZONE)).minusDays(daysAgo).atStartOfDay(ZONE).toInstant().toEpochMilli(); }
 
+    private QueryWrapper<Node> monitoredNodes() {
+        return new QueryWrapper<Node>().notInSql("id","SELECT node_id FROM traffic_pool_host");
+    }
+
     public List<Map<String,Object>> summaries(Long userId) {
         activeUser(userId);
-        List<Node> manageable=nodes.selectList(new QueryWrapper<Node>().orderByAsc("id"));
+        List<Node> manageable=nodes.selectList(monitoredNodes().orderByAsc("id"));
         if (manageable.isEmpty()) return List.of();
         Map<Long,NodeIpObservation.State> states=new HashMap<>();
         jdbc.query("SELECT s.node_id,s.payload FROM node_ip_state s INNER JOIN node n ON n.id=s.node_id",

@@ -56,6 +56,7 @@ public class NodeGroupService {
             if(group!=null && !group.isEmpty() && jdbc.queryForList("SELECT id FROM node_group WHERE id=? FOR UPDATE",id(group)).isEmpty()) throw new IllegalArgumentException("分组不存在");
             for(Long node:new TreeSet<>(ids)) {
                 if(node==null || jdbc.queryForList(hosts?"SELECT id FROM vps_host WHERE id=? FOR UPDATE":"SELECT id FROM node WHERE id=? FOR UPDATE",node).isEmpty()) throw new IllegalArgumentException("服务器或节点不存在");
+                if(!hosts && nodes.countPoolHost(node)!=0) throw new IllegalArgumentException("该节点由独立流量池管理");
                 jdbc.update(hosts?"DELETE FROM vps_group_member WHERE host_id=?":"DELETE FROM node_group_member WHERE node_id=?",node);
                 if(group!=null && !group.isEmpty()) jdbc.update(hosts?"INSERT INTO vps_group_member VALUES(?,?)":"INSERT INTO node_group_member VALUES(?,?)",node,group);
             }

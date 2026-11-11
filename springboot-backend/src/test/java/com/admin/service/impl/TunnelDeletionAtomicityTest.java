@@ -24,6 +24,7 @@ class TunnelDeletionAtomicityTest {
 
     @BeforeEach void setup() {
         service = spy(new TunnelServiceImpl());
+        ReflectionTestUtils.setField(service, "baseMapper", mock(TunnelMapper.class));
         grants = mock(UserTunnelMapper.class); entries = mock(TunnelEntryNodeMapper.class);
         domains = mock(TunnelEntryDomainMapper.class);
         ReflectionTestUtils.setField(service, "userTunnelMapper", grants);

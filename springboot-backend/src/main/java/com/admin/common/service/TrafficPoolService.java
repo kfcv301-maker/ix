@@ -24,6 +24,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 @Service @DependsOn("trafficPoolMigration")
 public class TrafficPoolService {
+    public static final String MANAGED_ID = "00000000-0000-4000-8000-000000000001";
+    static final String MANAGED_NAME = "独立流量池";
     private final JdbcTemplate jdbc;private final NodeGroupService groups;private final NodeMapper nodes;
     private final TunnelMapper tunnels;private final ForwardMapper forwards;private final ForwardPortReservationService ports;
     private final TunnelIngressNodeResolver ingress;private final TrafficPoolDns dns;private final TrafficPoolObserver observer;
@@ -55,7 +57,16 @@ public class TrafficPoolService {
     String dnsKey(TrafficPoolState p){return p.domain.isEmpty()?null:AirportSyncState.digest(p.domain);}
     void persist(TrafficPoolState p) {jdbc.update("UPDATE traffic_pool SET name=?,dns_key=?,payload=? WHERE id=?",p.name,dnsKey(p),JSON.toJSONString(p),p.id);}
     void member(TrafficPoolState.Member m) {jdbc.update("UPDATE traffic_pool_member SET payload=? WHERE node_id=?",JSON.toJSONString(m),m.nodeId);}
-    private AESCrypto crypto(TrafficPoolState p) {return new AESCrypto(key+":traffic-pool:v1:"+p.id+":"+p.zoneId+":"+p.domain);}
+    AESCrypto crypto(TrafficPoolState p) {return crypto(p.id,p.zoneId,p.domain);}
+    private AESCrypto crypto(String id,String zone,String domain) {return new AESCrypto(key+":traffic-pool:v1:"+id+":"+zone+":"+domain);}
+    TrafficPoolState managedForUpdate() {
+        var pool = new TrafficPoolState();
+        pool.id = MANAGED_ID;
+        pool.name = MANAGED_NAME;
+        jdbc.update("INSERT INTO traffic_pool(id,name,dns_key,payload) VALUES(?,?,NULL,?) ON DUPLICATE KEY UPDATE id=id",
+                pool.id,pool.name,JSON.toJSONString(pool));
+        return load(MANAGED_ID,true);
+    }
     static String domain(String value) {
         if(value==null || value.isBlank())return "";
         String result=IDN.toASCII(value.trim(),IDN.USE_STD3_ASCII_RULES).toLowerCase(Locale.ROOT);
@@ -65,7 +76,7 @@ public class TrafficPoolService {
     }
     public List<Map<String,Object>> list(Long user) {
         groups.admin(user);
-        return jdbc.query("SELECT payload FROM traffic_pool ORDER BY name",(r,n)->view(JSON.parseObject(r.getString(1),TrafficPoolState.class)));
+        return jdbc.query("SELECT payload FROM traffic_pool WHERE id<>? ORDER BY name",(r,n)->view(JSON.parseObject(r.getString(1),TrafficPoolState.class)), MANAGED_ID);
     }
     public Map<String,Object> get(Long user,String id) {groups.admin(user);return view(load(id,false));}
     Map<String,Object> view(TrafficPoolState p) {
@@ -92,6 +103,7 @@ public class TrafficPoolService {
     }
     public Map<String,Object> save(Long user,Settings s) {
         groups.admin(user);String name=NodeGroupService.name(s.name()),domain=domain(s.domain());
+        if(MANAGED_ID.equals(s.id()) || MANAGED_NAME.equals(name))throw new IllegalArgumentException("请在独立流量池页面设置");
         if(!Set.of("shared","individual").contains(s.mode()) || !Set.of("in","out","both").contains(s.direction()) || s.quotaBytes()<0 || s.quotaBytes()>9_000_000_000_000_000L
                 || s.resetDay()<1 || s.resetDay()>31 || s.probePort()<1 || s.probePort()>65535 || s.failureThreshold()<2 || s.failureThreshold()>10
                 || s.recoveryThreshold()<2 || s.recoveryThreshold()>10 || s.ttl()<60 || s.ttl()>86400 || s.revision()<0)throw new IllegalArgumentException("请检查额度、周期、端口与健康检查参数");
@@ -210,9 +222,15 @@ public class TrafficPoolService {
     void process(String id) {
         tx.executeWithoutResult(t->{
             var p=load(id,true);long now=clock.millis();if(now-p.checkedAt<20000)return;var rows=members(id);
+            boolean managed = MANAGED_ID.equals(id);
+            if (managed) {
+                p.probePort = p.tunnelIds.isEmpty() ? 0 : forwards.selectList(new QueryWrapper<Forward>()
+                        .eq("tunnel_id",p.tunnelIds.getFirst()).eq("status",1)).stream()
+                        .map(Forward::getInPort).filter(Objects::nonNull).min(Integer::compare).orElse(0);
+            }
             var allIps=new TreeSet<String>();
             for(var m:rows){var n=nodes.selectById(m.nodeId);if(n!=null && m.enabled && Objects.equals(n.getStatus(),1))allIps.addAll(observer.addresses(n));}
-            var probes=observer.probeAll(allIps,p.probePort);
+            var probes=p.probePort>0?observer.probeAll(allIps,p.probePort):Map.<String,Boolean>of();
             for(var m:rows) {
                 long observedAt=clock.millis();var sample=observer.metrics(m.nodeId,observedAt);m.account(sample,observedAt,p.resetDay,p.direction);
                 var node=nodes.selectById(m.nodeId);
@@ -222,14 +240,14 @@ public class TrafficPoolService {
                 if(now-m.lastProbeAt<20000)continue;
                 var addresses=observer.addresses(node);var before=TrafficPoolDns.desired(List.of(m));
                 boolean online=Objects.equals(node.getStatus(),1),reported=online && observer.reported(m.nodeId,observedAt);
-                boolean ready=reported && !addresses.isEmpty() && rulesReady(p,m.nodeId);
+                boolean ready=reported && !addresses.isEmpty() && (!managed || p.probePort>0) && rulesReady(p,m.nodeId);
                 for(String ip:addresses)m.health.computeIfAbsent(ip,k->new TrafficPoolState.Health());
                 m.health.entrySet().removeIf(e->!e.getValue().eligible && !addresses.contains(e.getKey()) && now-e.getValue().checkedAt>1800000);
                 for(var h:m.health.entrySet()) {
                     boolean bound=addresses.contains(h.getKey());
                     // Unknown probes are not failures; known offline/stale reporting is a failure even without a probe result.
-                    if(bound && reported && !probes.containsKey(h.getKey()))continue;
-                    boolean ok=bound && reported && (h.getValue().eligible || ready) && Boolean.TRUE.equals(probes.get(h.getKey()));
+                    if(p.probePort>0 && bound && reported && !probes.containsKey(h.getKey()))continue;
+                    boolean ok=bound && reported && (ready || h.getValue().eligible) && Boolean.TRUE.equals(probes.get(h.getKey()));
                     if(now-startedAt<120000 && !ok && h.getValue().eligible)continue;
                     h.getValue().observe(ok,now,p.failureThreshold,p.recoveryThreshold);
                 }
@@ -251,10 +269,24 @@ public class TrafficPoolService {
                 }
                 var after=dns.list(p.zoneId,p.domain,token);
                 p.dnsStatus=dns.plan(after,owner(p),desired).isEmpty()?"synced":"syncing";
-                if("synced".equals(p.dnsStatus))p.lastSyncedAt=clock.millis();
+                if("synced".equals(p.dnsStatus)) {
+                    p.lastSyncedAt=clock.millis();
+                    if (p.previousDns != null) retirePreviousDns(p);
+                }
             } catch(RuntimeException failed) {p.dnsStatus="dns_error";}
             persist(p);
         });
+    }
+    private void retirePreviousDns(TrafficPoolState pool) {
+        var previous = pool.previousDns;
+        String token = crypto(pool.id,previous.zoneId(),previous.domain()).decryptString(previous.encryptedToken());
+        var records = dns.list(previous.zoneId(),previous.domain(),token).stream()
+                .filter(record -> owner(pool).equals(record.comment()) && Set.of("A","AAAA").contains(record.type())).toList();
+        if (records.isEmpty()) {
+            pool.previousDns = null;
+            return;
+        }
+        dns.delete(previous.zoneId(),records.getFirst(),previous.domain(),owner(pool),token);
     }
     boolean rulesReady(TrafficPoolState p,long node) {
         // No tunnel means explicitly selected probe-only pool; bound pools require a real post-sync Agent inventory.

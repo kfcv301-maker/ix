@@ -15,6 +15,9 @@ public class TrafficPoolMigration {
         jdbc.execute("CREATE TABLE IF NOT EXISTS traffic_pool (id CHAR(36) PRIMARY KEY, name VARCHAR(100) NOT NULL UNIQUE, dns_key CHAR(64) UNIQUE, payload LONGTEXT NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
         jdbc.execute("CREATE TABLE IF NOT EXISTS traffic_pool_member (node_id BIGINT PRIMARY KEY, pool_id CHAR(36) NOT NULL, payload LONGTEXT NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
         jdbc.execute("CREATE TABLE IF NOT EXISTS traffic_pool_tunnel (tunnel_id BIGINT PRIMARY KEY, pool_id CHAR(36) NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        jdbc.execute("CREATE TABLE IF NOT EXISTS traffic_pool_host (node_id BIGINT PRIMARY KEY, server_ip VARCHAR(45) NOT NULL UNIQUE, "
+                + "ssh_port INT NOT NULL, fingerprint VARCHAR(64), install_status VARCHAR(16) NOT NULL, message VARCHAR(180), "
+                + "updated_at BIGINT NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
         jdbc.execute("CREATE TABLE IF NOT EXISTS traffic_pool_event (id BIGINT AUTO_INCREMENT PRIMARY KEY, pool_id CHAR(36) NOT NULL, happened_at BIGINT NOT NULL, kind VARCHAR(40) NOT NULL, detail VARCHAR(500) NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
     }
 }

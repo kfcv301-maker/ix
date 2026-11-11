@@ -8,6 +8,7 @@ import com.admin.common.utils.AESCrypto;
 import com.admin.common.utils.JwtUtil;
 import com.admin.entity.Node;
 import com.admin.entity.User;
+import com.admin.mapper.NodeMapper;
 import com.admin.mapper.UserMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -25,6 +26,7 @@ class NodeInstallCommandTest {
     private User issuer;
     @BeforeEach void setup() {
         service = spy(new NodeServiceImpl());
+        ReflectionTestUtils.setField(service, "baseMapper", mock(NodeMapper.class));
         UserMapper users = mock(UserMapper.class);
         ReflectionTestUtils.setField(service, "userMapper", users);
         ReflectionTestUtils.setField(service, "installBootstrapService", new NodeInstallBootstrapService());

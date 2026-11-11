@@ -16,6 +16,8 @@ import com.baomidou.mybatisplus.spring.service.IService;
  * @since 2025-06-03
  */
 public interface NodeService extends IService<Node> {
+    String poolAgentInstaller(Node node, String panelUrl);
+    boolean isManagedPoolNode(Long id);
 
     R createNode(NodeDto nodeDto);
 

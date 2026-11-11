@@ -14,3 +14,29 @@ export const saveNodeGroup=(data:{id:string;name:string;revision:number})=>Netwo
 export const deleteNodeGroup=(id:string,revision:number)=>Network.post('/traffic-pool/group/delete',{id,revision});
 export const assignNodeGroup=(groupId:string,nodeIds:number[])=>Network.post('/traffic-pool/group/assign',{groupId,nodeIds});
 export const assignHostGroup=(groupId:string,nodeIds:number[])=>Network.post('/traffic-pool/group/assign-hosts',{groupId,nodeIds});
+
+export interface ManagedPoolServer {
+  id: number;
+  ip: string;
+  port: number;
+  status: string;
+  message: string | null;
+  usedBytes: number;
+  quotaBytes: number;
+}
+
+export interface ManagedPool {
+  revision: number;
+  domain: string;
+  hasToken: boolean;
+  dnsStatus: string;
+  tunnelId: number | null;
+  servers: ManagedPoolServer[];
+}
+
+export const getManagedPool = () => Network.post<ManagedPool>('/traffic-pool/managed');
+export const saveManagedPool = (settings: { revision: number; domain: string; token: string }) =>
+  Network.post<ManagedPool>('/traffic-pool/managed/settings', settings);
+export const enrollManagedServer = (server: {
+  ip: string; port: number; password: string; panelOrigin: string; usedBytes: number; quotaBytes: number;
+}) => Network.post('/traffic-pool/managed/enroll', server);

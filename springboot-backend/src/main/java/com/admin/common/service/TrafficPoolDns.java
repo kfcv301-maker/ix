@@ -28,6 +28,22 @@ public class TrafficPoolDns {
         if(zone==null || !zone.matches("[a-f0-9]{32}")) throw new IllegalArgumentException("请输入 32 位 Zone ID");
         return "/zones/"+zone+"/dns_records";
     }
+    public String findZone(String domain, String token) {
+        String suffix = domain;
+        while (suffix.contains(".")) {
+            var rows = request("GET", "/zones?status=active&name=" + suffix, token, null).getJSONArray("result");
+            if (rows == null || rows.size() > 1) throw new IllegalStateException("无法唯一确定 Cloudflare 域名");
+            if (rows.size() == 1) {
+                var zone = rows.getJSONObject(0);
+                if (!suffix.equals(zone.getString("name"))) throw new IllegalStateException("Cloudflare 域名回执不匹配");
+                String id = zone.getString("id");
+                path(id);
+                return id;
+            }
+            suffix = suffix.substring(suffix.indexOf('.') + 1);
+        }
+        throw new IllegalArgumentException("令牌没有访问该域名的权限");
+    }
     public List<Record> list(String zone,String domain,String token) {
         var result=new ArrayList<Record>();
         for(int page=1;page<=8;page++) {

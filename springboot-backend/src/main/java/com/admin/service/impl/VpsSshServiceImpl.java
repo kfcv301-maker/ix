@@ -102,6 +102,26 @@ public class VpsSshServiceImpl implements VpsSshService {
         }
     }
 
+    @Override
+    public int runPoolAgentScript(VpsHost host, String password, String script, int timeoutSeconds) throws Exception {
+        if (trimToNull(host.getSshFingerprint()) == null) throw new IllegalArgumentException("SSH 主机指纹缺失");
+        try (SshConnection connection = connect(host, password);
+             Session session = connection.client.startSession();
+             Session.Command command = session.exec("bash -s")) {
+            Future<?> output = stream(command.getInputStream(), ignored -> {});
+            Future<?> errors = stream(command.getErrorStream(), ignored -> {});
+            try (OutputStream stdin = command.getOutputStream()) {
+                stdin.write(script.getBytes(StandardCharsets.UTF_8));
+            }
+            command.join(timeoutSeconds, TimeUnit.SECONDS);
+            Integer status = command.getExitStatus();
+            if (status == null) return -1;
+            output.get(5, TimeUnit.SECONDS);
+            errors.get(5, TimeUnit.SECONDS);
+            return status;
+        }
+    }
+
     private SshConnection connect(VpsHost host, String password) throws Exception {
         if (host == null || isBlank(host.getHost()) || isBlank(host.getSshUsername()) || isBlank(password)) {
             throw new IllegalArgumentException("VPS SSH 配置不完整");

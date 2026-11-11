@@ -8,8 +8,8 @@ import java.util.List;
 
 @RestController @RequestMapping("/api/v1/traffic-pool")
 public class TrafficPoolController {
-    final TrafficPoolService pools;final NodeGroupService groups;
-    public TrafficPoolController(TrafficPoolService pools,NodeGroupService groups){this.pools=pools;this.groups=groups;}
+    final TrafficPoolService pools;final NodeGroupService groups;final ManagedTrafficPoolService managed;
+    public TrafficPoolController(TrafficPoolService pools,NodeGroupService groups,ManagedTrafficPoolService managed){this.pools=pools;this.groups=groups;this.managed=managed;}
     Long user(){return Long.valueOf(JwtUtil.getUserIdFromToken());}
     public record Selection(String id){ }
     public record GroupSelection(String id,long revision){ }
@@ -21,6 +21,9 @@ public class TrafficPoolController {
     @PostMapping("/dns-preview") public R preview(@RequestBody Selection s){return invoke(()->pools.preview(user(),s.id()));}
     @PostMapping("/dns-adopt") public R adopt(@RequestBody Adoption a){return invoke(()->{pools.adopt(user(),a.id(),a.revision(),a.fingerprint(),a.acknowledgement());return null;});}
     @PostMapping("/events") public R events(@RequestBody Selection s){return invoke(()->pools.events(user(),s.id()));}
+    @PostMapping("/managed") public R managed(){return invoke(()->managed.get(user()));}
+    @PostMapping("/managed/settings") public R managedSettings(@RequestBody ManagedTrafficPoolService.Settings s){return invoke(()->managed.save(user(),s));}
+    @PostMapping("/managed/enroll") public R enroll(@RequestBody ManagedTrafficPoolService.Enrollment s){return invoke(()->{managed.enroll(user(),s);return null;});}
     @PostMapping("/groups") public R groups(){return invoke(()->groups.list(user()));}
     @PostMapping("/group/save") public R groupSave(@RequestBody NodeGroupService.Settings s){return invoke(()->groups.save(user(),s));}
     @PostMapping("/group/delete") public R groupDelete(@RequestBody GroupSelection s){return invoke(()->{groups.remove(user(),s.id(),s.revision());return null;});}

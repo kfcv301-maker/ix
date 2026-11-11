@@ -7,7 +7,8 @@ import java.util.List;
 
 /** Narrow, explicit dependency cleanup; historical user flow totals are retained. */
 public interface NodeDeletionMapper {
-    @Select("SELECT * FROM node WHERE id = #{id} FOR UPDATE")
+    @Select("SELECT n.* FROM node n WHERE n.id = #{id} "
+            + "AND NOT EXISTS (SELECT 1 FROM traffic_pool_host h WHERE h.node_id=n.id) FOR UPDATE")
     Node lockNode(Long id);
 
     @Select("SELECT * FROM tunnel WHERE id = #{id} FOR UPDATE")

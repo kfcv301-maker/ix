@@ -38,6 +38,7 @@ public class WebSocketServer extends TextWebSocketHandler {
     
     // 存储节点ID和对应的WebSocket session映射
     private static final ConcurrentHashMap<Long, WebSocketSession> nodeSessions = new ConcurrentHashMap<>();
+    private static final Set<Long> managedPoolNodes = ConcurrentHashMap.newKeySet();
     private static final Object[] nodeLifecycleLocks = new Object[64];
     static {
         for (int index = 0; index < nodeLifecycleLocks.length; index++) nodeLifecycleLocks[index] = new Object();
@@ -331,6 +332,7 @@ public class WebSocketServer extends TextWebSocketHandler {
                 // 更新节点状态为在线
                 Node node = nodeService.getById(nodeId);
                 if (node != null) {
+                    if (nodeService.isManagedPoolNode(nodeId)) managedPoolNodes.add(nodeId);
                     // 更新状态和版本信息
                     node.setStatus(1);
                     if (version != null) {
@@ -701,7 +703,7 @@ public class WebSocketServer extends TextWebSocketHandler {
 
     @SuppressWarnings("unchecked")
     private static boolean canViewNode(WebSocketSession session, Long nodeId) {
-        if (session == null || nodeId == null || !session.isOpen() || !activeSessions.contains(session)) {
+        if (session == null || nodeId == null || managedPoolNodes.contains(nodeId) || !session.isOpen() || !activeSessions.contains(session)) {
             return false;
         }
 

@@ -133,7 +133,7 @@ export default function AdminLayout({
       ),
       adminOnly: false
     },
-    { path: '/traffic-pools', label: '节点流量池管理', group: 'forwarding', adminOnly: true, icon: <ConsoleIcon name="traffic-pools" size={20}/> },
+    { path: '/traffic-pools', label: '流量池', group: 'forwarding', adminOnly: true, icon: <ConsoleIcon name="traffic-pools" size={20}/> },
     {
       path: '/node',
       label: '节点监控',

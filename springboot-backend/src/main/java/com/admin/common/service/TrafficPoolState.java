@@ -9,6 +9,8 @@ public class TrafficPoolState {
     public int resetDay=1,probePort=443,failureThreshold=3,recoveryThreshold=2,ttl=60;
     public boolean dnsEnabled,keepLastAddress;
     public List<Long> tunnelIds=new ArrayList<>();
+    public PreviousDns previousDns;
+    public record PreviousDns(String domain, String zoneId, String encryptedToken) { }
     public static class Member {
         public long nodeId,quotaBytes,usedBytes,lastRx,lastTx,lastAt,bootAt;
         public String cycle="",status="waiting",address="";
