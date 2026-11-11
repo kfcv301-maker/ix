@@ -1,0 +1,378 @@
+/* ==========================================================================
+   运营蓝调（akcdn-console）主题
+   参考运营型控制台的版式：浅灰底 + 白色侧栏、左侧竖条选中态、
+   「小标题 + 大标题」顶栏、彩色图标块统计卡。
+   ========================================================================== */
+
+/* ---------- 配色 ---------- */
+:root[data-panel-theme='akcdn-console'] {
+  --panel-bg: #f5f7fa;
+  --panel-surface: #ffffff;
+  --panel-surface-soft: #f7f8fa;
+  --panel-sidebar: #ffffff;
+  --panel-sidebar-ink: #4e5969;
+  --panel-header: #ffffff;
+  --panel-text: #1d2129;
+  --panel-muted: #626d7b;
+  --panel-border: #e5e6eb;
+  --panel-accent: #165dff;
+  --panel-accent-soft: #e8f3ff;
+  --panel-shadow: none;
+  --ak-fill: #f2f3f5;
+  --ak-fill-light: #f7f8fa;
+  --ak-text-2: #4e5969;
+  --ak-blue: #165dff;   --ak-blue-bg: #e8f3ff;
+  --ak-green: #00b42a;  --ak-green-bg: #e8ffea;
+  --ak-purple: #722ed1; --ak-purple-bg: #f5e8ff;
+  --ak-orange: #ff7d00; --ak-orange-bg: #fff7e8;
+  --ak-green-ink: #167431;
+  --ak-orange-ink: #944900;
+  --ak-chart-spark-upload: var(--ak-blue);
+  --ak-chart-spark-download: var(--ak-green-ink);
+  --ak-chart-cpu: var(--ak-blue);
+  --ak-chart-memory: var(--ak-purple);
+  --ak-chart-upload: var(--ak-blue);
+  --ak-chart-download: var(--ak-green-ink);
+  --ak-chart-tcp: var(--ak-orange-ink);
+  --ak-chart-udp: #008185;
+  --ak-chart-memory-available: var(--ak-green-ink);
+  --ak-chart-agent-rss: #c42c79;
+  --ak-hover-shadow: 0 4px 14px rgba(29, 33, 41, .06);
+  --heroui-primary: 222 100% 54%;
+  --heroui-primary-foreground: 0 0% 100%;
+}
+:root.dark[data-panel-theme='akcdn-console'] {
+  --panel-bg: #17171a;
+  --panel-surface: #232324;
+  --panel-surface-soft: #2a2a2b;
+  --panel-sidebar: #232324;
+  --panel-sidebar-ink: #c9cdd4;
+  --panel-header: #232324;
+  --panel-text: #f2f3f5;
+  --panel-muted: #a5adba;
+  --panel-border: #333335;
+  --panel-accent: #8ab1ff;
+  --panel-accent-soft: #1a2a4d;
+  --ak-fill: #2e2e30;
+  --ak-fill-light: #2a2a2b;
+  --ak-text-2: #c9cdd4;
+  --ak-blue: #8ab1ff;   --ak-blue-bg: rgba(60, 126, 255, .16);
+  --ak-green: #27c346;  --ak-green-bg: rgba(39, 195, 70, .15);
+  --ak-purple: #ba8cf4; --ak-purple-bg: rgba(141, 78, 218, .18);
+  --ak-orange: #ff9626; --ak-orange-bg: rgba(255, 150, 38, .15);
+  --ak-green-ink: #6bde8d;
+  --ak-orange-ink: #ffb568;
+  --ak-chart-udp: #4cd4d1;
+  --ak-chart-agent-rss: #ff8ec6;
+  --ak-hover-shadow: 0 4px 14px rgba(0, 0, 0, .3);
+  --heroui-primary: 220 100% 62%;
+  --heroui-primary-foreground: 222 30% 10%;
+}
+:root[data-panel-theme='akcdn-console'] .panel-main,
+:root[data-panel-theme='akcdn-console'] .console-main { background-image: none !important; }
+
+/* ---------- 侧栏 ---------- */
+:root[data-panel-theme='akcdn-console'] .console-sidebar { width: 220px; }
+:root[data-panel-theme='akcdn-console'] .console-workspace { margin-left: 220px; }
+:root[data-panel-theme='akcdn-console'] .console-brand { height: 76px; padding: 0 20px; gap: 10px; border-bottom: 0; }
+:root[data-panel-theme='akcdn-console'] .console-brand-mark {
+  width: 30px; height: 30px; border-radius: 9px; color: #fff;
+  background: linear-gradient(135deg, #33c2ff, #257cff 50%, #165dff);
+}
+:root[data-panel-theme='akcdn-console'] .console-brand-name { font-size: 17px; font-weight: 700; letter-spacing: -.01em; }
+:root[data-panel-theme='akcdn-console'] .console-brand-caption { font-size: 12px; letter-spacing: 0; margin-top: 2px; }
+:root[data-panel-theme='akcdn-console'] .console-nav { padding: 4px 12px 12px; }
+:root[data-panel-theme='akcdn-console'] .console-nav-section { margin: 16px 12px 6px; font-size: 12px; letter-spacing: 0; color: var(--panel-muted); }
+:root[data-panel-theme='akcdn-console'] .console-nav-section:first-child { margin-top: 4px; }
+:root[data-panel-theme='akcdn-console'] .console-nav-link {
+  position: relative; min-height: 40px; margin: 2px 0; padding: 9px 12px; gap: 10px; border-radius: 8px;
+  font-size: 14px; font-weight: 500; color: var(--ak-text-2);
+}
+:root[data-panel-theme='akcdn-console'] .console-nav-link:hover { background: var(--ak-fill); color: var(--panel-text); }
+:root[data-panel-theme='akcdn-console'] .console-nav-link[aria-current='page'] { background: var(--panel-accent-soft); color: var(--panel-accent); font-weight: 600; }
+:root[data-panel-theme='akcdn-console'] .console-nav-link[aria-current='page']::after { display: none; }
+:root[data-panel-theme='akcdn-console'] .console-nav-link[aria-current='page']::before {
+  content: ''; position: absolute; left: 0; top: 50%; width: 3px; height: 18px; margin-top: -9px;
+  border-radius: 0 3px 3px 0; background: var(--panel-accent);
+}
+:root[data-panel-theme='akcdn-console'] .console-sidebar-footer { padding: 12px; }
+:root[data-panel-theme='akcdn-console'] .console-sidebar-footer p {
+  margin: 8px 12px 2px; font-size: 12px; color: var(--panel-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+:root[data-panel-theme='akcdn-console'] .console-sidebar-footer p::before {
+  content: ''; display: inline-block; vertical-align: middle; width: 6px; height: 6px; margin: -2px 8px 0 1px; border-radius: 50%; background: var(--ak-green);
+  box-shadow: 0 0 0 3px var(--ak-green-bg);
+}
+
+/* 收起状态 */
+:root[data-panel-theme='akcdn-console'] .console-shell.is-collapsed .console-sidebar { width: 68px; }
+:root[data-panel-theme='akcdn-console'] .console-shell.is-collapsed .console-workspace { margin-left: 68px; }
+:root[data-panel-theme='akcdn-console'] .console-shell.is-collapsed .console-brand { padding: 0; }
+:root[data-panel-theme='akcdn-console'] .console-shell.is-collapsed .console-nav-section { margin: 10px 8px; }
+:root[data-panel-theme='akcdn-console'] .console-shell.is-collapsed .console-sidebar-footer p { display: none; }
+
+/* ---------- 顶栏：小标题 + 大标题 ---------- */
+:root[data-panel-theme='akcdn-console'] .console-topbar { height: 64px; padding: 0 24px; background: var(--panel-surface); border-bottom: 1px solid var(--panel-border); }
+:root[data-panel-theme='akcdn-console'] .console-topbar-left { gap: 14px; }
+:root[data-panel-theme='akcdn-console'] .console-topbar-divider { display: none; }
+:root[data-panel-theme='akcdn-console'] .console-breadcrumb { flex-direction: column; align-items: flex-start; gap: 1px; line-height: 1.25; }
+:root[data-panel-theme='akcdn-console'] .console-breadcrumb > svg { display: none; }
+:root[data-panel-theme='akcdn-console'] .console-breadcrumb span { font-size: 12px; color: var(--panel-muted); }
+:root[data-panel-theme='akcdn-console'] .console-breadcrumb strong { font-size: 18px; font-weight: 600; color: var(--panel-text); letter-spacing: -.01em; }
+:root[data-panel-theme='akcdn-console'] .console-icon-button { width: 34px; height: 34px; border-radius: 8px; color: var(--ak-text-2); }
+:root[data-panel-theme='akcdn-console'] .console-icon-button:hover { background: var(--ak-fill); color: var(--panel-text); }
+:root[data-panel-theme='akcdn-console'] .console-command-trigger {
+  height: 34px; min-width: 200px; border: 1px solid transparent; border-radius: 8px; background: var(--ak-fill); font-size: 13px; color: var(--panel-muted);
+}
+:root[data-panel-theme='akcdn-console'] .console-command-trigger:hover { border-color: var(--panel-accent); background: var(--panel-surface); }
+:root[data-panel-theme='akcdn-console'] .console-command-trigger kbd { border-color: var(--panel-border); background: var(--panel-surface); border-radius: 4px; font-size: 11px; }
+:root[data-panel-theme='akcdn-console'] .console-avatar {
+  width: 32px; height: 32px; border: 0; border-radius: 50%; color: #fff; font-size: 12px; font-weight: 600;
+  background: linear-gradient(135deg, #33c2ff, #165dff);
+}
+:root[data-panel-theme='akcdn-console'] .console-account { font-size: 13px; font-weight: 500; color: var(--panel-text); }
+
+/* ---------- 内容区 ---------- */
+:root[data-panel-theme='akcdn-console'] .console-main > div { padding: 24px !important; }
+:root[data-panel-theme='akcdn-console'] .console-page-heading { margin-bottom: 18px; }
+:root[data-panel-theme='akcdn-console'] .console-page-heading h1 { font-size: 20px; font-weight: 600; letter-spacing: -.01em; }
+:root[data-panel-theme='akcdn-console'] .console-page-heading p { font-size: 13px; color: var(--panel-muted); }
+
+/* 卡片：细边框、无阴影、悬停轻投影 */
+:root[data-panel-theme='akcdn-console'] .console-stat,
+:root[data-panel-theme='akcdn-console'] .console-table-panel,
+:root[data-panel-theme='akcdn-console'] .console-toolbar,
+:root[data-panel-theme='akcdn-console'] .console-quick-links button,
+:root[data-panel-theme='akcdn-console'] .console-main [data-slot='base']:has(> [data-slot='body']) {
+  border: 1px solid var(--panel-border) !important; border-radius: 12px; background: var(--panel-surface); box-shadow: none !important;
+}
+:root[data-panel-theme='akcdn-console'] .console-main .rounded-large,
+:root[data-panel-theme='akcdn-console'] .console-main .rounded-lg { border-radius: 12px; }
+:root[data-panel-theme='akcdn-console'] .console-stat:hover,
+:root[data-panel-theme='akcdn-console'] .console-main [data-slot='base']:has(> [data-slot='body'])[class*='hover:shadow']:hover { box-shadow: var(--ak-hover-shadow) !important; }
+
+/* 统计卡：色点标签 + 大号数字，四种色调轮换 */
+:root[data-panel-theme='akcdn-console'] .console-stats { gap: 16px; }
+:root[data-panel-theme='akcdn-console'] .console-stat { padding: 18px 20px; gap: 6px; transition: box-shadow .15s; }
+:root[data-panel-theme='akcdn-console'] .console-stat-label { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ak-text-2); }
+:root[data-panel-theme='akcdn-console'] .console-stat-label::before { content: ''; width: 8px; height: 8px; border-radius: 3px; background: var(--ak-tone, var(--ak-blue)); box-shadow: 0 0 0 3px var(--ak-tone-bg, var(--ak-blue-bg)); }
+:root[data-panel-theme='akcdn-console'] .console-stat strong { font-size: 24px; font-weight: 600; letter-spacing: -.02em; }
+:root[data-panel-theme='akcdn-console'] .console-stat-detail { font-size: 12px; color: var(--panel-muted); }
+:root[data-panel-theme='akcdn-console'] .console-stat:nth-child(4n+1) { --ak-tone: var(--ak-green); --ak-tone-bg: var(--ak-green-bg); }
+:root[data-panel-theme='akcdn-console'] .console-stat:nth-child(4n+2) { --ak-tone: var(--ak-blue); --ak-tone-bg: var(--ak-blue-bg); }
+:root[data-panel-theme='akcdn-console'] .console-stat:nth-child(4n+3) { --ak-tone: var(--ak-purple); --ak-tone-bg: var(--ak-purple-bg); }
+:root[data-panel-theme='akcdn-console'] .console-stat:nth-child(4n+4) { --ak-tone: var(--ak-orange); --ak-tone-bg: var(--ak-orange-bg); }
+
+/* 仪表盘统计卡：图标块挪到左侧，右侧标签 / 数字 / 进度 */
+:root[data-panel-theme='akcdn-console'] .console-dashboard-summary { gap: 16px !important; margin-bottom: 20px !important; }
+:root[data-panel-theme='akcdn-console'] .console-dashboard-summary [data-slot='body'] { padding: 18px 20px; }
+:root[data-panel-theme='akcdn-console'] .console-dashboard-summary [data-slot='body'] > .flex-col {
+  display: grid; grid-template-columns: 44px minmax(0, 1fr); column-gap: 14px; row-gap: 2px; align-items: center;
+}
+:root[data-panel-theme='akcdn-console'] .console-dashboard-summary [data-slot='body'] > .flex-col > * { margin: 0 !important; grid-column: 2; }
+:root[data-panel-theme='akcdn-console'] .console-dashboard-summary [data-slot='body'] > .flex-col > :first-child { display: contents; }
+:root[data-panel-theme='akcdn-console'] .console-dashboard-summary [data-slot='body'] > .flex-col > :first-child > p { grid-column: 2; grid-row: 1; font-size: 13px; color: var(--ak-text-2); }
+:root[data-panel-theme='akcdn-console'] .console-dashboard-summary [data-slot='body'] > .flex-col > :first-child > div {
+  grid-column: 1; grid-row: 1 / span 3; align-self: center; width: 44px; height: 44px; padding: 0; display: grid; place-items: center; border-radius: 12px;
+}
+:root[data-panel-theme='akcdn-console'] .console-dashboard-summary [data-slot='body'] > .flex-col > :first-child > div svg { width: 22px; height: 22px; }
+:root[data-panel-theme='akcdn-console'] .console-dashboard-summary [data-slot='body'] > .flex-col > p { font-size: 22px; font-weight: 600; letter-spacing: -.02em; line-height: 1.35; }
+:root[data-panel-theme='akcdn-console'] .console-main .bg-blue-100 { background: var(--ak-blue-bg) !important; }
+:root[data-panel-theme='akcdn-console'] .console-main .bg-green-100 { background: var(--ak-green-bg) !important; }
+:root[data-panel-theme='akcdn-console'] .console-main .bg-purple-100 { background: var(--ak-purple-bg) !important; }
+:root[data-panel-theme='akcdn-console'] .console-main .bg-orange-100 { background: var(--ak-orange-bg) !important; }
+:root[data-panel-theme='akcdn-console'] .console-main .text-blue-600 { color: var(--ak-blue) !important; }
+:root[data-panel-theme='akcdn-console'] .console-main .text-green-600 { color: var(--ak-green-ink) !important; }
+:root[data-panel-theme='akcdn-console'] .console-main .text-purple-600 { color: var(--ak-purple) !important; }
+:root[data-panel-theme='akcdn-console'] .console-main .text-orange-600 { color: var(--ak-orange-ink) !important; }
+
+/* 快捷入口：彩色图标块 + 标题 + 说明 + 箭头 */
+:root[data-panel-theme='akcdn-console'] .console-quick-links { gap: 16px; margin-bottom: 20px; }
+:root[data-panel-theme='akcdn-console'] .console-quick-links button { padding: 16px 18px; gap: 14px; transition: box-shadow .15s, border-color .15s; }
+:root[data-panel-theme='akcdn-console'] .console-quick-links button:hover { border-color: var(--panel-accent) !important; box-shadow: var(--ak-hover-shadow) !important; }
+:root[data-panel-theme='akcdn-console'] .console-quick-links button > svg:first-child {
+  width: 40px; height: 40px; padding: 10px; flex-shrink: 0; border-radius: 10px; color: var(--ak-tone, var(--ak-blue)); background: var(--ak-tone-bg, var(--ak-blue-bg));
+}
+:root[data-panel-theme='akcdn-console'] .console-quick-links button:nth-child(3n+1) { --ak-tone: var(--ak-blue); --ak-tone-bg: var(--ak-blue-bg); }
+:root[data-panel-theme='akcdn-console'] .console-quick-links button:nth-child(3n+2) { --ak-tone: var(--ak-green); --ak-tone-bg: var(--ak-green-bg); }
+:root[data-panel-theme='akcdn-console'] .console-quick-links button:nth-child(3n+3) { --ak-tone: var(--ak-purple); --ak-tone-bg: var(--ak-purple-bg); }
+:root[data-panel-theme='akcdn-console'] .console-quick-links strong { font-size: 14px; font-weight: 600; }
+:root[data-panel-theme='akcdn-console'] .console-quick-links small { font-size: 12px; color: var(--panel-muted); }
+:root[data-panel-theme='akcdn-console'] .console-quick-links button > svg:last-child { color: var(--panel-muted); }
+
+/* 工具栏与输入 */
+:root[data-panel-theme='akcdn-console'] .console-toolbar { padding: 12px 16px; }
+:root[data-panel-theme='akcdn-console'] .console-search-field,
+:root[data-panel-theme='akcdn-console'] .console-filter-select {
+  height: 34px; border: 1px solid transparent; border-radius: 8px; background: var(--ak-fill); font-size: 13px;
+}
+:root[data-panel-theme='akcdn-console'] .console-search-field:focus-within { outline: 0; border-color: var(--panel-accent); background: var(--panel-surface); }
+:root[data-panel-theme='akcdn-console'] .console-segment { border: 0; border-radius: 8px; padding: 3px; background: var(--ak-fill); }
+:root[data-panel-theme='akcdn-console'] .console-segment button { border-radius: 6px; font-size: 13px; color: var(--ak-text-2); }
+:root[data-panel-theme='akcdn-console'] .console-segment button[aria-pressed='true'] { background: var(--panel-surface); color: var(--panel-accent); font-weight: 600; box-shadow: 0 1px 2px rgba(0, 0, 0, .06); }
+:root[data-panel-theme='akcdn-console'] .console-main [data-slot='input-wrapper'],
+:root[data-panel-theme='akcdn-console'] .console-main [data-slot='trigger'] { border-radius: 8px; }
+:root[data-panel-theme='akcdn-console'] .console-main button.rounded-medium,
+:root[data-panel-theme='akcdn-console'] .console-main button.rounded-small { border-radius: 8px; }
+
+/* 表格：浅灰表头、悬停行 */
+:root[data-panel-theme='akcdn-console'] .console-table { font-size: 14px; }
+:root[data-panel-theme='akcdn-console'] .console-table th { background: var(--ak-fill-light); color: var(--ak-text-2); font-size: 13px; font-weight: 500; padding: 12px 16px; border-bottom: 1px solid var(--panel-border); }
+:root[data-panel-theme='akcdn-console'] .console-table td { padding: 14px 16px; border-bottom: 1px solid var(--panel-border); }
+:root[data-panel-theme='akcdn-console'] .console-table tbody tr:hover td { background: var(--ak-fill-light); }
+:root[data-panel-theme='akcdn-console'] .console-table-name { font-size: 14px; font-weight: 600; }
+:root[data-panel-theme='akcdn-console'] .console-table-secondary { font-size: 12px; color: var(--panel-muted); }
+:root[data-panel-theme='akcdn-console'] .console-address-button { font-size: 13px; color: var(--ak-text-2); }
+:root[data-panel-theme='akcdn-console'] .console-address-button:hover { color: var(--panel-accent); }
+:root[data-panel-theme='akcdn-console'] .console-main table thead { background: var(--ak-fill-light); }
+
+/* 弹窗 */
+:root[data-panel-theme='akcdn-console'] [role='dialog'] { border-radius: 12px; }
+
+/* ---------- 平板 ---------- */
+@media (min-width: 769px) and (max-width: 1100px) {
+  :root[data-panel-theme='akcdn-console'] .console-sidebar { width: 200px; }
+  :root[data-panel-theme='akcdn-console'] .console-workspace { margin-left: 200px; }
+  :root[data-panel-theme='akcdn-console'] .console-command-trigger { min-width: 0; }
+  :root[data-panel-theme='akcdn-console'] .console-main > div { padding: 20px !important; }
+  :root[data-panel-theme='akcdn-console'] .console-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  :root[data-panel-theme='akcdn-console'] .console-dashboard-summary [data-slot='body'] { padding: 16px 14px; }
+  :root[data-panel-theme='akcdn-console'] .console-dashboard-summary [data-slot='body'] > .flex-col { grid-template-columns: 38px minmax(0, 1fr); column-gap: 12px; }
+  :root[data-panel-theme='akcdn-console'] .console-dashboard-summary [data-slot='body'] > .flex-col > :first-child > div { width: 38px; height: 38px; border-radius: 10px; }
+  :root[data-panel-theme='akcdn-console'] .console-dashboard-summary [data-slot='body'] > .flex-col > p { font-size: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+}
+
+/* ---------- 手机 ---------- */
+@media (max-width: 768px) {
+  :root[data-panel-theme='akcdn-console'] .console-sidebar { width: 260px !important; }
+  :root[data-panel-theme='akcdn-console'] .console-workspace,
+  :root[data-panel-theme='akcdn-console'] .console-shell.is-collapsed .console-workspace { margin-left: 0; }
+  :root[data-panel-theme='akcdn-console'] .console-topbar { height: 58px; padding: 0 14px; }
+  :root[data-panel-theme='akcdn-console'] .console-breadcrumb span { display: none; }
+  :root[data-panel-theme='akcdn-console'] .console-breadcrumb strong { font-size: 17px; }
+  :root[data-panel-theme='akcdn-console'] .console-command-trigger { min-width: 0; width: 34px; padding: 0; justify-content: center; background: transparent; }
+  :root[data-panel-theme='akcdn-console'] .console-main > div { padding: 14px 14px 20px !important; }
+  :root[data-panel-theme='akcdn-console'] .console-stats,
+  :root[data-panel-theme='akcdn-console'] .console-dashboard-summary,
+  :root[data-panel-theme='akcdn-console'] .console-quick-links { gap: 10px !important; }
+  :root[data-panel-theme='akcdn-console'] .console-stat { padding: 14px; }
+  :root[data-panel-theme='akcdn-console'] .console-stat strong { font-size: 20px; }
+  :root[data-panel-theme='akcdn-console'] .console-dashboard-summary [data-slot='body'] { padding: 14px 12px; }
+  :root[data-panel-theme='akcdn-console'] .console-dashboard-summary [data-slot='body'] > .flex-col { grid-template-columns: 36px minmax(0, 1fr); column-gap: 10px; }
+  :root[data-panel-theme='akcdn-console'] .console-dashboard-summary [data-slot='body'] > .flex-col > :first-child > div { width: 36px; height: 36px; border-radius: 10px; }
+  :root[data-panel-theme='akcdn-console'] .console-dashboard-summary [data-slot='body'] > .flex-col > :first-child > div svg { width: 18px; height: 18px; }
+  :root[data-panel-theme='akcdn-console'] .console-dashboard-summary [data-slot='body'] > .flex-col > p { font-size: 17px; }
+  :root[data-panel-theme='akcdn-console'] .console-dashboard-summary [data-slot='body'] > .flex-col > :first-child > p { font-size: 12px; }
+  :root[data-panel-theme='akcdn-console'] .console-table td { padding: 0; border-bottom: 0; }
+  :root[data-panel-theme='akcdn-console'] .console-table th { padding: 0; }
+  :root[data-panel-theme='akcdn-console'] .console-table tbody tr:hover td { background: transparent; }
+  :root[data-panel-theme='akcdn-console'] .console-mobile-tabs { border-top: 1px solid var(--panel-border); background: var(--panel-surface); }
+  :root[data-panel-theme='akcdn-console'] .console-mobile-tabs button { font-size: 11px; color: var(--panel-muted); }
+  :root[data-panel-theme='akcdn-console'] .console-mobile-tabs button[aria-current='page'] { color: var(--panel-accent); font-weight: 600; }
+}
+
+/* 主题选择弹窗里的色块 */
+.panel-theme-choice-akcdn-console .panel-theme-swatch { background: linear-gradient(135deg, #ffffff, #f2f3f5); }
+.panel-theme-choice-akcdn-console .panel-theme-swatch i { background: #165dff; }
+.panel-theme-choice-akcdn-console .panel-theme-swatch i:nth-child(2) { background: #00b42a; }
+.panel-theme-choice-akcdn-console .panel-theme-swatch i:nth-child(3) { background: #ff7d00; }
+
+/* ==========================================================================
+   节点监控 / 实时流量
+   ========================================================================== */
+:root[data-panel-theme='akcdn-console'] .console-tone-success { color: var(--ak-green-ink); }
+:root[data-panel-theme='akcdn-console'] .console-tone-warning { color: var(--ak-orange-ink); }
+:root[data-panel-theme='akcdn-console'] .console-status-dot.status-success { background: var(--ak-green); }
+:root[data-panel-theme='akcdn-console'] .console-status-dot.status-warning { background: var(--ak-orange); }
+
+/* 概览：四张独立的小卡片，色点 + 大数字 */
+:root[data-panel-theme='akcdn-console'] .monitor-overview { gap: 16px; padding: 0; border: 0; background: transparent; border-radius: 0; }
+:root[data-panel-theme='akcdn-console'] .monitor-overview > div {
+  flex-direction: column; align-items: flex-start; justify-content: center; gap: 6px; padding: 16px 20px;
+  border: 1px solid var(--panel-border); border-radius: 12px; background: var(--panel-surface);
+}
+:root[data-panel-theme='akcdn-console'] .monitor-overview > div + div { border-left: 1px solid var(--panel-border); }
+:root[data-panel-theme='akcdn-console'] .monitor-overview span { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ak-text-2); white-space: nowrap; }
+:root[data-panel-theme='akcdn-console'] .monitor-overview span::before { content: ''; width: 8px; height: 8px; border-radius: 3px; background: var(--ak-tone); box-shadow: 0 0 0 3px var(--ak-tone-bg); }
+:root[data-panel-theme='akcdn-console'] .monitor-overview strong { font-size: 26px; font-weight: 600; }
+:root[data-panel-theme='akcdn-console'] .monitor-overview > div:nth-child(1) { --ak-tone: var(--ak-blue); --ak-tone-bg: var(--ak-blue-bg); }
+:root[data-panel-theme='akcdn-console'] .monitor-overview > div:nth-child(2) { --ak-tone: var(--ak-green); --ak-tone-bg: var(--ak-green-bg); }
+:root[data-panel-theme='akcdn-console'] .monitor-overview > div:nth-child(3) { --ak-tone: var(--ak-orange); --ak-tone-bg: var(--ak-orange-bg); }
+:root[data-panel-theme='akcdn-console'] .monitor-overview > div:nth-child(4) { --ak-tone: var(--ak-purple); --ak-tone-bg: var(--ak-purple-bg); }
+
+/* 实时连接状态条：已连接时绿色呼吸点，断线 / 连接中为橙色 */
+:root[data-panel-theme='akcdn-console'] .monitor-connection {
+  margin: 14px 0; padding: 10px 14px; border: 1px solid color-mix(in srgb, var(--ak-green) 25%, transparent); border-radius: 10px;
+  background: var(--ak-green-bg); color: var(--panel-text); font-size: 13px;
+}
+:root[data-panel-theme='akcdn-console'] .monitor-connection.is-pending { border-color: color-mix(in srgb, var(--ak-orange) 30%, transparent); background: var(--ak-orange-bg); color: var(--panel-text); }
+:root[data-panel-theme='akcdn-console'] .monitor-connection > .console-status-dot { width: 8px; height: 8px; position: relative; }
+:root[data-panel-theme='akcdn-console'] .monitor-connection:not(.is-pending) > .console-status-dot::after {
+  content: ''; position: absolute; inset: -4px; border-radius: 50%; background: var(--ak-green); opacity: .35;
+  animation: ak-live-pulse 1.8s ease-out infinite;
+}
+@keyframes ak-live-pulse { 0% { transform: scale(.5); opacity: .5; } 100% { transform: scale(1.8); opacity: 0; } }
+:root[data-panel-theme='akcdn-console'] .monitor-connection-hint { color: var(--panel-muted); font-size: 12px; }
+
+/* 节点列表 */
+:root[data-panel-theme='akcdn-console'] .monitor-list { border-radius: 12px; border-color: var(--panel-border); }
+:root[data-panel-theme='akcdn-console'] .monitor-list-header { background: var(--ak-fill-light); color: var(--ak-text-2); font-size: 13px; font-weight: 500; }
+:root[data-panel-theme='akcdn-console'] .monitor-row { font-size: 13px; }
+:root[data-panel-theme='akcdn-console'] .monitor-row:hover { background: var(--ak-fill-light); }
+:root[data-panel-theme='akcdn-console'] .monitor-name-line > button { font-size: 14px; }
+:root[data-panel-theme='akcdn-console'] .monitor-name-line > button:hover { color: var(--panel-accent); }
+:root[data-panel-theme='akcdn-console'] .monitor-status { padding: 1px 8px; border-radius: 999px; background: var(--ak-fill); font-size: 12px; }
+:root[data-panel-theme='akcdn-console'] .monitor-status.is-online { background: var(--ak-green-bg); color: var(--ak-green-ink); }
+:root[data-panel-theme='akcdn-console'] .monitor-address { font-size: 12px; }
+:root[data-panel-theme='akcdn-console'] .monitor-version { font-size: 12px; }
+:root[data-panel-theme='akcdn-console'] .monitor-resource strong { font-size: 15px; font-weight: 600; }
+:root[data-panel-theme='akcdn-console'] .monitor-resource small { font-size: 12px; }
+:root[data-panel-theme='akcdn-console'] .monitor-progress [data-slot='track'] { height: 6px; background: var(--ak-fill); }
+
+/* 实时速率：上传蓝 / 下载绿 的小图标块 + 加粗数字 */
+:root[data-panel-theme='akcdn-console'] .monitor-rates { gap: 8px; }
+:root[data-panel-theme='akcdn-console'] .monitor-rates > span { gap: 8px; font-size: 13px; font-weight: 600; color: var(--panel-text); }
+:root[data-panel-theme='akcdn-console'] .monitor-rates > span > svg { width: 22px; height: 22px; padding: 4px; border-radius: 6px; flex-shrink: 0; }
+:root[data-panel-theme='akcdn-console'] .monitor-rates > span:first-child svg { color: var(--ak-blue); background: var(--ak-blue-bg); }
+:root[data-panel-theme='akcdn-console'] .monitor-rates > span:last-child svg { color: var(--ak-green-ink); background: var(--ak-green-bg); }
+:root[data-panel-theme='akcdn-console'] .monitor-connections > span { font-size: 13px; font-weight: 500; }
+:root[data-panel-theme='akcdn-console'] .monitor-connections small { width: auto; min-width: 34px; padding: 0 6px; border-radius: 4px; background: var(--ak-fill); font-size: 11px; text-align: center; }
+:root[data-panel-theme='akcdn-console'] .monitor-trend > div { height: 26px; }
+
+/* 实时曲线弹窗 */
+:root[data-panel-theme='akcdn-console'] .monitor-detail-facts { border-bottom-color: var(--panel-border); }
+:root[data-panel-theme='akcdn-console'] .monitor-detail-facts span { font-size: 12px; }
+:root[data-panel-theme='akcdn-console'] .monitor-detail-facts strong { font-size: 14px; font-weight: 600; }
+:root[data-panel-theme='akcdn-console'] .monitor-chart-grid { gap: 16px; }
+:root[data-panel-theme='akcdn-console'] .monitor-chart-grid > div { border-color: var(--panel-border); border-radius: 12px; padding: 16px 10px 6px; background: var(--panel-surface); }
+:root[data-panel-theme='akcdn-console'] .monitor-chart-grid > div > div:first-child { padding-left: 8px; font-size: 14px; font-weight: 600; }
+:root[data-panel-theme='akcdn-console'] .monitor-chart .recharts-cartesian-grid line { stroke: var(--panel-border); }
+:root[data-panel-theme='akcdn-console'] .monitor-chart .recharts-cartesian-axis-tick-value { fill: var(--panel-muted); }
+:root[data-panel-theme='akcdn-console'] .monitor-chart .recharts-cartesian-axis-line,
+:root[data-panel-theme='akcdn-console'] .monitor-chart .recharts-cartesian-axis-tick-line { stroke: var(--panel-border); }
+:root[data-panel-theme='akcdn-console'] .monitor-diagnostics { border-color: var(--panel-border); border-radius: 12px; }
+
+@media (min-width: 769px) and (max-width: 1100px) {
+  :root[data-panel-theme='akcdn-console'] .monitor-overview { gap: 12px; }
+  :root[data-panel-theme='akcdn-console'] .monitor-overview > div { padding: 14px 16px; }
+  :root[data-panel-theme='akcdn-console'] .monitor-overview strong { font-size: 22px; }
+}
+@media (max-width: 768px) {
+  :root[data-panel-theme='akcdn-console'] .monitor-overview { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 0; }
+  :root[data-panel-theme='akcdn-console'] .monitor-overview > div { padding: 12px 14px; gap: 4px; }
+  :root[data-panel-theme='akcdn-console'] .monitor-overview span { font-size: 12px; }
+  :root[data-panel-theme='akcdn-console'] .monitor-overview strong { font-size: 22px; }
+  :root[data-panel-theme='akcdn-console'] .monitor-connection { margin: 12px 0; padding: 10px 12px; font-size: 12px; align-items: center; }
+  :root[data-panel-theme='akcdn-console'] .monitor-connection > .console-status-dot { margin-top: 0; }
+  :root[data-panel-theme='akcdn-console'] .monitor-list { border: 0; }
+  :root[data-panel-theme='akcdn-console'] .monitor-row { border-radius: 12px; border-color: var(--panel-border); padding: 16px; }
+  :root[data-panel-theme='akcdn-console'] .monitor-row:hover { background: var(--panel-surface); }
+  :root[data-panel-theme='akcdn-console'] .monitor-resource::before,
+  :root[data-panel-theme='akcdn-console'] .monitor-rates::before,
+  :root[data-panel-theme='akcdn-console'] .monitor-connections::before { font-size: 12px; color: var(--panel-muted); }
+  :root[data-panel-theme='akcdn-console'] .monitor-actions { border-top-color: var(--panel-border); }
+  :root[data-panel-theme='akcdn-console'] .monitor-chart-grid { grid-template-columns: minmax(0, 1fr); }
+}
+@media (prefers-reduced-motion: reduce) {
+  :root[data-panel-theme='akcdn-console'] .monitor-connection > .console-status-dot::after { animation: none; }
+}

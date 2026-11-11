@@ -1,0 +1,28 @@
+/* Shared typography for supporting console controls and labels. */
+.console-breadcrumb { font-size: 12px; }
+.console-brand-caption { font-size: 10.5px; }
+.console-nav-section { font-size: 11px; }
+.console-sidebar-footer p { font-size: 11px; }
+.console-command-trigger { font-size: 12px; }
+.console-command-trigger kbd { font-size: 10px; }
+.console-account { font-size: 12px; }
+.console-page-heading p { font-size: 13px; }
+.console-stat-label { font-size: 12px; }
+.console-stat-detail { font-size: 11px; }
+.console-quick-links strong { font-size: 13px; }
+.console-quick-links small { font-size: 11.5px; }
+.console-search-field input,
+.console-filter-select { font-size: 12px; }
+.console-segment button { font-size: 11.5px; }
+.console-toolbar-tail { font-size: 12px; }
+.console-table { font-size: 13px; }
+.console-table-name { font-size: 13px; }
+.console-table-secondary { font-size: 11.5px; }
+.console-address-button { font-size: 12px; }
+.console-table-footer { font-size: 11.5px; }
+.console-node-summary span,
+.monitor-detail-facts span { font-size: 11.5px; }
+@media (max-width: 768px) {
+  .console-mobile-tabs button { font-size: 10.5px; }
+  .console-table td[data-label]::before { font-size: 11px; }
+}

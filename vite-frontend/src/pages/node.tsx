@@ -1011,7 +1011,7 @@ export default function NodePage() {
                 <div className="monitor-resource" role="cell" data-label="内存"><strong>{info ? `${info.memoryUsage.toFixed(1)}%` : '—'}</strong><Progress aria-label={`${node.name} 内存使用率`} value={info?.memoryUsage || 0} color={getProgressColor(info?.memoryUsage || 0, !info)} size="sm" className="monitor-progress"/><small>{info?.memoryTotal ? formatCapacity(info.memoryTotal) : '—'}</small></div>
                 <div className="monitor-rates" role="cell" data-label="实时速率"><span><ConsoleIcon name="upload" size={14}/><span className="sr-only">上传</span>{info ? formatSpeed(info.uploadSpeed) : '—'}</span><span><ConsoleIcon name="download" size={14}/><span className="sr-only">下载</span>{info ? formatSpeed(info.downloadSpeed) : '—'}</span></div>
                 <div className="monitor-connections" role="cell" data-label="连接数"><span><small>TCP</small>{info ? formatOptionalNumber(info.tcpConnections) : '—'}</span><span><small>UDP</small>{info ? formatOptionalNumber(info.udpConnections) : '—'}</span></div>
-                <div className="monitor-trend" role="cell" data-label="网络趋势">{info && (metricHistory[node.id]?.length || 0) >= 2 ? <><MetricSparkline data={metricHistory[node.id]} dataKey="uploadSpeed" stroke="#397bf6" ariaLabel={`${node.name} 上传速率趋势`}/><MetricSparkline data={metricHistory[node.id]} dataKey="downloadSpeed" stroke="#16a36b" ariaLabel={`${node.name} 下载速率趋势`}/></> : <span>{online ? '等待采样' : '暂无实时数据'}</span>}</div>
+                <div className="monitor-trend" role="cell" data-label="网络趋势">{info && (metricHistory[node.id]?.length || 0) >= 2 ? <><MetricSparkline data={metricHistory[node.id]} dataKey="uploadSpeed" stroke="var(--ak-chart-spark-upload, #397bf6)" ariaLabel={`${node.name} 上传速率趋势`}/><MetricSparkline data={metricHistory[node.id]} dataKey="downloadSpeed" stroke="var(--ak-chart-spark-download, #16a36b)" ariaLabel={`${node.name} 下载速率趋势`}/></> : <span>{online ? '等待采样' : '暂无实时数据'}</span>}</div>
                 <div className="monitor-actions" role="cell">
                   <Button size="sm" variant="light" color="primary" onPress={() => setMonitorNodeId(node.id)} aria-label={`监控 ${node.name}`} startContent={<ConsoleIcon name="activity" size={16}/>}>监控</Button>
                   {canManageNode(node) && <Dropdown><DropdownTrigger><Button isIconOnly size="sm" variant="light" aria-label={`管理 ${node.name}`}><ConsoleIcon name="more"/></Button></DropdownTrigger><DropdownMenu aria-label={`${node.name} 节点管理`} onAction={key => { if (key === 'install') openInstallCommand(node); if (key === 'edit') handleEdit(node); if (key === 'delete') handleDelete(node); }}><DropdownItem key="install" startContent={<ConsoleIcon name="vps" size={16}/>}>安装</DropdownItem><DropdownItem key="edit" startContent={<ConsoleIcon name="edit" size={16}/>}>编辑</DropdownItem><DropdownItem key="delete" color="danger" className="text-danger" startContent={<ConsoleIcon name="close" size={16}/>}>删除</DropdownItem></DropdownMenu></Dropdown>}
@@ -1070,8 +1070,8 @@ export default function NodePage() {
                             labelFormatter={(value) => `时间：${formatChartTime(Number(value))}`}
                             formatter={(value, name) => [`${Number(value).toFixed(1)}%`, name]}
                           />
-                          <Line type="monotone" dataKey="cpuUsage" name="CPU" stroke="#3b82f6" strokeWidth={2} dot={false} isAnimationActive={false} />
-                          <Line type="monotone" dataKey="memoryUsage" name="内存" stroke="#8b5cf6" strokeWidth={2} dot={false} isAnimationActive={false} />
+                          <Line type="monotone" dataKey="cpuUsage" name="CPU" stroke="var(--ak-chart-cpu, #3b82f6)" strokeWidth={2} dot={false} isAnimationActive={false} />
+                          <Line type="monotone" dataKey="memoryUsage" name="内存" stroke="var(--ak-chart-memory, #8b5cf6)" strokeWidth={2} dot={false} isAnimationActive={false} />
                         </LineChart>
                       </ResponsiveContainer>
                     </div>
@@ -1089,8 +1089,8 @@ export default function NodePage() {
                             labelFormatter={(value) => `时间：${formatChartTime(Number(value))}`}
                             formatter={(value, name) => [formatSpeed(Number(value)), name]}
                           />
-                          <Line type="monotone" dataKey="uploadSpeed" name="上行" stroke="#f59e0b" strokeWidth={2} dot={false} isAnimationActive={false} />
-                          <Line type="monotone" dataKey="downloadSpeed" name="下行" stroke="#10b981" strokeWidth={2} dot={false} isAnimationActive={false} />
+                          <Line type="monotone" dataKey="uploadSpeed" name="上行" stroke="var(--ak-chart-upload, #f59e0b)" strokeWidth={2} dot={false} isAnimationActive={false} />
+                          <Line type="monotone" dataKey="downloadSpeed" name="下行" stroke="var(--ak-chart-download, #10b981)" strokeWidth={2} dot={false} isAnimationActive={false} />
                         </LineChart>
                       </ResponsiveContainer>
                     </div>
@@ -1108,8 +1108,8 @@ export default function NodePage() {
                             labelFormatter={(value) => `时间：${formatChartTime(Number(value))}`}
                             formatter={(value, name) => [Number(value).toFixed(0), name]}
                           />
-                          <Line connectNulls type="monotone" dataKey="tcpConnections" name="TCP 已建立" stroke="#f97316" strokeWidth={2} dot={false} isAnimationActive={false} />
-                          <Line connectNulls type="monotone" dataKey="udpConnections" name="UDP 活动套接字" stroke="#06b6d4" strokeWidth={2} dot={false} isAnimationActive={false} />
+                          <Line connectNulls type="monotone" dataKey="tcpConnections" name="TCP 已建立" stroke="var(--ak-chart-tcp, #f97316)" strokeWidth={2} dot={false} isAnimationActive={false} />
+                          <Line connectNulls type="monotone" dataKey="udpConnections" name="UDP 活动套接字" stroke="var(--ak-chart-udp, #06b6d4)" strokeWidth={2} dot={false} isAnimationActive={false} />
                         </LineChart>
                       </ResponsiveContainer>
                     </div>
@@ -1127,8 +1127,8 @@ export default function NodePage() {
                             labelFormatter={(value) => `时间：${formatChartTime(Number(value))}`}
                             formatter={(value, name) => [formatTraffic(Number(value)), name]}
                           />
-                          <Line connectNulls type="monotone" dataKey="memoryAvailable" name="可用内存" stroke="#22c55e" strokeWidth={2} dot={false} isAnimationActive={false} />
-                          <Line connectNulls type="monotone" dataKey="agentRss" name="Agent RSS" stroke="#ec4899" strokeWidth={2} dot={false} isAnimationActive={false} />
+                          <Line connectNulls type="monotone" dataKey="memoryAvailable" name="可用内存" stroke="var(--ak-chart-memory-available, #22c55e)" strokeWidth={2} dot={false} isAnimationActive={false} />
+                          <Line connectNulls type="monotone" dataKey="agentRss" name="Agent RSS" stroke="var(--ak-chart-agent-rss, #ec4899)" strokeWidth={2} dot={false} isAnimationActive={false} />
                         </LineChart>
                       </ResponsiveContainer>
                     </div>
