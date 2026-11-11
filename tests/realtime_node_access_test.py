@@ -25,6 +25,7 @@ class RealtimeNodeAccessTest(unittest.TestCase):
                 owner_user_id INTEGER, status INTEGER);
             CREATE TABLE user_tunnel (user_id INTEGER, tunnel_id INTEGER, status INTEGER, exp_time INTEGER);
             CREATE TABLE tunnel_entry_node (tunnel_id INTEGER, node_id INTEGER, status INTEGER);
+            CREATE TABLE traffic_pool_host (node_id INTEGER PRIMARY KEY);
             INSERT INTO node VALUES
                 (1, 'self', 42), (2, 'entry', NULL), (3, 'exit', NULL),
                 (4, 'second entry', NULL), (5, 'disabled grant', NULL),
@@ -54,6 +55,13 @@ class RealtimeNodeAccessTest(unittest.TestCase):
     def test_expired_assignment_stops_exposing_nodes(self):
         rows = self.db.execute(query("getRealtimeNodes"), {"userId": 42, "now": 2000}).fetchall()
         self.assertEqual(rows, [(1, "self")])
+
+    def test_pool_hosts_are_excluded_from_general_realtime_lists(self):
+        self.db.execute("INSERT INTO traffic_pool_host VALUES (2)")
+        assigned = self.db.execute(query("getRealtimeNodes"), {"userId": 42, "now": 1000}).fetchall()
+        administrator = self.db.execute(query("getAllRealtimeNodes")).fetchall()
+        self.assertEqual(assigned, [(1, "self"), (3, "exit"), (4, "second entry")])
+        self.assertEqual([node_id for node_id, _ in administrator], [1, 3, 4, 5, 6, 7, 8, 9, 10])
 
     def test_socket_refreshes_at_the_next_grant_expiry(self):
         row = self.db.execute(query("getNextRealtimeGrantExpiry"), {"userId": 42, "now": 1000}).fetchone()
