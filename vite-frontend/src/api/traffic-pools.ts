@@ -40,3 +40,50 @@ export const saveManagedPool = (settings: { revision: number; domain: string; to
 export const enrollManagedServer = (server: {
   ip: string; port: number; password: string; panelOrigin: string; usedBytes: number; quotaBytes: number;
 }) => Network.post('/traffic-pool/managed/enroll', server);
+export interface ConfiguredPool {
+  id: string;
+  name: string;
+  revision: number;
+  domain: string;
+  zoneId: string;
+  hasToken: boolean;
+  dnsStatus: string;
+  tunnelId: number | null;
+  probePort: number;
+}
+
+export type ConfiguredServer = Omit<ManagedPoolServer, 'port'> & {
+  port: number | null;
+  name: string;
+  published: boolean | null;
+};
+
+export interface PoolSettings {
+  id: string;
+  name: string;
+  revision: number;
+  domain: string;
+  zoneId: string;
+  token: string;
+  tunnelId: number | null;
+}
+
+export interface PoolServerInput {
+  ip: string;
+  port: number;
+  username: string;
+  password: string;
+  panelOrigin: string;
+  usedBytes: number;
+  quotaBytes: number;
+}
+
+export const listConfiguredPools = () => Network.post<ConfiguredPool[]>('/traffic-pool/configured');
+export const getConfiguredPool = (id: string) =>
+  Network.post<{ pool: ConfiguredPool; servers: ConfiguredServer[] }>('/traffic-pool/detail', { id });
+export const configurePool = (settings: PoolSettings) =>
+  Network.post<ConfiguredPool>('/traffic-pool/configure', settings);
+export const enrollPoolServers = (id: string, servers: PoolServerInput[]) =>
+  Network.post<{ index: number; accepted: boolean; message: string | null }[]>('/traffic-pool/enroll-batch', { id, servers });
+export const changePoolServerAddress = (data: { id: string; nodeId: number; ip: string; username: string; password: string }) =>
+  Network.post('/traffic-pool/server/address', data);

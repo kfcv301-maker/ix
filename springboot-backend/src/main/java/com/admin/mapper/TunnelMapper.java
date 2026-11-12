@@ -14,6 +14,6 @@ import org.apache.ibatis.annotations.Select;
  * @since 2025-06-03
  */
 public interface TunnelMapper extends BaseMapper<Tunnel> {
-    @Select("SELECT COUNT(*) FROM traffic_pool_tunnel WHERE tunnel_id=#{id} AND pool_id=#{poolId}")
-    int countPoolTunnel(@Param("id") Long id,@Param("poolId") String poolId);
+    @Select("SELECT COUNT(*) FROM traffic_pool_tunnel WHERE tunnel_id=#{id}")
+    int countPoolTunnel(@Param("id") Long id);
 }

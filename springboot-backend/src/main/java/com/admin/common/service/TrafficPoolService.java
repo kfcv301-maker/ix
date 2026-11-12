@@ -59,6 +59,12 @@ public class TrafficPoolService {
     void member(TrafficPoolState.Member m) {jdbc.update("UPDATE traffic_pool_member SET payload=? WHERE node_id=?",JSON.toJSONString(m),m.nodeId);}
     AESCrypto crypto(TrafficPoolState p) {return crypto(p.id,p.zoneId,p.domain);}
     private AESCrypto crypto(String id,String zone,String domain) {return new AESCrypto(key+":traffic-pool:v1:"+id+":"+zone+":"+domain);}
+    List<String> boundIps(Node node) { return node==null?List.of():observer.addresses(node); }
+
+    Set<Long> tunnelEntries(Tunnel tunnel) { return ingress.resolveNodeIds(tunnel); }
+
+    boolean probeBoundIp(String ip, int port) { return observer.probe(ip,port); }
+
     TrafficPoolState managedForUpdate() {
         var pool = new TrafficPoolState();
         pool.id = MANAGED_ID;
@@ -116,6 +122,7 @@ public class TrafficPoolService {
             groups.admin(user);boolean create=s.id()==null || s.id().isEmpty();
             if(create && jdbc.queryForObject("SELECT COUNT(*) FROM traffic_pool",Long.class)>=32)throw new IllegalArgumentException("最多创建 32 个流量池");
             var p=create?new TrafficPoolState():load(s.id(),true);int oldReset=p.resetDay;
+            if(p.automaticProbe)throw new IllegalArgumentException("请在流量池页面编辑这个流量池");
             if(p.revision!=s.revision())throw new IllegalArgumentException("流量池已更新，请刷新后重试");
             if(create)p.id=UUID.randomUUID().toString();
             if(!create && (!p.domain.equals(domain) || !p.zoneId.equals(s.zoneId())) && !p.domain.isEmpty())
@@ -222,7 +229,7 @@ public class TrafficPoolService {
     void process(String id) {
         tx.executeWithoutResult(t->{
             var p=load(id,true);long now=clock.millis();if(now-p.checkedAt<20000)return;var rows=members(id);
-            boolean managed = MANAGED_ID.equals(id);
+            boolean managed = p.automaticProbe || MANAGED_ID.equals(id);
             if (managed) {
                 p.probePort = p.tunnelIds.isEmpty() ? 0 : forwards.selectList(new QueryWrapper<Forward>()
                         .eq("tunnel_id",p.tunnelIds.getFirst()).eq("status",1)).stream()
@@ -269,9 +276,12 @@ public class TrafficPoolService {
                 }
                 var after=dns.list(p.zoneId,p.domain,token);
                 p.dnsStatus=dns.plan(after,owner(p),desired).isEmpty()?"synced":"syncing";
+                p.publishedAddresses=after.stream()
+                        .filter(r->owner(p).equals(r.comment()) && !r.proxied() && Set.of("A","AAAA").contains(r.type()))
+                        .map(r->TrafficPoolDns.normalize(r.content())).filter(ip->!ip.isEmpty()).distinct().sorted().toList();
                 if("synced".equals(p.dnsStatus)) {
                     p.lastSyncedAt=clock.millis();
-                    if (p.previousDns != null) retirePreviousDns(p);
+                    if (p.previousDns != null && !desired.isEmpty()) retirePreviousDns(p);
                 }
             } catch(RuntimeException failed) {p.dnsStatus="dns_error";}
             persist(p);

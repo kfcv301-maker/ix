@@ -378,8 +378,8 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
             return R.err(ERROR_TUNNEL_NOT_FOUND);
         }
         if (!canManage(existing)) return R.err(403, "只能删除自己创建的隧道");
-        if (baseMapper.countPoolTunnel(id,com.admin.common.service.TrafficPoolService.MANAGED_ID)!=0)
-            return R.err("该隧道由独立流量池管理");
+        if (baseMapper.countPoolTunnel(id)!=0)
+            return R.err("该隧道已绑定流量池");
         boolean administrator = isAdministrator();
         Long requesterId = currentUserId();
 

@@ -21,6 +21,11 @@ public class TrafficPoolController {
     @PostMapping("/dns-preview") public R preview(@RequestBody Selection s){return invoke(()->pools.preview(user(),s.id()));}
     @PostMapping("/dns-adopt") public R adopt(@RequestBody Adoption a){return invoke(()->{pools.adopt(user(),a.id(),a.revision(),a.fingerprint(),a.acknowledgement());return null;});}
     @PostMapping("/events") public R events(@RequestBody Selection s){return invoke(()->pools.events(user(),s.id()));}
+    @PostMapping("/configured") public R configured(){return invoke(()->managed.configured(user()));}
+    @PostMapping("/detail") public R detail(@RequestBody Selection s){return invoke(()->managed.detail(user(),s.id()));}
+    @PostMapping("/configure") public R configure(@RequestBody ManagedTrafficPoolService.PoolSettings s){return invoke(()->managed.configure(user(),s));}
+    @PostMapping("/enroll-batch") public R enrollBatch(@RequestBody ManagedTrafficPoolService.Batch s){return invoke(()->managed.enrollBatch(user(),s));}
+    @PostMapping("/server/address") public R changeAddress(@RequestBody ManagedTrafficPoolService.AddressChange s){return invoke(()->{managed.changeAddress(user(),s);return null;});}
     @PostMapping("/managed") public R managed(){return invoke(()->managed.get(user()));}
     @PostMapping("/managed/settings") public R managedSettings(@RequestBody ManagedTrafficPoolService.Settings s){return invoke(()->managed.save(user(),s));}
     @PostMapping("/managed/enroll") public R enroll(@RequestBody ManagedTrafficPoolService.Enrollment s){return invoke(()->{managed.enroll(user(),s);return null;});}
