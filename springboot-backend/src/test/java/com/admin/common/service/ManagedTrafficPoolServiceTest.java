@@ -57,7 +57,7 @@ class ManagedTrafficPoolServiceTest {
         var ds = new JdbcDataSource();
         ds.setURL("jdbc:h2:mem:"+UUID.randomUUID()+";MODE=MySQL;DB_CLOSE_DELAY=-1");
         jdbc = new JdbcTemplate(ds);
-        jdbc.execute("CREATE TABLE node(id BIGINT PRIMARY KEY,server_ip VARCHAR(45),ip VARCHAR(45),ddns_enabled INT,ddns_record_name VARCHAR(255))");
+        jdbc.execute("CREATE TABLE node(id BIGINT PRIMARY KEY,server_ip VARCHAR(45),ip VARCHAR(45),ddns_enabled INT,ddns_record_name VARCHAR(255),updated_time BIGINT)");
         jdbc.execute("CREATE TABLE tunnel(id BIGINT PRIMARY KEY,in_ip VARCHAR(255),updated_time BIGINT)");
         jdbc.execute("CREATE TABLE tunnel_entry_node(id BIGINT AUTO_INCREMENT PRIMARY KEY,tunnel_id BIGINT,node_id BIGINT,created_time BIGINT,status INT)");
         new TrafficPoolMigration(jdbc).migrate();
@@ -77,13 +77,15 @@ class ManagedTrafficPoolServiceTest {
                     node.getId(),node.getServerIp(),node.getIp());
         });
         when(nodes.selectById(anyLong())).thenAnswer(invocation -> registered.get(invocation.getArgument(0)));
+        var tunnelIds = new AtomicLong(20);
         when(tunnels.insert(any(Tunnel.class))).thenAnswer(invocation -> {
             Tunnel tunnel = invocation.getArgument(0);
-            tunnel.setId(21L);
-            createdTunnels.put(21L,tunnel);
-            return jdbc.update("INSERT INTO tunnel(id,in_ip) VALUES(?,?)",21L,tunnel.getInIp());
+            long id = tunnelIds.incrementAndGet();
+            tunnel.setId(id);
+            createdTunnels.put(id,tunnel);
+            return jdbc.update("INSERT INTO tunnel(id,in_ip) VALUES(?,?)",id,tunnel.getInIp());
         });
-        when(tunnels.selectById(21L)).thenAnswer(invocation -> createdTunnels.get(21L));
+        when(tunnels.selectById(anyLong())).thenAnswer(invocation -> createdTunnels.get(invocation.getArgument(0)));
         TunnelIngressNodeResolver ingress = mock(TunnelIngressNodeResolver.class);
         when(ingress.resolveNodeIds(any(Tunnel.class))).thenAnswer(invocation -> {
             Tunnel tunnel = invocation.getArgument(0);
@@ -178,13 +180,68 @@ class ManagedTrafficPoolServiceTest {
         assertEquals(1,managed.get(1L).servers().size());
     }
 
+    @Test void createsPoolsThenBatchesAndAppendsOnlyToTheSelectedPool() throws Exception {
+        var first=managed.configure(1L,new ManagedTrafficPoolService.PoolSettings("",0,"第一组",DOMAIN,"",TOKEN,null));
+        var second=managed.configure(1L,new ManagedTrafficPoolService.PoolSettings("",0,"第二组","other.example.com","",TOKEN,null));
+        assertNull(first.tunnelId());
+        assertEquals(2,managed.configured(1L).size());
+        assertTrue(managed.detail(1L,first.id()).servers().isEmpty());
+        var results=managed.enrollBatch(1L,new ManagedTrafficPoolService.Batch(first.id(),
+                List.of(enrollment("8.8.4.4"),enrollment("127.0.0.1"),enrollment("8.8.4.4"),enrollment("1.1.1.1"))));
+        assertEquals(List.of(true,false,false,true),results.stream().map(ManagedTrafficPoolService.EnrollmentResult::accepted).toList());
+        awaitState(11L,"installed"); awaitState(12L,"installed");
+        assertEquals(2,managed.detail(1L,first.id()).servers().size());
+        assertTrue(managed.detail(1L,second.id()).servers().isEmpty());
+        var added=managed.enrollBatch(1L,new ManagedTrafficPoolService.Batch(first.id(),List.of(enrollment("8.8.8.8"))));
+        assertTrue(added.getFirst().accepted());
+        awaitState(13L,"installed");
+        var current=managed.detail(1L,first.id());
+        assertEquals(List.of(11L,12L,13L),current.servers().stream().map(ManagedTrafficPoolService.Server::id).toList());
+        assertEquals(21L,current.pool().tunnelId());
+        assertEquals(1,createdTunnels.size());
+        assertFalse(managed.enrollBatch(1L,new ManagedTrafficPoolService.Batch(second.id(),
+                List.of(enrollment("8.8.4.4")))).getFirst().accepted());
+    }
+
+    @Test void keepsTheNodeAndReconcilesDnsWhenItsBoundAddressChanges() throws Exception {
+        var pool=managed.configure(1L,new ManagedTrafficPoolService.PoolSettings("",0,"验证换址",DOMAIN,"",TOKEN,null));
+        managed.enrollBatch(1L,new ManagedTrafficPoolService.Batch(pool.id(),List.of(enrollment("8.8.4.4"))));
+        awaitState(11L,"installed");
+        registered.get(11L).setStatus(1);
+        when(observer.reported(eq(11L),anyLong())).thenReturn(true);
+        doReturn(true).when(pools).rulesReady(any(TrafficPoolState.class),eq(11L));
+        var forward=new Forward();
+        forward.setId(34L); forward.setInPort(18080);
+        when(forwards.selectList(any())).thenReturn(List.of(forward));
+        cycle(pool.id(),0); cycle(pool.id(),20_000);
+        assertEquals(List.of("8.8.4.4"),records.stream().map(TrafficPoolDns.Record::content).toList());
+        var change=new ManagedTrafficPoolService.AddressChange(pool.id(),11L,"1.1.1.1","root","fixture-password");
+        assertThrows(IllegalArgumentException.class,()->managed.changeAddress(1L,change));
+        when(observer.probe("1.1.1.1",18080)).thenReturn(true);
+        managed.changeAddress(1L,change);
+        assertEquals("1.1.1.1",jdbc.queryForObject("SELECT server_ip FROM node WHERE id=11",String.class));
+        registered.get(11L).setIp("1.1.1.1");
+        registered.get(11L).setServerIp("1.1.1.1");
+        cycle(pool.id(),40_000); cycle(pool.id(),60_000);
+        assertEquals(new HashSet<>(List.of("8.8.4.4","1.1.1.1")),
+                new HashSet<>(records.stream().map(TrafficPoolDns.Record::content).toList()));
+        cycle(pool.id(),80_000);
+        assertEquals(List.of("1.1.1.1"),records.stream().map(TrafficPoolDns.Record::content).toList());
+        assertTrue(managed.detail(1L,pool.id()).servers().getFirst().published());
+        verify(ssh,times(1)).runPoolAgentScript(any(),anyString(),contains("POOL_IDENTITY"),eq(480));
+    }
+
     private ManagedTrafficPoolService.Enrollment enrollment(String ip) {
         return new ManagedTrafficPoolService.Enrollment(ip,22,"fixture-password",ORIGIN,2_500_000_000L,200_000_000_000L);
     }
 
     private void cycle(long elapsed) {
+        cycle(TrafficPoolService.MANAGED_ID,elapsed);
+    }
+
+    private void cycle(String id,long elapsed) {
         pools.clock = Clock.fixed(Instant.ofEpochMilli(time+elapsed),ZoneOffset.UTC);
-        pools.process(TrafficPoolService.MANAGED_ID);
+        pools.process(id);
     }
 
     private void awaitState(long id,String expected) throws Exception {

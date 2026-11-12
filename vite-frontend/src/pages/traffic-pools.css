@@ -35,7 +35,7 @@
 .pool-empty{padding:62px 20px;text-align:center;border:1px dashed hsl(var(--heroui-default-200));border-radius:16px}
 .pool-form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
 .pool-field{display:flex;flex-direction:column;gap:6px;font-size:13px;min-width:0}
-.pool-field input{height:40px;border-radius:10px;border:1px solid hsl(var(--heroui-default-200));padding:0 11px;background:hsl(var(--heroui-content1));min-width:0;width:100%}
+.pool-field input,.pool-field select{height:40px;border-radius:10px;border:1px solid hsl(var(--heroui-default-200));padding:0 11px;background:hsl(var(--heroui-content1));min-width:0;width:100%}
 .pool-field small{font-size:11px;color:hsl(var(--heroui-default-500))}
 .pool-form-members{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px 14px;max-height:260px;overflow:auto}
 .pool-form-member{display:flex;gap:8px;align-items:center;padding:6px 0;font-size:13px;min-width:0;cursor:pointer}
@@ -65,4 +65,23 @@
  .pool-hero{flex-wrap:wrap;gap:12px}.pool-node{grid-template-columns:minmax(0,1fr) auto;gap:3px 10px}
  .pool-hero-mark{width:38px;height:38px;border-radius:11px}.pool-hero-title{gap:10px}
  .pool-node code{grid-column:1;grid-row:2}.pool-node>.pool-pill{grid-column:2;grid-row:1 / 3}
+}
+
+.pool-setup-summary,.pool-batch-fields { display:grid; gap:1rem; }
+.pool-setup-summary { grid-template-columns:1.25fr 1fr 1fr; padding:.875rem 0 .25rem; }
+.pool-setup-summary > div { display:grid; gap:.25rem; min-width:0; overflow-wrap:anywhere; }
+.pool-setup .pool-card + .pool-card { margin-top:0; }
+.pool-setup .pool-tabs { display:flex; flex-wrap:wrap; gap:.375rem; margin-bottom:.875rem; }
+.pool-empty { padding-block:1rem; }
+.pool-dialog-context { font-size:.875rem; font-weight:500; align-self:center; color:hsl(var(--heroui-default-500)); margin-inline-start:.75rem; }
+.pool-batch-server { min-width:0; border:1px solid hsl(var(--heroui-divider)); border-radius:.75rem; padding:.75rem; }
+.pool-batch-server legend { padding-inline:.375rem; font-size:.875rem; font-weight:600; }
+.pool-batch-fields { grid-template-columns:minmax(0,1.7fr) minmax(5rem,.75fr) minmax(0,1fr) minmax(0,1.5fr); gap:.625rem; }
+.pool-batch-extra { margin-block-start:.625rem; font-size:.875rem; }
+.pool-batch-extra summary { width:fit-content; cursor:pointer; }
+.pool-batch-extra .pool-form-grid { margin-block-start:.625rem; }
+@media (max-width: 640px) {
+  .pool-setup-summary { grid-template-columns:1fr 1fr; }
+  .pool-setup-summary > div:first-child { grid-column:1 / -1; }
+  .pool-batch-fields { grid-template-columns:1fr 1fr; }
 }

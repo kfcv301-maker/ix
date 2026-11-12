@@ -105,9 +105,11 @@ public class VpsSshServiceImpl implements VpsSshService {
     @Override
     public int runPoolAgentScript(VpsHost host, String password, String script, int timeoutSeconds) throws Exception {
         if (trimToNull(host.getSshFingerprint()) == null) throw new IllegalArgumentException("SSH 主机指纹缺失");
+        String remoteCommand = "root".equals(host.getSshUsername()) ? "bash -s"
+                : "if sudo -n true 2>/dev/null; then exec sudo -n bash -s; else exit 44; fi";
         try (SshConnection connection = connect(host, password);
              Session session = connection.client.startSession();
-             Session.Command command = session.exec("bash -s")) {
+             Session.Command command = session.exec(remoteCommand)) {
             Future<?> output = stream(command.getInputStream(), ignored -> {});
             Future<?> errors = stream(command.getErrorStream(), ignored -> {});
             try (OutputStream stdin = command.getOutputStream()) {
