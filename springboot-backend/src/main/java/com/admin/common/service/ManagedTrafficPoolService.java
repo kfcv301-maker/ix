@@ -1,6 +1,7 @@
 package com.admin.common.service;
 
 import com.admin.entity.Node;
+import com.admin.common.utils.WebSocketServer;
 import com.admin.entity.Tunnel;
 import com.admin.entity.VpsHost;
 import com.admin.mapper.NodeMapper;
@@ -48,6 +49,7 @@ public class ManagedTrafficPoolService {
     private final TunnelMapper tunnels;
     private final NodeService nodeService;
     private final VpsSshService ssh;
+    private final TrafficPoolQuota quota;
     private final TransactionTemplate tx;
     private final Set<Long> activeInstalls = ConcurrentHashMap.newKeySet();
     private final ThreadPoolExecutor installs = new ThreadPoolExecutor(2,2,0,TimeUnit.SECONDS,
@@ -55,7 +57,7 @@ public class ManagedTrafficPoolService {
 
     public ManagedTrafficPoolService(JdbcTemplate jdbc, NodeGroupService users, TrafficPoolService pools,
                                     TrafficPoolDns dns, NodeMapper nodes, TunnelMapper tunnels,
-                                    NodeService nodeService, VpsSshService ssh, PlatformTransactionManager manager) {
+                                    NodeService nodeService, VpsSshService ssh, PlatformTransactionManager manager, TrafficPoolQuota quota) {
         this.jdbc = jdbc;
         this.users = users;
         this.pools = pools;
@@ -64,6 +66,7 @@ public class ManagedTrafficPoolService {
         this.tunnels = tunnels;
         this.nodeService = nodeService;
         this.ssh = ssh;
+        this.quota = quota;
         this.tx = new TransactionTemplate(manager);
     }
 
@@ -89,7 +92,12 @@ public class ManagedTrafficPoolService {
         @Override public String toString() { return "PoolAddressChange[redacted]"; }
     }
     public record Server(long id, String ip, Integer port, String status, String message, long usedBytes, long quotaBytes,
-                         String name, Boolean published) { }
+                         String name, Boolean published, WebSocketServer.PoolMonitor monitor, ProbeView probe,
+                         TrafficPoolQuota.Quota providerQuota, boolean providerQuotaStale) { }
+    public record ProbeView(int port, long checkedAt, String result, Long elapsedMs,
+                            long lastReportAt, boolean reporting, Long inventoryAt,
+                            int rulesExpected, int tcpRules, int udpRules,
+                            int successes, int failures, int recoveryThreshold, int failureThreshold) { }
     public record View(long revision, String domain, boolean hasToken, String dnsStatus, Long tunnelId,
                        List<Server> servers) { }
     public record PoolSummary(String id, String name, long revision, String domain, String zoneId, boolean hasToken,
@@ -125,6 +133,8 @@ public class ManagedTrafficPoolService {
                 ? pool.publishedAddresses == null ? TrafficPoolDns.desired(members) : pool.publishedAddresses
                 : null;
         var servers = new ArrayList<Server>();
+        var rules=pools.activeRules(pool);
+        long now=System.currentTimeMillis();
         for (var member : members) {
             Host host = hostById(member.nodeId);
             Node node = nodes.selectById(member.nodeId);
@@ -140,8 +150,19 @@ public class ManagedTrafficPoolService {
             if (host == null && !member.enabled) status = "maintenance";
             Boolean inDns = published == null ? null : published.stream()
                     .anyMatch(address -> bound.contains(address) || member.health.containsKey(address));
+            var snapshot=WebSocketServer.poolMonitor(member.nodeId,now);
+            var inventory=pools.ruleStatus(rules,member.nodeId,now);
+            var health=member.health.get(ip);
+            boolean currentProbe=health!=null && health.tcpPort==pool.probePort && health.tcpCheckedAt>0;
+            var probe=new ProbeView(pool.probePort,currentProbe?health.tcpCheckedAt:0,
+                    currentProbe?health.tcpResult:null,currentProbe?health.tcpElapsedMs:null,
+                    snapshot==null?member.lastAt:snapshot.reportedAt(),snapshot!=null,inventory.reportedAt(),
+                    inventory.expected(),inventory.tcp(),inventory.udp(),health==null?0:health.successes,
+                    health==null?0:health.failures,pool.recoveryThreshold,pool.failureThreshold);
+            var meter=quota.quota(ip);
             servers.add(new Server(member.nodeId,ip,host==null?null:host.port,status,message,
-                    member.usedBytes,member.quotaBytes,host!=null || node==null?"":node.getName(),inDns));
+                    member.usedBytes,member.quotaBytes,host!=null || node==null?"":node.getName(),inDns,
+                    snapshot,probe,meter,meter!=null && meter.stale()));
         }
         return new PoolDetail(summary(pool),servers);
     }

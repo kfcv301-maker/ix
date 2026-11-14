@@ -95,7 +95,7 @@ class ManagedTrafficPoolServiceTest {
         when(observer.addresses(any(Node.class))).thenAnswer(invocation -> List.of(((Node)invocation.getArgument(0)).getServerIp()));
         when(observer.probeAll(anyCollection(),anyInt())).thenAnswer(invocation -> {
             java.util.Collection<String> ips = invocation.getArgument(0);
-            return ips.stream().collect(java.util.stream.Collectors.toMap(ip -> ip,ip -> true));
+            return ips.stream().collect(java.util.stream.Collectors.toMap(ip -> ip,ip -> new TrafficPoolObserver.Probe(true,3L,"reachable")));
         });
         doReturn("a".repeat(32)).when(dns).findZone(anyString(),anyString());
         doAnswer(invocation -> List.copyOf(records)).when(dns).list(anyString(),anyString(),anyString());
@@ -119,7 +119,7 @@ class ManagedTrafficPoolServiceTest {
                 mock(ForwardPortReservationService.class),ingress,dns,observer,tx,"test-key"));
         time = System.currentTimeMillis();
         pools.startedAt = time - 150_000;
-        managed = new ManagedTrafficPoolService(jdbc,groups,pools,dns,nodes,tunnels,agents,ssh,tx);
+        managed = new ManagedTrafficPoolService(jdbc,groups,pools,dns,nodes,tunnels,agents,ssh,tx,mock(TrafficPoolQuota.class));
     }
 
     @AfterEach void close() {
@@ -178,6 +178,20 @@ class ManagedTrafficPoolServiceTest {
         awaitState(11L,"installed");
         assertEquals(1,registered.size());
         assertEquals(1,managed.get(1L).servers().size());
+    }
+
+    @Test void cloudQuotaUsesTheProviderMeterAndAccountsForExtraTraffic() {
+        var row=com.alibaba.fastjson2.JSONObject.of("max_traffic","200","extra_traffic_gb",30,
+                "used_traffic","190.9","traffic_exhausted",false);
+        var quota=TrafficPoolQuota.readQuota(row,1234);
+        assertEquals(230_000_000_000L,quota.totalBytes());
+        assertEquals(190_900_000_000L,quota.usedBytes());
+        assertEquals(39_100_000_000L,quota.remainingBytes());
+        assertEquals(1234,quota.syncedAt());
+        row.put("traffic_exhausted",true);
+        assertEquals(0,TrafficPoolQuota.readQuota(row,1234).remainingBytes());
+        row.remove("used_traffic");
+        assertNull(TrafficPoolQuota.readQuota(row,1234));
     }
 
     @Test void createsPoolsThenBatchesAndAppendsOnlyToTheSelectedPool() throws Exception {

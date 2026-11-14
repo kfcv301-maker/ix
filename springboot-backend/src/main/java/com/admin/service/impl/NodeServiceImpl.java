@@ -143,11 +143,22 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
      */
     @Override
     public R getAllNodes() {
+        return getNodes(false);
+    }
+
+    @Override
+    public R getMonitorNodes() {
+        return getNodes(true);
+    }
+
+    private R getNodes(boolean monitor) {
         boolean administrator = isAdministrator();
         Long userId = currentUserId();
         List<Node> nodeList;
         if (administrator) {
-            nodeList = this.list(new QueryWrapper<Node>().notInSql("id","SELECT node_id FROM traffic_pool_host"));
+            var query = new QueryWrapper<Node>().notInSql("id","SELECT node_id FROM traffic_pool_host");
+            if (monitor) query.notInSql("id","SELECT node_id FROM traffic_pool_member");
+            nodeList = this.list(query);
         } else {
             List<Long> allowedIds = userMapper.getAccessibleNodeIds(userId);
             nodeList = allowedIds == null || allowedIds.isEmpty()

@@ -40,7 +40,7 @@ class TrafficPoolServiceTest {
         for(long id=1;id<=2;id++){var n=new Node();n.setId(id);n.setName("node "+id);n.setServerIp(id==1?"8.8.8.8":"1.1.1.1");n.setStatus(1);n.setPortSta(10000);n.setPortEnd(60000);when(nodes.selectById(id)).thenReturn(n);when(observer.addresses(n)).thenReturn(List.of(n.getServerIp()));}
         when(observer.probe(anyString(),anyInt())).thenReturn(true);
         when(observer.reported(anyLong(),anyLong())).thenReturn(true);
-        when(observer.probeAll(anyCollection(),anyInt())).thenAnswer(call->{var result=new HashMap<String,Boolean>();for(String ip:(Collection<String>)call.getArgument(0))result.put(ip,observer.probe(ip,call.getArgument(1)));return result;});
+        when(observer.probeAll(anyCollection(),anyInt())).thenAnswer(call->{var result=new HashMap<String,TrafficPoolObserver.Probe>();for(String ip:(Collection<String>)call.getArgument(0)){boolean ok=observer.probe(ip,call.getArgument(1));result.put(ip,new TrafficPoolObserver.Probe(ok,3L,ok?"reachable":"timeout"));}return result;});
         var tm=new DataSourceTransactionManager(ds);groups=new NodeGroupService(jdbc,users,nodes,tm);
         service=new TrafficPoolService(jdbc,groups,nodes,tunnels,forwards,ports,ingress,dns,observer,tm,"isolated-test-key");service.startedAt=now-120000;at(0);
     }

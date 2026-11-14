@@ -7,7 +7,7 @@ import java.util.concurrent.ConcurrentHashMap;
 /** Passive inventories only. New pool members wait for their next actual Agent report after rule recovery. */
 public final class TrafficPoolInventory {
     private TrafficPoolInventory() { }
-    private record Snapshot(Set<String> names,long at,String connection) { }
+    record Snapshot(Set<String> names,long at,String connection) { }
     private static final Map<Long,Snapshot> snapshots=new ConcurrentHashMap<>();
     public static synchronized void record(long node,GostConfigDto config,long now) {
         if(config==null || config.getServices()==null)return;
@@ -21,7 +21,11 @@ public final class TrafficPoolInventory {
         snapshots.put(node,new Snapshot(Set.copyOf(names),now,continuity.epoch()+":"+continuity.session()));
     }
     static Set<String> names(long node,long now) {
+        var current=current(node,now);
+        return current==null?null:current.names;
+    }
+    static Snapshot current(long node,long now) {
         var s=snapshots.get(node);var continuity=com.admin.common.utils.WebSocketServer.continuitySample(node,now);
-        return s==null || continuity==null || !s.connection.equals(continuity.epoch()+":"+continuity.session()) || now<s.at || now-s.at>1800000?null:s.names;
+        return s==null || continuity==null || !s.connection.equals(continuity.epoch()+":"+continuity.session()) || now<s.at || now-s.at>1800000?null:s;
     }
 }

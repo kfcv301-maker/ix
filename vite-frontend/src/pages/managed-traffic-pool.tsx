@@ -24,6 +24,10 @@ const states: Record<string, { label: string; tone: string }> = {
   maintenance: { label: '已停用', tone: 'muted' },
   missing: { label: '离线', tone: 'offline' },
 };
+const tcpStates: Record<string, string> = {
+  reachable: 'TCP 可达', timeout: '连接超时', connect_error: '连接失败',
+  network_error: '网络错误', invalid: '公网 IP 无效',
+};
 const dnsStates: Record<string, string> = {
   disabled: '未配置解析',
   synced: '解析已同步',
@@ -31,6 +35,55 @@ const dnsStates: Record<string, string> = {
   waiting_checks: '解析同步中',
   dns_error: '解析同步失败',
 };
+
+const gb = (bytes: number) => number.format(bytes / GB) + ' GB';
+const time = (ms: number | null | undefined) => ms ? new Date(ms).toLocaleString('zh-CN', { hour12: false }) : '暂无';
+const percent = (value: number | null | undefined) => value == null ? '—' : number.format(value) + '%';
+const count = (value: number | null | undefined) => value == null ? '—' : number.format(value);
+const uptime = (seconds: number) => seconds >= 86400 ? Math.floor(seconds / 86400) + ' 天 ' + Math.floor(seconds % 86400 / 3600) + ' 小时'
+  : Math.floor(seconds / 3600) + ' 小时 ' + Math.floor(seconds % 3600 / 60) + ' 分钟';
+
+function ServerDetails({ server }: { server: ConfiguredServer }) {
+  const probe = server.probe;
+  const monitor = server.monitor;
+  const quota = server.providerQuota;
+  return <details className="pool-server-details">
+    <summary>监控与探测详情</summary>
+    <div className="pool-monitor-grid">
+      <section>
+        <h3>节点监控</h3>
+        <dl>
+          <dt>最近上报</dt><dd>{time(probe?.lastReportAt ?? monitor?.reportedAt)}{probe && (probe.reporting ? ' · 正常' : ' · 当前无新上报')}</dd>
+          <dt>CPU / 内存</dt><dd>{percent(monitor?.cpuPercent)} / {percent(monitor?.memoryPercent)}</dd>
+          <dt>运行时间</dt><dd>{monitor ? uptime(monitor.uptime) : '—'}</dd>
+          <dt>TCP / UDP 连接</dt><dd>{count(monitor?.tcpConnections)} / {count(monitor?.udpConnections)}</dd>
+          <dt>网卡累计接收 / 发送</dt><dd>{monitor?.rxBytes == null ? '—' : gb(monitor.rxBytes)} / {monitor?.txBytes == null ? '—' : gb(monitor.txBytes)}</dd>
+        </dl>
+      </section>
+      <section>
+        <h3>入口探测</h3>
+        <dl>
+          <dt>目标地址</dt><dd><code>{server.ip ? (server.ip.includes(':') ? '[' + server.ip + ']' : server.ip) + (probe?.port ? ':' + probe.port : '') : '—'}</code></dd>
+          <dt>最近一次 TCP</dt><dd>{probe?.result ? tcpStates[probe.result] ?? '未知' : '等待探测'}
+            {probe?.elapsedMs != null && ' · ' + (probe.elapsedMs === 0 ? '<1' : count(probe.elapsedMs)) + ' ms'}</dd>
+          <dt>探测时间</dt><dd>{time(probe?.checkedAt)}</dd>
+          <dt>进池 / 下架判定</dt><dd>{probe ? '成功 ' + probe.successes + '/' + probe.recoveryThreshold + ' · 失败 ' + probe.failures + '/' + probe.failureThreshold : '—'}</dd>
+          <dt>Agent 规则清单</dt><dd>{probe?.inventoryAt ? 'TCP ' + probe.tcpRules + '/' + probe.rulesExpected + ' · UDP ' + probe.udpRules + '/' + probe.rulesExpected : '等待 Agent 清单'}</dd>
+          <dt>规则清单时间</dt><dd>{time(probe?.inventoryAt)}</dd>
+        </dl>
+      </section>
+      <section>
+        <h3>流量</h3>
+        <dl>
+          <dt>云商已用 / 总额</dt><dd>{quota ? gb(quota.usedBytes) + ' / ' + gb(quota.totalBytes) : '暂无云商用量'}</dd>
+          <dt>云商剩余</dt><dd>{quota ? gb(quota.remainingBytes) : '—'}</dd>
+          <dt>云商同步时间</dt><dd>{time(quota?.syncedAt)}{server.providerQuotaStale && ' · 数据已过期'}</dd>
+          <dt>面板网卡估算</dt><dd>{gb(server.usedBytes)}</dd>
+        </dl>
+      </section>
+    </div>
+  </details>;
+}
 
 type TunnelOption = { id: number; name: string; inIp: string; type: number; status: number; ownerUserId?: number | null };
 type ServerRow = { key: number; ip: string; port: string; username: string; password: string; used: string; quota: string; error?: string };
@@ -202,7 +255,9 @@ export default function ManagedTrafficPoolPage() {
   if (!admin) return <div className="pool-page"><h1>无权访问</h1></div>;
   const rows = current?.servers ?? [];
   const online = rows.filter(server => server.status === 'healthy').length;
-  const inDns = rows.filter(server => server.published).length;
+  const published = rows.filter(server => server.published);
+  const currentQuota = published.flatMap(server => server.providerQuota && !server.providerQuotaStale ? [server.providerQuota] : []);
+  const available = currentQuota.reduce((total, quota) => total + quota.remainingBytes, 0);
 
   return <div className="pool-page pool-setup">
     <header className="pool-hero">
@@ -239,33 +294,40 @@ export default function ManagedTrafficPoolPage() {
       <section className="pool-card" aria-label="服务器列表">
         <div className="pool-card-head">
           <div><h2>服务器</h2>{current && <p className="pool-muted">{online} 台在线 / 共 {rows.length} 台
-            {pool.dnsStatus === 'synced' && (' · ' + inDns + ' 台在解析中')}</p>}</div>
+            {pool.dnsStatus === 'synced' && (' · ' + published.length + ' 台已加入解析')}</p>}</div>
           <Button size="sm" color="primary" onPress={() => pool.hasToken && pool.domain ? openServers(pool) : openSettings(pool)}
             startContent={<ConsoleIcon name="plus"/>}>添加服务器</Button>
         </div>
+        {!!currentQuota.length && <p className="pool-quota-summary">
+          已发布入口云商剩余 <strong>{gb(available)}</strong>
+          <span className="pool-muted">（已同步 {currentQuota.length}/{published.length} 台）</span>
+        </p>}
         {!current && <p className="pool-muted">正在加载服务器…</p>}
         {current && rows.length === 0 && <p className="pool-muted pool-empty">可以一次添加多台，面板会通过 SSH 自动安装。</p>}
         {current && pool.tunnelId && pool.probePort === 0 && rows.some(row => row.status !== 'installing' && row.status !== 'failed') &&
           <p className="pool-alert">请在 <Link className="text-primary underline" to="/forward">转发管理</Link> 为这条隧道添加转发规则，端口检测通过后会自动加入解析。</p>}
         {rows.map(server => {
           const state = states[server.status] ?? { label: '检查中', tone: 'warn' };
-          return <div className="pool-node pool-managed-node" key={server.id}>
+          const quota = server.providerQuota;
+          return <article className="pool-server-record" key={server.id}><div className="pool-node pool-managed-node">
             <div className="min-w-0">
               {server.name && server.name !== '池节点 ' + server.ip && <strong className="block break-all">{server.name}</strong>}
               <code className="block break-all">{server.ip || '—'}</code>
               {server.port && <small className="pool-muted">SSH {server.port}</small>}
               {server.message && <p className="pool-muted">{server.message}</p>}
             </div>
-            <span className="pool-muted pool-server-usage">{number.format(server.usedBytes / GB)}
-              {server.quotaBytes > 0 && ' / ' + number.format(server.quotaBytes / GB)} GB</span>
+            <div className="pool-server-usage min-w-0">
+              {quota ? <><strong>{gb(quota.remainingBytes)}</strong><small className="pool-muted block">云商剩余{server.providerQuotaStale && ' · 数据已过期'}</small></>
+                : <span className="pool-muted">暂无云商用量</span>}
+            </div>
             <div className="pool-row-actions pool-server-actions justify-end">
               {server.published != null && <span className="pool-muted">{server.published ? '已加入解析' : '未加入解析'}</span>}
-              <span className={'pool-pill ' + state.tone}>{state.label}</span>
+              <span className={'pool-pill ' + state.tone}>{server.status === 'healthy' ? '入口健康' : state.label}</span>
               {server.port != null && server.status !== 'installing' && <Button size="sm" variant="light"
                 onPress={() => openServers(pool, server, server.status === 'failed' ? 'retry' : 'address')}>
                 {server.status === 'failed' ? '重试' : '更换 IP'}</Button>}
             </div>
-          </div>;
+          </div><ServerDetails server={server}/></article>;
         })}
       </section>
     </>}

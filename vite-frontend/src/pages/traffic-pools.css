@@ -85,3 +85,16 @@
   .pool-setup-summary > div:first-child { grid-column:1 / -1; }
   .pool-batch-fields { grid-template-columns:1fr 1fr; }
 }
+.pool-quota-summary{margin:0 0 .875rem;padding:.625rem .875rem;background:hsl(var(--heroui-default-100));border-radius:.625rem}
+.pool-server-record{border-top:1px solid hsl(var(--heroui-default-200));padding-bottom:.625rem}
+.pool-server-record>.pool-node{border:0}
+.pool-server-details{margin:0 .5rem .25rem .75rem}
+.pool-server-details summary{cursor:pointer;width:fit-content;color:hsl(var(--heroui-primary));font-size:.875rem;font-weight:600}
+.pool-monitor-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.75rem;margin-top:.625rem}
+.pool-monitor-grid section{padding:.75rem;background:hsl(var(--heroui-default-100));border-radius:.625rem;min-width:0}
+.pool-monitor-grid h3{font-size:.875rem;font-weight:650;margin-bottom:.375rem}
+.pool-monitor-grid dl{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.5fr);gap:.3rem .5rem;font-size:.8125rem}
+.pool-monitor-grid dt{color:hsl(var(--heroui-default-600))}
+.pool-monitor-grid dd{overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+@media(max-width:850px){.pool-monitor-grid{grid-template-columns:repeat(2,minmax(0,1fr));}}
+@media(max-width:580px){.pool-monitor-grid{grid-template-columns:minmax(0,1fr);}}

@@ -21,7 +21,7 @@ import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YA
 import { 
   createRealtimeTicket,
   createNode, 
-  getNodeList, 
+  getMonitorNodeList,
   updateNode, 
   deleteNode,
   getNodeInstallCommand
@@ -277,7 +277,7 @@ export default function NodePage() {
     setLoading(true);
     setNodeLoadError('');
     try {
-      const res = await getNodeList();
+      const res = await getMonitorNodeList();
       if (!shouldMaintainSocketRef.current || request !== listRequestRef.current) return;
       if (res.code === 0) {
         setNodeList(previous => mergeRealtimeNodes(res.data, previous, eventVersionsAtStart, nodeEventVersionsRef.current) as Node[]);
