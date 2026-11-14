@@ -15,6 +15,10 @@ import org.apache.ibatis.annotations.Select;
 public interface NodeMapper extends BaseMapper<Node> {
     @Select("SELECT COUNT(*) FROM traffic_pool_host WHERE node_id = #{nodeId}")
     int countPoolHost(Long nodeId);
+    @Select("SELECT COUNT(*) FROM traffic_pool_member WHERE node_id = #{nodeId}")
+    int countPoolMembership(Long nodeId);
+    @Select("SELECT JSON_UNQUOTE(JSON_EXTRACT(payload,'$.enabled')) FROM traffic_pool_member WHERE node_id = #{nodeId}")
+    String poolMemberEnabled(Long nodeId);
     @Select("SELECT ssh_port FROM traffic_pool_host WHERE node_id = #{nodeId}")
     Integer poolSshPort(Long nodeId);
 }

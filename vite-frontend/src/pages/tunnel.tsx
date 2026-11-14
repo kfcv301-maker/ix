@@ -19,6 +19,7 @@ import {
   updateTunnel, 
   deleteTunnel,
   getNodeList,
+  getTunnelNodes,
   diagnoseTunnel,
   getTunnelEntryDomains,
   createTunnelEntryDomain,
@@ -59,6 +60,22 @@ interface Node {
   canManage?: boolean;
   name: string;
   status: number; // 1: 在线, 0: 离线
+  pool?: string | null;
+  poolEnabled?: boolean;
+  usedBytes?: number | null;
+  remainingBytes?: number | null;
+  trafficSource?: 'provider' | 'pool' | 'network' | null;
+  stale?: boolean;
+}
+
+const trafficGB = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 });
+function entryTraffic(node: Node): string {
+  const gb = (bytes: number) => trafficGB.format(bytes / 1_000_000_000) + ' GB';
+  if (node.remainingBytes != null) {
+    const source = node.trafficSource === 'provider' ? '云商' : '池内估算';
+    return `${source}余量 ${gb(node.remainingBytes)}${node.stale ? '（上次同步）' : ''}`;
+  }
+  return node.usedBytes != null ? `网卡累计 ${gb(node.usedBytes)}` : '暂无流量数据';
 }
 
 interface TunnelForm {
@@ -111,6 +128,7 @@ export default function TunnelPage() {
   const clearTunnelFilters = () => { setTunnelSearch(''); setTunnelTypeFilter('all'); };
 
   const [nodes, setNodes] = useState<Node[]>([]);
+  const [nodeDetailsAvailable, setNodeDetailsAvailable] = useState(false);
   
   // 模态框状态
   const [modalOpen, setModalOpen] = useState(false);
@@ -167,7 +185,14 @@ export default function TunnelPage() {
     try {
       const [tunnelsRes, nodesRes] = await Promise.all([
         getTunnelList(),
-        getNodeList()
+        getTunnelNodes().catch(() => null).then(async result => {
+          if (result?.code === 0) {
+            setNodeDetailsAvailable(true);
+            return result;
+          }
+          setNodeDetailsAvailable(false);
+          return getNodeList();
+        })
       ]);
       
       if (tunnelsRes.code === 0) {
@@ -642,6 +667,9 @@ export default function TunnelPage() {
 
   const manageableNodes = nodes.filter(node => isAdministrator || node.canManage === true);
   const onlineManageableNodes = manageableNodes.filter(node => node.status === 1);
+  const onlineEntryNodes = onlineManageableNodes.filter(node =>
+    node.poolEnabled !== false && (node.trafficSource !== 'provider' || node.stale || node.remainingBytes !== 0));
+  const exitNodes = (isEdit ? manageableNodes : onlineManageableNodes).filter(node => isEdit || !node.pool);
 
   return (
     
@@ -655,7 +683,7 @@ export default function TunnelPage() {
               variant="flat"
               color="primary"
               onPress={handleAdd}
-              isDisabled={onlineManageableNodes.length === 0}
+              isDisabled={onlineEntryNodes.length === 0}
              
             >
               + 新增隧道
@@ -663,9 +691,9 @@ export default function TunnelPage() {
      
         </div>
 
-        {onlineManageableNodes.length === 0 && (
+        {onlineEntryNodes.length === 0 && (
           <div className="mb-5 flex flex-wrap items-center gap-3 rounded-lg border border-warning-200 bg-warning-50 p-4 text-sm text-warning-800 dark:border-warning-500/30 dark:bg-warning-500/10 dark:text-warning-200">
-            <span>{manageableNodes.length === 0 ? '先新增并安装自己的节点，节点上线后即可创建隧道。' : '自己的节点尚未上线，请先完成安装并等待连接。'}</span>
+            <span>{manageableNodes.length === 0 ? '先新增并安装节点，节点上线后即可创建隧道。' : '当前没有可选的入口节点。请检查节点在线状态和流量额度。'}</span>
             <Button size="sm" variant="flat" color="warning" onPress={() => navigate('/node')}>前往节点监控</Button>
           </div>
         )}
@@ -977,13 +1005,18 @@ export default function TunnelPage() {
                       variant="bordered"
                       isDisabled={isEdit}
                     >
-                      {(isEdit ? manageableNodes : onlineManageableNodes).map((node) => (
+                      {(isEdit ? manageableNodes : onlineEntryNodes).map((node) => (
                         <SelectItem 
                           key={node.id}
                           textValue={`${node.name} (${node.status === 1 ? '在线' : '离线'})`}
                         >
-                          <div className="flex items-center justify-between">
-                            <span>{node.name}</span>
+                          <div className="flex min-w-0 items-center justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="truncate">{node.name}</div>
+                              {nodeDetailsAvailable && <div className="text-xs text-default-500">
+                                {[node.pool, entryTraffic(node)].filter(Boolean).join(' · ')}
+                              </div>}
+                            </div>
                             <Chip 
                               color={node.status === 1 ? 'success' : 'danger'} 
                               variant="flat" 
@@ -1154,7 +1187,7 @@ export default function TunnelPage() {
                           variant="bordered"
                           isDisabled={isEdit}
                         >
-                          {(isEdit ? manageableNodes : onlineManageableNodes).map((node) => (
+                          {exitNodes.map((node) => (
                             <SelectItem 
                               key={node.id}
                               textValue={`${node.name} (${node.status === 1 ? '在线' : '离线'})`}

@@ -18,6 +18,7 @@ import com.admin.common.utils.TunnelForwardDiagnosisLimiter;
 import com.admin.entity.*;
 import com.admin.mapper.ForwardMapper;
 import com.admin.mapper.TunnelEntryNodeMapper;
+import com.admin.mapper.UserMapper;
 import com.admin.service.*;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
@@ -29,6 +30,7 @@ import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import jakarta.annotation.Resource;
 import java.util.*;
@@ -97,6 +99,7 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
     private com.admin.common.service.ForwardCreationService forwardCreationService;
 
     @Resource private TunnelForwardDiagnosisLimiter diagnosisLimiter;
+    @Resource private UserMapper userMapper;
 
 
     @Override
@@ -204,6 +207,7 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
     }
 
     @Override
+    @Transactional
     public R updateForward(ForwardUpdateDto forwardUpdateDto) {
         try { GostUtil.normalizeProxyProtocol(forwardUpdateDto.getProxyProtocol()); }
         catch (IllegalArgumentException exception) { return R.err(exception.getMessage()); }
@@ -220,6 +224,16 @@ public class ForwardServiceImpl extends ServiceImpl<ForwardMapper, Forward> impl
         Forward existForward = validateForwardExists(forwardUpdateDto.getId(), currentUser);
         if (existForward == null) {
             return R.err("转发不存在");
+        }
+        // Serialize the synchronous node edit with deletion of the owning account.
+        User owner = userMapper.lockById(existForward.getUserId().longValue());
+        if (owner == null || !Objects.equals(owner.getStatus(), USER_STATUS_ACTIVE)) {
+            return R.err("转发所属用户不可用");
+        }
+        existForward = baseMapper.selectOne(new QueryWrapper<Forward>()
+                .eq("id", existForward.getId()).eq("user_id", owner.getId()).last("FOR UPDATE"));
+        if (existForward == null || Objects.equals(existForward.getStatus(), com.admin.common.constants.ForwardStatus.DELETING)) {
+            return R.err("转发正在删除或已删除");
         }
 
         // 3. 检查隧道是否存在和可用

@@ -54,6 +54,21 @@ public class TrafficPoolService {
     List<TrafficPoolState.Member> members(String id) {
         return jdbc.query("SELECT payload FROM traffic_pool_member WHERE pool_id=? ORDER BY node_id",(r,n)->JSON.parseObject(r.getString(1),TrafficPoolState.Member.class),id);
     }
+
+    public Map<Long, EntryQuota> entryQuotas() {
+        return jdbc.query("SELECT m.node_id, p.name, m.payload FROM traffic_pool_member m "
+                + "JOIN traffic_pool p ON p.id=m.pool_id", rows -> {
+            Map<Long, EntryQuota> quotas = new HashMap<>();
+            while (rows.next()) {
+                var member = JSON.parseObject(rows.getString(3), TrafficPoolState.Member.class);
+                quotas.put(rows.getLong(1), new EntryQuota(rows.getString(2), member.enabled,
+                        member.usedBytes, member.quotaBytes));
+            }
+            return quotas;
+        });
+    }
+
+    public record EntryQuota(String pool, boolean enabled, long usedBytes, long quotaBytes) { }
     String dnsKey(TrafficPoolState p){return p.domain.isEmpty()?null:AirportSyncState.digest(p.domain);}
     void persist(TrafficPoolState p) {jdbc.update("UPDATE traffic_pool SET name=?,dns_key=?,payload=? WHERE id=?",p.name,dnsKey(p),JSON.toJSONString(p),p.id);}
     void member(TrafficPoolState.Member m) {jdbc.update("UPDATE traffic_pool_member SET payload=? WHERE node_id=?",JSON.toJSONString(m),m.nodeId);}

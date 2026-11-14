@@ -9,6 +9,8 @@ import com.admin.common.dto.NodeUpdateDto;
 import com.admin.common.lang.R;
 import com.admin.common.service.NodeInstallBootstrapService;
 import com.admin.common.service.NodeAgentConfigService;
+import com.admin.common.service.TrafficPoolQuota;
+import com.admin.common.service.TrafficPoolService;
 import com.admin.common.utils.AESCrypto;
 import com.admin.common.utils.WebSocketServer;
 import com.admin.common.utils.JwtUtil;
@@ -40,6 +42,7 @@ import java.util.Base64;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.stream.Collectors;
 
@@ -88,6 +91,12 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
 
     @Resource
     private NodeAgentConfigService agentConfigService;
+
+    @Resource @Lazy
+    private TrafficPoolService trafficPools;
+
+    @Resource
+    private TrafficPoolQuota providerQuota;
 
     @Resource
     private com.admin.common.service.AirportReporterInstaller airportReporterInstaller;
@@ -151,6 +160,37 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
         return getNodes(true);
     }
 
+    public record TunnelNode(Long id, String name, Integer status, boolean canManage, String pool,
+                             boolean poolEnabled, Long usedBytes, Long totalBytes, Long remainingBytes,
+                             String trafficSource, boolean stale) { }
+
+    @Override
+    public R getTunnelNodes() {
+        boolean admin = isAdministrator();
+        List<Node> nodes = admin ? list() : getOwnedNodes(currentUserId());
+        Map<Long, TrafficPoolService.EntryQuota> quotas = admin ? trafficPools.entryQuotas() : Map.of();
+        long now = System.currentTimeMillis();
+        return R.ok(nodes.stream().map(node -> {
+            var member = quotas.get(node.getId());
+            var meter = admin ? providerQuota.quota(node.getServerIp()) : null;
+            String pool = member == null ? null : member.pool();
+            boolean enabled = member == null || member.enabled();
+            if (meter != null) {
+                return new TunnelNode(node.getId(), node.getName(), node.getStatus(), true, pool, enabled,
+                        meter.usedBytes(), meter.totalBytes(), meter.remainingBytes(), "provider", meter.stale());
+            }
+            if (member != null && member.quotaBytes() > 0L) {
+                return new TunnelNode(node.getId(), node.getName(), node.getStatus(), true, pool, enabled,
+                        member.usedBytes(), member.quotaBytes(), Math.max(0L, member.quotaBytes() - member.usedBytes()),
+                        "pool", false);
+            }
+            var sample = WebSocketServer.trafficPoolSample(node.getId(), now);
+            Long used = sample == null ? null : sample.rx() + sample.tx();
+            return new TunnelNode(node.getId(), node.getName(), node.getStatus(), true, pool, enabled,
+                    used, null, null, sample != null ? "network" : null, false);
+        }).toList());
+    }
+
     private R getNodes(boolean monitor) {
         boolean administrator = isAdministrator();
         Long userId = currentUserId();
@@ -160,10 +200,7 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
             if (monitor) query.notInSql("id","SELECT node_id FROM traffic_pool_member");
             nodeList = this.list(query);
         } else {
-            List<Long> allowedIds = userMapper.getAccessibleNodeIds(userId);
-            nodeList = allowedIds == null || allowedIds.isEmpty()
-                    ? java.util.Collections.emptyList()
-                    : this.list(new QueryWrapper<Node>().in("id", allowedIds));
+            nodeList = getOwnedNodes(userId);
         }
         nodeList.forEach(node -> node.setCanManage(administrator || Objects.equals(node.getOwnerUserId(), userId)));
         hideNodeSecrets(nodeList);
@@ -178,6 +215,12 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
             node.setTcpTuningProfileMax(null);
         });
         return R.ok(nodeList);
+    }
+
+    private List<Node> getOwnedNodes(Long userId) {
+        return list(new QueryWrapper<Node>().eq("owner_user_id", userId)
+                .notInSql("id", "SELECT node_id FROM traffic_pool_host")
+                .notInSql("id", "SELECT node_id FROM traffic_pool_member"));
     }
 
     /**
@@ -600,7 +643,7 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
     }
 
     private boolean canManage(Node node) {
-        return !isManagedPoolNode(node.getId())
+        return !isManagedPoolNode(node.getId()) && baseMapper.countPoolMembership(node.getId()) == 0
                 && (isAdministrator() || Objects.equals(node.getOwnerUserId(), currentUserId()));
     }
 

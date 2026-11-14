@@ -417,7 +417,7 @@ export default function UserPage() {
     try {
       const response = await deleteUser(userToDelete.id);
       if (response.code === 0) {
-        toast.success('删除成功');
+        toast.success(response.msg || '删除成功');
         loadUsers();
         onDeleteModalClose();
         setUserToDelete(null);
@@ -1554,7 +1554,7 @@ export default function UserPage() {
                   确定要删除用户 <span className="font-semibold text-danger">"{userToDelete?.user}"</span> 吗？
                 </p>
                 <p className="text-small text-default-500 mt-1">
-                  此操作不可撤销，用户的所有数据将被永久删除。
+                  此操作不可撤销。该用户的全部转发规则将一并删除，离线节点恢复连接后会自动重试清理。
                 </p>
               </div>
             </div>

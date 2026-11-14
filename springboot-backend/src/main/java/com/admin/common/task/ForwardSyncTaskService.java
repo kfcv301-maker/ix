@@ -142,20 +142,34 @@ public class ForwardSyncTaskService {
             if (task.getServiceName() != null) names.add(task.getServiceName());
         }
         forwardSyncTaskMapper.cancelOperationsForForward(forward.getId(), now);
-        Set<Long> ingress = new LinkedHashSet<>(ingressNodeResolver.resolveNodeIds(tunnel));
-        if (tunnel.getInNodeId() != null) ingress.add(tunnel.getInNodeId());
-        for (String name : names) {
-            for (Long nodeId : ingress) queueCleanup(forward, nodeId, ENDPOINT_INGRESS, name, now);
+        Set<CleanupEndpoint> endpoints = new LinkedHashSet<>();
+        if (tunnel != null) {
+            for (Long nodeId : ingressNodeResolver.resolveNodeIds(tunnel)) {
+                endpoints.add(new CleanupEndpoint(nodeId, ENDPOINT_INGRESS));
+            }
+            if (tunnel.getInNodeId() != null) endpoints.add(new CleanupEndpoint(tunnel.getInNodeId(), ENDPOINT_INGRESS));
             if (Objects.equals(tunnel.getType(), TUNNEL_TYPE_TUNNEL_FORWARD) && tunnel.getOutNodeId() != null) {
-                queueCleanup(forward, tunnel.getOutNodeId(), ENDPOINT_EGRESS, name, now);
+                endpoints.add(new CleanupEndpoint(tunnel.getOutNodeId(), ENDPOINT_EGRESS));
             }
         }
-        // Older in-flight operations may refer to an endpoint no longer in the tunnel.
+        for (var reservation : forwardPortReservationService.claimsForForward(forward.getId())) {
+            endpoints.add(new CleanupEndpoint(reservation.getNodeId(), reservation.getEndpoint()));
+        }
+        // A previous operation can still own a listener on a removed endpoint.
         for (ForwardSyncTask task : previous) {
-            if (task.getNodeId() != null && task.getServiceName() != null) {
-                queueCleanup(forward, task.getNodeId(), task.getEndpoint(), task.getServiceName(), now);
+            if (task.getNodeId() != null && task.getEndpoint() != null) {
+                endpoints.add(new CleanupEndpoint(task.getNodeId(), task.getEndpoint()));
             }
         }
+        for (CleanupEndpoint endpoint : endpoints) {
+            for (String name : names) queueCleanup(forward, endpoint.nodeId(), endpoint.role(), name, now);
+        }
+    }
+
+    private record CleanupEndpoint(Long nodeId, String role) { }
+
+    public void releaseUnneededCascadeReservations(Long forwardId) {
+        if (pendingCleanup(forwardId) == 0) forwardPortReservationService.releaseAll(forwardId);
     }
 
     private void queueCleanup(Forward forward, Long nodeId, String endpoint, String name, long now) {
@@ -196,10 +210,13 @@ public class ForwardSyncTaskService {
     @Transactional
     public void releaseCleanupReservations(Long forwardId) {
         if (forwardService.getById(forwardId) != null) return;
-        long pending = forwardSyncTaskMapper.selectCount(new QueryWrapper<ForwardSyncTask>()
+        releaseUnneededCascadeReservations(forwardId);
+    }
+
+    private long pendingCleanup(Long forwardId) {
+        return forwardSyncTaskMapper.selectCount(new QueryWrapper<ForwardSyncTask>()
                 .eq("forward_id", forwardId).eq("operation", OPERATION_CLEANUP)
                 .in("task_status", TASK_PENDING, TASK_RUNNING));
-        if (pending == 0) forwardPortReservationService.releaseAll(forwardId);
     }
 
     public void closeRetiredNodeIfClean(Long nodeId) {
@@ -233,6 +250,8 @@ public class ForwardSyncTaskService {
             User owner = userMapper.lockById(forward.getUserId().longValue());
             if (owner == null || !Objects.equals(owner.getStatus(), 1)) return R.err("转发所属用户已禁用");
         }
+        forward = forwardService.getOne(new QueryWrapper<Forward>().eq("id", forwardId).last("FOR UPDATE"));
+        if (forward == null) return R.err("转发不存在");
         if (Objects.equals(forward.getStatus(), ForwardStatus.DELETING)) {
             return OPERATION_DELETE.equals(operation)
                     ? queued("删除同步仍在进行中", null, 0)

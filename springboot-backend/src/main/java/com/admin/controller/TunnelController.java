@@ -58,6 +58,11 @@ public class TunnelController extends BaseController {
         return tunnelService.getAllTunnels();
     }
 
+    @PostMapping("/nodes")
+    public R nodes() {
+        return nodeService.getTunnelNodes();
+    }
+
     @LogAnnotation
     @PostMapping("/update")
     public R update(@Validated @RequestBody TunnelUpdateDto tunnelUpdateDto) {

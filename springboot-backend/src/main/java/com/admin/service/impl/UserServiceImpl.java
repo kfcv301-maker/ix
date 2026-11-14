@@ -14,7 +14,10 @@ import com.admin.common.utils.VpsTerminalWebSocketHandler;
 import com.admin.common.utils.WebSocketServer;
 import com.admin.entity.*;
 import com.admin.mapper.ForwardMapper;
+import com.admin.mapper.NodeDeletionMapper;
+import com.admin.mapper.TunnelMapper;
 import com.admin.mapper.UserMapper;
+import com.admin.mapper.UserTunnelAliasMapper;
 import com.admin.mapper.UserTunnelMapper;
 import com.admin.service.*;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
@@ -27,6 +30,7 @@ import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.BeanUtils;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import jakarta.annotation.Resource;
 import java.util.ArrayList;
@@ -65,14 +69,12 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     /** 成功响应消息 */
     private static final String SUCCESS_CREATE_MSG = "用户创建成功";
     private static final String SUCCESS_UPDATE_MSG = "用户更新成功";
-    private static final String SUCCESS_DELETE_MSG = "用户及关联数据删除成功";
     
     /** 错误响应消息 */
     private static final String ERROR_LOGIN_CREDENTIALS = "账号或密码错误";
     private static final String ERROR_ACCOUNT_DISABLED = "账户停用";
     private static final String ERROR_CREATE_FAILED = "用户创建失败";
     private static final String ERROR_UPDATE_FAILED = "用户更新失败";
-    private static final String ERROR_DELETE_FAILED = "用户删除失败";
     private static final String ERROR_USER_NOT_FOUND = "用户不存在";
     private static final String ERROR_USERNAME_EXISTS = "用户名已存在";
     private static final String ERROR_USERNAME_TAKEN = "用户名已被其他用户使用";
@@ -96,6 +98,15 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     @Resource
     @Lazy
     private ForwardMapper forwardMapper;
+
+    @Resource
+    private TunnelMapper tunnelMapper;
+
+    @Resource
+    private NodeDeletionMapper nodeDeletionMapper;
+
+    @Resource
+    private UserTunnelAliasMapper userTunnelAliasMapper;
     
     @Resource
     private UserTunnelMapper userTunnelMapper;
@@ -257,7 +268,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
      * @return 更新结果响应
      */
     @Override
-    @org.springframework.transaction.annotation.Transactional(rollbackFor = Exception.class)
+    @Transactional(rollbackFor = Exception.class)
     public R updateUser(UserUpdateDto userUpdateDto) {
         if (StrUtil.isNotBlank(userUpdateDto.getPwd())) {
             R passwordValidation = validateNewPassword(userUpdateDto.getPwd(), userUpdateDto.getUser());
@@ -311,29 +322,33 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
      * @return 删除结果响应
      */
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public R deleteUser(Long id) {
-        // 1. 验证删除条件
-        R deleteValidationResult = validateUserDeletion(id);
-        if (deleteValidationResult.getCode() != 0) {
-            return deleteValidationResult;
-        }
+        User user = userMapper.lockById(id);
+        if (user == null) return R.err(ERROR_USER_NOT_FOUND);
+        if (Objects.equals(user.getRoleId(), ADMIN_ROLE_ID)) return R.err(ERROR_CANNOT_DELETE_ADMIN);
 
-        try {
-            // 2. 级联删除用户相关数据
-            deleteUserRelatedData(id);
-            statisticsFlowService.remove(new QueryWrapper<StatisticsFlow>().eq("user_id", id));
-            // 3. 删除用户
-            boolean result = this.removeById(id);
-            if (result) {
-                revokeLiveSessions(id);
-                return R.ok(SUCCESS_DELETE_MSG);
+        List<Forward> forwards = forwardMapper.selectList(new QueryWrapper<Forward>()
+                .eq("user_id", id).orderByAsc("id").last("FOR UPDATE"));
+        for (Forward forward : forwards) {
+            Tunnel tunnel = forward.getTunnelId() == null ? null : tunnelMapper.selectById(forward.getTunnelId());
+            forwardSyncTaskService.prepareCascadeDelete(forward, tunnel);
+            nodeDeletionMapper.deletePauseTasks(forward.getId());
+            if (forwardMapper.deleteById(forward.getId()) != 1) {
+                throw new IllegalStateException("删除用户转发失败");
             }
-            return R.err(ERROR_DELETE_FAILED);
-            
-        } catch (Exception e) {
-            e.printStackTrace();
-            return R.err("删除用户时发生错误：" + e.getMessage());
+            forwardSyncTaskService.releaseUnneededCascadeReservations(forward.getId());
         }
+        userTunnelAliasMapper.deleteByUserId(id);
+        userTunnelMapper.delete(new QueryWrapper<UserTunnel>().eq("user_id", id));
+        statisticsFlowService.remove(new QueryWrapper<StatisticsFlow>().eq("user_id", id));
+        if (!removeById(id)) throw new IllegalStateException("删除用户失败");
+        revokeLiveSessions(id);
+
+        R result = R.ok();
+        result.setMsg(forwards.isEmpty() ? "用户已删除"
+                : "用户及 " + forwards.size() + " 条转发已删除，节点配置会自动清理");
+        return result;
     }
 
     /**
@@ -599,34 +614,6 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     }
 
     /**
-     * 验证用户删除条件
-     * 
-     * @param userId 用户ID
-     * @return 验证结果响应
-     */
-    private R validateUserDeletion(Long userId) {
-        User user = this.getById(userId);
-        if (user == null) {
-            return R.err(ERROR_USER_NOT_FOUND);
-        }
-
-        if (user.getRoleId() == ADMIN_ROLE_ID) {
-            return R.err(ERROR_CANNOT_DELETE_ADMIN);
-        }
-
-        // A user deletion used to directly remove Forward rows after best-
-        // effort node calls. Refuse that unsafe cascade: the administrator
-        // must queue each forward's durable deletion and wait for all ingress
-        // and egress endpoints before deleting the owning account.
-        long forwardCount = forwardMapper.selectCount(new QueryWrapper<Forward>().eq("user_id", userId));
-        if (forwardCount > 0) {
-            return R.err("该用户仍有 " + forwardCount + " 条转发，请先在转发管理中删除并等待节点清理完成");
-        }
-
-        return R.ok();
-    }
-
-    /**
      * 验证用户更新条件
      * 
      * @param userId 用户ID
@@ -643,30 +630,6 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         }
 
         return R.ok();
-    }
-
-    /**
-     * 删除用户相关的所有数据
-     * 
-     * @param userId 用户ID
-     */
-    private void deleteUserRelatedData(Long userId) {
-        // validateUserDeletion already proves no Forward rows remain. Do not
-        // reintroduce a best-effort GOST cleanup here: that would bypass the
-        // durable per-endpoint deletion workflow.
-        deleteUserTunnelPermissions(userId);
-    }
-
-
-    /**
-     * 删除用户隧道权限
-     * 
-     * @param userId 用户ID
-     */
-    private void deleteUserTunnelPermissions(Long userId) {
-        QueryWrapper<UserTunnel> userTunnelQuery = new QueryWrapper<>();
-        userTunnelQuery.eq("user_id", userId);
-        userTunnelMapper.delete(userTunnelQuery);
     }
 
     /**

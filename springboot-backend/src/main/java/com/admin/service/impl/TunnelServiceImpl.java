@@ -4,6 +4,7 @@ import cn.hutool.core.util.StrUtil;
 import com.admin.common.dto.*;
 
 import com.admin.common.lang.R;
+import com.admin.common.service.TrafficPoolQuota;
 import com.admin.common.service.UserIngressAddressService;
 import com.admin.common.task.TunnelForwardDiagnosisTaskService;
 import com.admin.common.utils.GostUtil;
@@ -19,6 +20,7 @@ import com.admin.entity.TunnelEntryNode;
 import com.admin.entity.User;
 import com.admin.entity.UserTunnel;
 import com.admin.mapper.TunnelMapper;
+import com.admin.mapper.NodeMapper;
 import com.admin.mapper.TunnelEntryDomainMapper;
 import com.admin.mapper.TunnelEntryNodeMapper;
 import com.admin.mapper.UserTunnelMapper;
@@ -57,6 +59,8 @@ import java.util.stream.Collectors;
  */
 @Service
 public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> implements TunnelService {
+    @Resource private NodeMapper nodeMapper;
+    @Resource private TrafficPoolQuota providerQuota;
 
     // ========== 常量定义 ==========
     
@@ -148,26 +152,30 @@ public class TunnelServiceImpl extends ServiceImpl<TunnelMapper, Tunnel> impleme
         if (entryNodeIds.isEmpty()) {
             return R.err("请至少选择一个入口节点");
         }
+        boolean chained = Objects.equals(tunnelDto.getType(), TUNNEL_TYPE_TUNNEL_FORWARD);
+        if (chained && tunnelDto.getOutNodeId() == null) return R.err(ERROR_OUT_NODE_REQUIRED);
         java.util.Set<Long> lockedNodes = new java.util.TreeSet<>(entryNodeIds);
-        if (Objects.equals(tunnelDto.getType(), TUNNEL_TYPE_TUNNEL_FORWARD) && tunnelDto.getOutNodeId() != null) {
+        if (chained) {
             lockedNodes.add(tunnelDto.getOutNodeId());
         }
+        boolean admin = isAdministrator();
         for (Long nodeId : lockedNodes) {
-            if (nodeDeletionMapper.lockNode(nodeId) == null) return R.err("节点不存在或已删除");
-        }
-        if (!isAdministrator()) {
-            for (Long nodeId : entryNodeIds) {
-                Node node = nodeService.getById(nodeId);
-                if (node == null || !Objects.equals(node.getOwnerUserId(), currentUserId())) {
-                    return R.err(403, "只能使用自己创建的入口节点");
-                }
+            Node node = nodeDeletionMapper.lockTunnelEndpoint(nodeId);
+            if (node == null) return R.err("节点不存在或已删除");
+            String poolEnabled = nodeMapper.poolMemberEnabled(nodeId);
+            boolean pooled = poolEnabled != null || nodeMapper.countPoolHost(nodeId) > 0;
+            if (!admin && (pooled || !Objects.equals(node.getOwnerUserId(), currentUserId()))) {
+                return R.err(403, "只能使用自己创建的节点");
             }
-            if (Objects.equals(tunnelDto.getType(), TUNNEL_TYPE_TUNNEL_FORWARD)) {
-                if (tunnelDto.getOutNodeId() == null) return R.err(ERROR_OUT_NODE_REQUIRED);
-                Node outNode = nodeService.getById(tunnelDto.getOutNodeId());
-                if (outNode == null || !Objects.equals(outNode.getOwnerUserId(), currentUserId())) {
-                    return R.err(403, "只能使用自己创建的出口节点");
-                }
+            if (pooled && chained && nodeId.equals(tunnelDto.getOutNodeId())) {
+                return R.err("流量池节点仅可选作入口");
+            }
+            if (pooled && (!"true".equalsIgnoreCase(poolEnabled) || !Objects.equals(node.getStatus(), 1))) {
+                return R.err("流量池入口处于维护或离线状态");
+            }
+            if (admin && entryNodeIds.contains(nodeId)) {
+                var meter = providerQuota.quota(node.getServerIp());
+                if (meter != null && !meter.stale() && meter.exhausted()) return R.err("入口节点流量已用完");
             }
         }
         List<String> legacyEntryIps = normalizeEntryIps(tunnelDto);

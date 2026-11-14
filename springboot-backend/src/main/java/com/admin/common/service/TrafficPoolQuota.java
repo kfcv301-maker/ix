@@ -38,7 +38,7 @@ public class TrafficPoolQuota {
         config=Path.of(path);
     }
 
-    Quota quota(String ip) { return quotas.get(ip); }
+    public Quota quota(String ip) { return quotas.get(TrafficPoolDns.normalize(ip)); }
 
     @Scheduled(initialDelay=6000,fixedDelay=180000,scheduler="trafficPoolQuotaScheduler")
     void refresh() {

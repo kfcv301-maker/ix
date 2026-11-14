@@ -93,6 +93,11 @@ public class ForwardPortReservationService {
         if (forwardId != null) forwardPortReservationMapper.deleteByForwardId(forwardId);
     }
 
+    public List<ForwardPortReservation> claimsForForward(Long forwardId) {
+        return forwardPortReservationMapper.selectList(
+                new QueryWrapper<ForwardPortReservation>().eq("forward_id", forwardId));
+    }
+
     /** A port-only indexed lookup for allocation; it never loads full forwards. */
     public Set<Integer> reservedPorts(Long nodeId, Long excludeForwardId) {
         if (nodeId == null) return Collections.emptySet();

@@ -24,6 +24,7 @@ public interface NodeService extends IService<Node> {
     R getAllNodes();
 
     R getMonitorNodes();
+    R getTunnelNodes();
 
     R updateNode(NodeUpdateDto nodeUpdateDto);
 

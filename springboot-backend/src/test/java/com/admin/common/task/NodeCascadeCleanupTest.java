@@ -77,7 +77,33 @@ class NodeCascadeCleanupTest {
         assertEquals(Set.of(5L, 6L, 8L), captor.getAllValues().stream().map(ForwardSyncTask::getNodeId).collect(java.util.stream.Collectors.toSet()));
         assertTrue(captor.getAllValues().stream().allMatch(x -> "cleanup".equals(x.getOperation())));
         verify(tasks).cancelOperationsForForward(eq(20L), anyLong());
-        verifyNoInteractions(ports);
+        verify(ports).claimsForForward(20L);
+        verify(ports, never()).releaseAll(anyLong());
+    }
+
+    @Test void missingTunnelStillCleansThePortClaimAndHistoricalEndpoint() {
+        Forward forward = new Forward();
+        forward.setId(20L);
+        forward.setUserId(7);
+        forward.setTunnelId(11);
+        ForwardPortReservation claim = new ForwardPortReservation();
+        claim.setNodeId(6L);
+        claim.setEndpoint("ingress");
+        ForwardSyncTask history = new ForwardSyncTask();
+        history.setNodeId(8L);
+        history.setEndpoint("egress");
+        history.setServiceName("20_7_3");
+        when(ports.claimsForForward(20L)).thenReturn(List.of(claim));
+        when(tasks.selectList(any())).thenReturn(List.of(history));
+        when(tasks.insert(any(ForwardSyncTask.class))).thenReturn(1);
+
+        service.prepareCascadeDelete(forward, null);
+
+        var captured = ArgumentCaptor.forClass(ForwardSyncTask.class);
+        verify(tasks, times(4)).insert(captured.capture());
+        assertEquals(Set.of(6L, 8L), captured.getAllValues().stream()
+                .map(ForwardSyncTask::getNodeId).collect(java.util.stream.Collectors.toSet()));
+        assertTrue(captured.getAllValues().stream().allMatch(task -> "cleanup".equals(task.getOperation())));
     }
 
     @Test void missingForwardAndTunnelDoNotPreventIngressCleanup() {
