@@ -55,6 +55,7 @@ export const getRealtimeNodes = () => Network.post<RealtimeNode[]>("/realtime/no
 // 节点CRUD操作 - 全部使用POST请求
 export const createNode = (data: any) => Network.post("/node/create", data);
 export const getNodeList = () => Network.post("/node/list");
+export const getMonitorNodeList = () => Network.post("/node/monitor/list");
 export interface AirportSyncSettings {
   nodeId: number; enabled: boolean; endpoint: string; bindingId: string; hasToken: boolean;
   connectionProfileId: string;

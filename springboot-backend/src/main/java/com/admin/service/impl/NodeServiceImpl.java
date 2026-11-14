@@ -143,11 +143,22 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
      */
     @Override
     public R getAllNodes() {
+        return getNodes(false);
+    }
+
+    @Override
+    public R getMonitorNodes() {
+        return getNodes(true);
+    }
+
+    private R getNodes(boolean monitor) {
         boolean administrator = isAdministrator();
         Long userId = currentUserId();
         List<Node> nodeList;
         if (administrator) {
-            nodeList = this.list();
+            var query = new QueryWrapper<Node>().notInSql("id","SELECT node_id FROM traffic_pool_host");
+            if (monitor) query.notInSql("id","SELECT node_id FROM traffic_pool_member");
+            nodeList = this.list(query);
         } else {
             List<Long> allowedIds = userMapper.getAccessibleNodeIds(userId);
             nodeList = allowedIds == null || allowedIds.isEmpty()
@@ -589,7 +600,27 @@ public class NodeServiceImpl extends ServiceImpl<NodeMapper, Node> implements No
     }
 
     private boolean canManage(Node node) {
-        return isAdministrator() || Objects.equals(node.getOwnerUserId(), currentUserId());
+        return !isManagedPoolNode(node.getId())
+                && (isAdministrator() || Objects.equals(node.getOwnerUserId(), currentUserId()));
+    }
+
+    @Override
+    public boolean isManagedPoolNode(Long id) {
+        return baseMapper.countPoolHost(id) != 0;
+    }
+
+    @Override
+    public String poolAgentInstaller(Node node, String panelUrl) {
+        String origin = normalizePanelUrl(panelUrl);
+        if (origin == null || !origin.startsWith("https://") || !origin.equals(panelUrl)) {
+            throw new IllegalArgumentException("请通过 HTTPS 面板安装流量池节点");
+        }
+        NodeInstallCommandDto request = new NodeInstallCommandDto();
+        request.setId(node.getId());
+        request.setPanelUrl(origin);
+        R result = buildInstallCommand(node, request);
+        if (result.getCode() != 0) throw new IllegalStateException("节点安装版本配置无效");
+        return (String) result.getData();
     }
 
     /**

@@ -38,6 +38,7 @@ public class WebSocketServer extends TextWebSocketHandler {
     
     // 存储节点ID和对应的WebSocket session映射
     private static final ConcurrentHashMap<Long, WebSocketSession> nodeSessions = new ConcurrentHashMap<>();
+    private static final Set<Long> managedPoolNodes = ConcurrentHashMap.newKeySet();
     private static final Object[] nodeLifecycleLocks = new Object[64];
     static {
         for (int index = 0; index < nodeLifecycleLocks.length; index++) nodeLifecycleLocks[index] = new Object();
@@ -57,6 +58,31 @@ public class WebSocketServer extends TextWebSocketHandler {
                                       long receivedAt, long sequence) { }
 
     private static final String observationEpoch = java.util.UUID.randomUUID().toString();
+
+    /** Passive counters only, for administrator pool estimates; never asks an Agent for work. */
+    public static com.admin.common.service.TrafficPoolState.TrafficSample trafficPoolSample(Long nodeId,long now) {
+        var sample=continuitySample(nodeId,now);
+        var snapshot=latestNodeMetrics.get(nodeId);
+        if(sample==null || snapshot==null || !sample.session().equals(snapshot.sessionId()))return null;
+        var rx=snapshot.summary().getLong("bytes_received");var tx=snapshot.summary().getLong("bytes_transmitted");
+        if(rx==null || tx==null || rx<0 || tx<0)return null;
+        return new com.admin.common.service.TrafficPoolState.TrafficSample(snapshot.receivedAt(),sample.uptime(),rx,tx);
+    }
+
+    public record PoolMonitor(long reportedAt, long uptime, Double cpuPercent, Double memoryPercent,
+                              Long rxBytes, Long txBytes, Long tcpConnections, Long udpConnections) { }
+
+    public static PoolMonitor poolMonitor(Long nodeId,long now) {
+        var sample=continuitySample(nodeId,now);
+        var snapshot=latestNodeMetrics.get(nodeId);
+        if(sample==null || snapshot==null || !sample.session().equals(snapshot.sessionId())) return null;
+        var summary=snapshot.summary();
+        var detail=snapshot.detail();
+        return new PoolMonitor(snapshot.receivedAt(),summary.getLongValue("uptime"),
+                summary.getDouble("cpu_usage"),summary.getDouble("memory_usage"),
+                summary.getLong("bytes_received"),summary.getLong("bytes_transmitted"),
+                detail.getLong("tcp_connections"),detail.getLong("udp_connections"));
+    }
 
     /** Server-observed IP only; never exposes it in browser metrics or asks the Agent for work. */
     public static com.admin.common.service.AirportSyncState.Sample airportSample(Long nodeId,long now) {
@@ -321,6 +347,7 @@ public class WebSocketServer extends TextWebSocketHandler {
                 // 更新节点状态为在线
                 Node node = nodeService.getById(nodeId);
                 if (node != null) {
+                    if (nodeService.isManagedPoolNode(nodeId)) managedPoolNodes.add(nodeId);
                     // 更新状态和版本信息
                     node.setStatus(1);
                     if (version != null) {
@@ -691,7 +718,7 @@ public class WebSocketServer extends TextWebSocketHandler {
 
     @SuppressWarnings("unchecked")
     private static boolean canViewNode(WebSocketSession session, Long nodeId) {
-        if (session == null || nodeId == null || !session.isOpen() || !activeSessions.contains(session)) {
+        if (session == null || nodeId == null || managedPoolNodes.contains(nodeId) || !session.isOpen() || !activeSessions.contains(session)) {
             return false;
         }
 

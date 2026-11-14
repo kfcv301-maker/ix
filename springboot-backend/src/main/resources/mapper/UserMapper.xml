@@ -56,7 +56,8 @@
     <select id="getRealtimeNodes" resultType="com.admin.common.dto.RealtimeNodeDto">
         SELECT n.id, n.name
         FROM node n
-        WHERE n.owner_user_id = #{userId}
+        WHERE NOT EXISTS (SELECT 1 FROM traffic_pool_host h WHERE h.node_id = n.id)
+          AND (n.owner_user_id = #{userId}
            OR EXISTS (
                SELECT 1
                FROM user_tunnel ut
@@ -69,12 +70,14 @@
                  AND t.status = 1
                  AND (t.owner_user_id IS NULL OR t.owner_user_id = #{userId})
                  AND (n.id = t.in_node_id OR n.id = t.out_node_id OR n.id = ten.node_id)
-           )
+           ))
         ORDER BY n.id
     </select>
 
     <select id="getAllRealtimeNodes" resultType="com.admin.common.dto.RealtimeNodeDto">
-        SELECT id, name FROM node ORDER BY id
+        SELECT n.id, n.name FROM node n
+        WHERE NOT EXISTS (SELECT 1 FROM traffic_pool_host h WHERE h.node_id = n.id)
+        ORDER BY n.id
     </select>
 
     <select id="getNextRealtimeGrantExpiry" resultType="java.lang.Long">

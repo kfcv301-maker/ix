@@ -6,6 +6,8 @@ import App from "./App.tsx";
 import { Provider } from "./provider.tsx";
 import "@/styles/globals.css";
 import "@/styles/console.css";
+import "@/styles/polish.css";
+import "@/styles/theme-akcdn.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <BrowserRouter>

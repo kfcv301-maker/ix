@@ -1,6 +1,7 @@
 import { ConsoleHeading, ConsoleIcon, ConsoleSearch, ConsoleEmpty } from '@/components/console-ui';
 import { NodeIpHistoryModal, useNodeIpSummaries } from '@/components/node-ip-history';
 import { NodeAirportSyncModal } from '@/components/node-airport-sync';
+import { NodeGroupsModal, useNodeGroups } from '@/components/node-groups';
 import { useState, useEffect, useRef } from "react";
 import { Card, CardBody } from "@heroui/card";
 import { Button } from "@heroui/button";
@@ -20,7 +21,7 @@ import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YA
 import { 
   createRealtimeTicket,
   createNode, 
-  getNodeList, 
+  getMonitorNodeList,
   updateNode, 
   deleteNode,
   getNodeInstallCommand
@@ -164,16 +165,22 @@ export default function NodePage() {
   const [nodeSearch, setNodeSearch] = useState('');
   const [nodeFilter, setNodeFilter] = useState('all');
   const isAdministrator = JwtUtil.getRoleIdFromToken() === 0;
+  const {groups:nodeGroups,reload:reloadNodeGroups,error:nodeGroupError}=useNodeGroups(isAdministrator);
+  const [nodeGroup,setNodeGroup]=useState('all');
+  const [groupDialog,setGroupDialog]=useState(false);
   const canManageNode = (node: Node) => isAdministrator || node.canManage === true;
   const [ipHistoryNodeId, setIpHistoryNodeId] = useState<number | null>(null);
   const [airportSyncNodeId, setAirportSyncNodeId] = useState<number | null>(null);
   const { summaries: ipSummaries, unavailable: ipSummaryUnavailable } = useNodeIpSummaries(isAdministrator && nodeList.length > 0);
   const visibleNodes = nodeList.filter(node => {
+    if(isAdministrator && nodeGroup!=='all') {
+      if(nodeGroup==='ungrouped' ? nodeGroups.some(g=>g.nodeIds.includes(node.id)) : !nodeGroups.find(g=>g.id===nodeGroup)?.nodeIds.includes(node.id))return false;
+    }
     const online = node.connectionStatus === 'online';
     if (nodeFilter === 'online' && !online || nodeFilter === 'offline' && online) return false;
     return [node.name, canManageNode(node) ? node.serverIp : '', canManageNode(node) ? node.ip : '', node.version].join(' ').toLowerCase().includes(nodeSearch.trim().toLowerCase());
   });
-  const clearNodeFilters = () => { setNodeSearch(''); setNodeFilter('all'); };
+  const clearNodeFilters = () => { setNodeSearch(''); setNodeFilter('all');setNodeGroup('all'); };
 
   const [loading, setLoading] = useState(false);
   const [nodeLoadError, setNodeLoadError] = useState('');
@@ -270,7 +277,7 @@ export default function NodePage() {
     setLoading(true);
     setNodeLoadError('');
     try {
-      const res = await getNodeList();
+      const res = await getMonitorNodeList();
       if (!shouldMaintainSocketRef.current || request !== listRequestRef.current) return;
       if (res.code === 0) {
         setNodeList(previous => mergeRealtimeNodes(res.data, previous, eventVersionsAtStart, nodeEventVersionsRef.current) as Node[]);
@@ -954,6 +961,7 @@ export default function NodePage() {
     
       <div className="px-3 py-3 lg:px-6 lg:py-8">
         <ConsoleHeading title="节点监控" description="资源使用、网络速率与连接状态，一览掌握。">
+          {isAdministrator&&<Button size="sm" variant="bordered" onPress={()=>setGroupDialog(true)} startContent={<ConsoleIcon name="grid" size={16}/>}>节点分组</Button>}
           <Button size="sm" variant="bordered" isDisabled={loading} onPress={retryMonitoring} startContent={<ConsoleIcon name="refresh" size={16}/>}>重新获取数据</Button>
           <Button size="sm" color="primary" onPress={handleAdd} startContent={<ConsoleIcon name="plus" size={17}/>}>新增节点</Button>
         </ConsoleHeading>
@@ -975,10 +983,13 @@ export default function NodePage() {
         </div>
         {nodeLoadError && <div role="alert" className="mb-4 rounded-xl border border-danger-200 bg-danger-50 px-3 py-2 text-sm text-danger-700">{nodeLoadError}，点击“重新获取数据”重试。</div>}
         <div className="console-toolbar monitor-toolbar">
+          {isAdministrator&&<select className="console-filter-select" aria-label="按节点分组筛选" value={nodeGroup} onChange={e=>setNodeGroup(e.target.value)}><option value="all">全部分组</option><option value="ungrouped">未分组</option>{nodeGroups.map(g=><option key={g.id} value={g.id}>{g.name}（{g.nodeIds.length}）</option>)}</select>}
           <ConsoleSearch value={nodeSearch} onChange={setNodeSearch} placeholder="搜索节点名称、IP 或版本…"/>
           <select className="console-filter-select" aria-label="按节点状态筛选" value={nodeFilter} onChange={event => setNodeFilter(event.target.value)}><option value="all">全部状态</option><option value="online">在线</option><option value="offline">离线</option></select>
           <div className="console-toolbar-tail">{visibleNodes.length} 个节点</div>
         </div>
+        {isAdministrator&&nodeGroupError&&<p className="text-sm text-warning-600 mb-3" role="status">{nodeGroupError}<Button size="sm" variant="light" onPress={()=>void reloadNodeGroups()}>重试分组</Button></p>}
+        {isAdministrator&&<NodeGroupsModal open={groupDialog} onClose={()=>setGroupDialog(false)} groups={nodeGroups} onChanged={reloadNodeGroups} nodes={nodeList}/>}
         {loading ? <div className="flex items-center justify-center gap-3 py-20"><Spinner size="sm"/><span className="text-default-500 text-sm">正在加载…</span></div>
           : nodeList.length === 0 && !nodeLoadError ? <Card><CardBody className="items-center gap-3 py-16"><ConsoleIcon name="node" size={32}/><h2>暂无节点配置</h2><p className="text-sm text-default-500">点击“新增节点”开始创建</p></CardBody></Card>
           : visibleNodes.length === 0 ? <ConsoleEmpty onClear={clearNodeFilters}/>
@@ -992,6 +1003,7 @@ export default function NodePage() {
                   <div className="monitor-name-line"><button onClick={() => setMonitorNodeId(node.id)} title={node.name}>{node.name}</button><span className={`monitor-status ${online ? 'is-online' : ''}`}><span className={`console-status-dot ${online ? 'status-success' : ''}`}/>{online ? '在线' : '离线'}</span></div>
                   {canManageNode(node) && <span className="monitor-address" title={node.serverIp}>{node.serverIp || '未设置服务器地址'}</span>}
                   <span className="monitor-version">{node.version ? `v${node.version.replace(/^v/, '')}` : '版本未知'}{online && !info ? ' · 等待上报' : ''}</span>
+                  {isAdministrator&&<small className="text-default-500">{nodeGroups.find(g=>g.nodeIds.includes(node.id))?.name||'未分组'}</small>}
                   {isAdministrator && <button className="ip-history-link" onClick={() => setIpHistoryNodeId(node.id)} aria-label={`查看 ${node.name} 的 IP 变化记录`}><ConsoleIcon name="globe" size={12}/>IP 记录 · {ipSummaryUnavailable ? '暂未获取' : ipSummaries[node.id]?.baselineAt ? `今日 ${ipSummaries[node.id].todayChanges} 次变化` : '等待观测'}</button>}
                   {isAdministrator && <button className="ip-history-link" onClick={() => setAirportSyncNodeId(node.id)} aria-label={`管理 ${node.name} 的机场同步`}>机场同步</button>}
                 </div>
@@ -999,7 +1011,7 @@ export default function NodePage() {
                 <div className="monitor-resource" role="cell" data-label="内存"><strong>{info ? `${info.memoryUsage.toFixed(1)}%` : '—'}</strong><Progress aria-label={`${node.name} 内存使用率`} value={info?.memoryUsage || 0} color={getProgressColor(info?.memoryUsage || 0, !info)} size="sm" className="monitor-progress"/><small>{info?.memoryTotal ? formatCapacity(info.memoryTotal) : '—'}</small></div>
                 <div className="monitor-rates" role="cell" data-label="实时速率"><span><ConsoleIcon name="upload" size={14}/><span className="sr-only">上传</span>{info ? formatSpeed(info.uploadSpeed) : '—'}</span><span><ConsoleIcon name="download" size={14}/><span className="sr-only">下载</span>{info ? formatSpeed(info.downloadSpeed) : '—'}</span></div>
                 <div className="monitor-connections" role="cell" data-label="连接数"><span><small>TCP</small>{info ? formatOptionalNumber(info.tcpConnections) : '—'}</span><span><small>UDP</small>{info ? formatOptionalNumber(info.udpConnections) : '—'}</span></div>
-                <div className="monitor-trend" role="cell" data-label="网络趋势">{info && (metricHistory[node.id]?.length || 0) >= 2 ? <><MetricSparkline data={metricHistory[node.id]} dataKey="uploadSpeed" stroke="#397bf6" ariaLabel={`${node.name} 上传速率趋势`}/><MetricSparkline data={metricHistory[node.id]} dataKey="downloadSpeed" stroke="#16a36b" ariaLabel={`${node.name} 下载速率趋势`}/></> : <span>{online ? '等待采样' : '暂无实时数据'}</span>}</div>
+                <div className="monitor-trend" role="cell" data-label="网络趋势">{info && (metricHistory[node.id]?.length || 0) >= 2 ? <><MetricSparkline data={metricHistory[node.id]} dataKey="uploadSpeed" stroke="var(--ak-chart-spark-upload, #397bf6)" ariaLabel={`${node.name} 上传速率趋势`}/><MetricSparkline data={metricHistory[node.id]} dataKey="downloadSpeed" stroke="var(--ak-chart-spark-download, #16a36b)" ariaLabel={`${node.name} 下载速率趋势`}/></> : <span>{online ? '等待采样' : '暂无实时数据'}</span>}</div>
                 <div className="monitor-actions" role="cell">
                   <Button size="sm" variant="light" color="primary" onPress={() => setMonitorNodeId(node.id)} aria-label={`监控 ${node.name}`} startContent={<ConsoleIcon name="activity" size={16}/>}>监控</Button>
                   {canManageNode(node) && <Dropdown><DropdownTrigger><Button isIconOnly size="sm" variant="light" aria-label={`管理 ${node.name}`}><ConsoleIcon name="more"/></Button></DropdownTrigger><DropdownMenu aria-label={`${node.name} 节点管理`} onAction={key => { if (key === 'install') openInstallCommand(node); if (key === 'edit') handleEdit(node); if (key === 'delete') handleDelete(node); }}><DropdownItem key="install" startContent={<ConsoleIcon name="vps" size={16}/>}>安装</DropdownItem><DropdownItem key="edit" startContent={<ConsoleIcon name="edit" size={16}/>}>编辑</DropdownItem><DropdownItem key="delete" color="danger" className="text-danger" startContent={<ConsoleIcon name="close" size={16}/>}>删除</DropdownItem></DropdownMenu></Dropdown>}
@@ -1058,8 +1070,8 @@ export default function NodePage() {
                             labelFormatter={(value) => `时间：${formatChartTime(Number(value))}`}
                             formatter={(value, name) => [`${Number(value).toFixed(1)}%`, name]}
                           />
-                          <Line type="monotone" dataKey="cpuUsage" name="CPU" stroke="#3b82f6" strokeWidth={2} dot={false} isAnimationActive={false} />
-                          <Line type="monotone" dataKey="memoryUsage" name="内存" stroke="#8b5cf6" strokeWidth={2} dot={false} isAnimationActive={false} />
+                          <Line type="monotone" dataKey="cpuUsage" name="CPU" stroke="var(--ak-chart-cpu, #3b82f6)" strokeWidth={2} dot={false} isAnimationActive={false} />
+                          <Line type="monotone" dataKey="memoryUsage" name="内存" stroke="var(--ak-chart-memory, #8b5cf6)" strokeWidth={2} dot={false} isAnimationActive={false} />
                         </LineChart>
                       </ResponsiveContainer>
                     </div>
@@ -1077,8 +1089,8 @@ export default function NodePage() {
                             labelFormatter={(value) => `时间：${formatChartTime(Number(value))}`}
                             formatter={(value, name) => [formatSpeed(Number(value)), name]}
                           />
-                          <Line type="monotone" dataKey="uploadSpeed" name="上行" stroke="#f59e0b" strokeWidth={2} dot={false} isAnimationActive={false} />
-                          <Line type="monotone" dataKey="downloadSpeed" name="下行" stroke="#10b981" strokeWidth={2} dot={false} isAnimationActive={false} />
+                          <Line type="monotone" dataKey="uploadSpeed" name="上行" stroke="var(--ak-chart-upload, #f59e0b)" strokeWidth={2} dot={false} isAnimationActive={false} />
+                          <Line type="monotone" dataKey="downloadSpeed" name="下行" stroke="var(--ak-chart-download, #10b981)" strokeWidth={2} dot={false} isAnimationActive={false} />
                         </LineChart>
                       </ResponsiveContainer>
                     </div>
@@ -1096,8 +1108,8 @@ export default function NodePage() {
                             labelFormatter={(value) => `时间：${formatChartTime(Number(value))}`}
                             formatter={(value, name) => [Number(value).toFixed(0), name]}
                           />
-                          <Line connectNulls type="monotone" dataKey="tcpConnections" name="TCP 已建立" stroke="#f97316" strokeWidth={2} dot={false} isAnimationActive={false} />
-                          <Line connectNulls type="monotone" dataKey="udpConnections" name="UDP 活动套接字" stroke="#06b6d4" strokeWidth={2} dot={false} isAnimationActive={false} />
+                          <Line connectNulls type="monotone" dataKey="tcpConnections" name="TCP 已建立" stroke="var(--ak-chart-tcp, #f97316)" strokeWidth={2} dot={false} isAnimationActive={false} />
+                          <Line connectNulls type="monotone" dataKey="udpConnections" name="UDP 活动套接字" stroke="var(--ak-chart-udp, #06b6d4)" strokeWidth={2} dot={false} isAnimationActive={false} />
                         </LineChart>
                       </ResponsiveContainer>
                     </div>
@@ -1115,8 +1127,8 @@ export default function NodePage() {
                             labelFormatter={(value) => `时间：${formatChartTime(Number(value))}`}
                             formatter={(value, name) => [formatTraffic(Number(value)), name]}
                           />
-                          <Line connectNulls type="monotone" dataKey="memoryAvailable" name="可用内存" stroke="#22c55e" strokeWidth={2} dot={false} isAnimationActive={false} />
-                          <Line connectNulls type="monotone" dataKey="agentRss" name="Agent RSS" stroke="#ec4899" strokeWidth={2} dot={false} isAnimationActive={false} />
+                          <Line connectNulls type="monotone" dataKey="memoryAvailable" name="可用内存" stroke="var(--ak-chart-memory-available, #22c55e)" strokeWidth={2} dot={false} isAnimationActive={false} />
+                          <Line connectNulls type="monotone" dataKey="agentRss" name="Agent RSS" stroke="var(--ak-chart-agent-rss, #ec4899)" strokeWidth={2} dot={false} isAnimationActive={false} />
                         </LineChart>
                       </ResponsiveContainer>
                     </div>

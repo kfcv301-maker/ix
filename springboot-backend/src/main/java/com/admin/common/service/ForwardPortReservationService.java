@@ -5,6 +5,7 @@ import com.admin.entity.Forward;
 import com.admin.entity.ForwardPortReservation;
 import com.admin.entity.Tunnel;
 import com.admin.mapper.ForwardPortReservationMapper;
+import com.admin.mapper.NodeMapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import org.springframework.stereotype.Service;
 
@@ -35,6 +36,8 @@ public class ForwardPortReservationService {
 
     @Resource
     private TunnelIngressNodeResolver ingressNodeResolver;
+    @Resource
+    private NodeMapper nodeMapper;
 
     public ReservationLease reserve(Forward forward, Tunnel tunnel) {
         if (forward == null || forward.getId() == null || tunnel == null) {
@@ -48,6 +51,10 @@ public class ForwardPortReservationService {
         long now = System.currentTimeMillis();
         List<ForwardPortReservation> inserted = new ArrayList<>();
         for (ReservationTarget target : desired) {
+            if (nodeMapper != null && Objects.equals(nodeMapper.poolSshPort(target.nodeId), target.port)) {
+                rollbackInserted(forward.getId(), inserted);
+                return ReservationLease.failed("端口 " + target.port + " 用于流量池服务器的 SSH 连接");
+            }
             int insertedRows = forwardPortReservationMapper.insertIgnore(target.nodeId, target.port,
                     forward.getId(), target.endpoint, now);
             ForwardPortReservation owner = forwardPortReservationMapper.selectByNodeAndPort(target.nodeId, target.port);
@@ -92,7 +99,10 @@ public class ForwardPortReservationService {
         List<Integer> ports = excludeForwardId == null
                 ? forwardPortReservationMapper.selectPortsForNode(nodeId)
                 : forwardPortReservationMapper.selectPortsForNodeExcept(nodeId, excludeForwardId);
-        return ports == null ? Collections.emptySet() : new LinkedHashSet<>(ports);
+        Set<Integer> result = ports == null ? new LinkedHashSet<>() : new LinkedHashSet<>(ports);
+        Integer sshPort = nodeMapper == null ? null : nodeMapper.poolSshPort(nodeId);
+        if (sshPort != null) result.add(sshPort);
+        return result;
     }
 
     private List<ReservationTarget> desiredTargets(Forward forward, Tunnel tunnel) {

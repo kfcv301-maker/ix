@@ -6,6 +6,7 @@ import com.admin.common.service.NodeAgentConfigService;
 import com.admin.common.utils.JwtUtil;
 import com.admin.common.utils.WebSocketServer;
 import com.admin.entity.Node;
+import com.admin.mapper.NodeMapper;
 import com.admin.service.TunnelService;
 import com.alibaba.fastjson2.JSONObject;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
@@ -31,6 +32,7 @@ class NodeUpdateSettingsTest {
     private MockedStatic<WebSocketServer> wire;
 
     @BeforeEach void setup() {
+        ReflectionTestUtils.setField(service, "baseMapper", mock(NodeMapper.class));
         ReflectionTestUtils.setField(service, "tunnelService", tunnels);
         ReflectionTestUtils.setField(service, "agentConfigService", configs);
         node = new Node(); node.setId(11L); node.setStatus(1);

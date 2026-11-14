@@ -15,6 +15,7 @@ public interface VpsSshService {
     TerminalConnection openTerminal(VpsHost host, String password) throws Exception;
 
     CommandResult runTemplate(VpsHost host, String password, String template, Consumer<String> outputConsumer) throws Exception;
+    int runPoolAgentScript(VpsHost host, String password, String script, int timeoutSeconds) throws Exception;
     /** Installs only the reviewed observer, after verifying the existing node identity. */
     CommandResult installAddressObserver(VpsHost host, String password, String scriptBase64, String expectedNodeDigest) throws Exception;
 
