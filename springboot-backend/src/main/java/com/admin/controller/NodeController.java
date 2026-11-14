@@ -37,6 +37,11 @@ public class NodeController extends BaseController {
         return nodeService.getAllNodes();
     }
 
+    @PostMapping("/monitor/list")
+    public R monitorList() {
+        return nodeService.getMonitorNodes();
+    }
+
     @LogAnnotation
     @PostMapping("/update")
     public R update(@Validated @RequestBody NodeUpdateDto nodeUpdateDto) {

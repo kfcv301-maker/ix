@@ -52,10 +52,50 @@ export interface ConfiguredPool {
   probePort: number;
 }
 
+export interface PoolMonitor {
+  reportedAt: number;
+  uptime: number;
+  cpuPercent: number | null;
+  memoryPercent: number | null;
+  rxBytes: number | null;
+  txBytes: number | null;
+  tcpConnections: number | null;
+  udpConnections: number | null;
+}
+
+export interface PoolProbe {
+  port: number;
+  checkedAt: number;
+  result: string | null;
+  elapsedMs: number | null;
+  lastReportAt: number;
+  reporting: boolean;
+  inventoryAt: number | null;
+  rulesExpected: number;
+  tcpRules: number;
+  udpRules: number;
+  successes: number;
+  failures: number;
+  recoveryThreshold: number;
+  failureThreshold: number;
+}
+
+export interface ProviderQuota {
+  totalBytes: number;
+  usedBytes: number;
+  remainingBytes: number;
+  exhausted: boolean;
+  syncedAt: number;
+}
+
 export type ConfiguredServer = Omit<ManagedPoolServer, 'port'> & {
   port: number | null;
   name: string;
   published: boolean | null;
+  monitor?: PoolMonitor | null;
+  probe?: PoolProbe;
+  providerQuota?: ProviderQuota | null;
+  providerQuotaStale?: boolean;
 };
 
 export interface PoolSettings {

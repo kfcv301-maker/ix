@@ -35,7 +35,10 @@ public class TrafficPoolState {
     public static class Health {
         public boolean eligible;
         public int failures,successes;
-        public long checkedAt;
+        public long checkedAt, tcpCheckedAt;
+        public int tcpPort;
+        public Long tcpElapsedMs;
+        public String tcpResult;
         public void observe(boolean success,long now,int fail,int recover) {
             if(now<=checkedAt || checkedAt>0 && now-checkedAt<15000) return;
             checkedAt=now;

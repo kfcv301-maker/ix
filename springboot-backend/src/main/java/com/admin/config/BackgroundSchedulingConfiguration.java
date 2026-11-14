@@ -17,6 +17,9 @@ public class BackgroundSchedulingConfiguration {
     public ThreadPoolTaskScheduler airportSyncScheduler() { return scheduler("airport-scheduled-"); }
     @Bean(name="trafficPoolScheduler")
     public ThreadPoolTaskScheduler trafficPoolScheduler() { return scheduler("pool-scheduled-"); }
+    @Bean(name="trafficPoolQuotaScheduler")
+    public ThreadPoolTaskScheduler trafficPoolQuotaScheduler() { return scheduler("pool-quota-scheduled-"); }
+
     private static ThreadPoolTaskScheduler scheduler(String prefix) {
         var scheduler=new ThreadPoolTaskScheduler();
         scheduler.setPoolSize(1);scheduler.setThreadNamePrefix(prefix);scheduler.setRemoveOnCancelPolicy(true);

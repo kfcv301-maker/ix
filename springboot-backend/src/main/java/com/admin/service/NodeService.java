@@ -23,6 +23,8 @@ public interface NodeService extends IService<Node> {
 
     R getAllNodes();
 
+    R getMonitorNodes();
+
     R updateNode(NodeUpdateDto nodeUpdateDto);
 
     R deleteNode(Long id);

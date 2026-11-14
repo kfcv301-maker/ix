@@ -65,6 +65,25 @@ public class TrafficPoolService {
 
     boolean probeBoundIp(String ip, int port) { return observer.probe(ip,port); }
 
+    List<Forward> activeRules(TrafficPoolState pool) {
+        return pool.tunnelIds.isEmpty() ? List.of() : forwards.selectList(new QueryWrapper<Forward>()
+                .in("tunnel_id",pool.tunnelIds).eq("status",1));
+    }
+
+    record RuleStatus(Long reportedAt, int expected, int tcp, int udp) { }
+
+    RuleStatus ruleStatus(List<Forward> forwards,long node,long now) {
+        var inventory=TrafficPoolInventory.current(node,now);
+        if(inventory==null) return new RuleStatus(null,forwards.size(),0,0);
+        int tcp=0,udp=0;
+        for(var rule:forwards) {
+            String prefix=rule.getId()+"_";
+            if(inventory.names().stream().anyMatch(n->n.startsWith(prefix) && n.endsWith("_tcp"))) tcp++;
+            if(inventory.names().stream().anyMatch(n->n.startsWith(prefix) && n.endsWith("_udp"))) udp++;
+        }
+        return new RuleStatus(inventory.at(),forwards.size(),tcp,udp);
+    }
+
     TrafficPoolState managedForUpdate() {
         var pool = new TrafficPoolState();
         pool.id = MANAGED_ID;
@@ -237,7 +256,7 @@ public class TrafficPoolService {
             }
             var allIps=new TreeSet<String>();
             for(var m:rows){var n=nodes.selectById(m.nodeId);if(n!=null && m.enabled && Objects.equals(n.getStatus(),1))allIps.addAll(observer.addresses(n));}
-            var probes=p.probePort>0?observer.probeAll(allIps,p.probePort):Map.<String,Boolean>of();
+            var probes=p.probePort>0?observer.probeAll(allIps,p.probePort):Map.<String,TrafficPoolObserver.Probe>of();
             for(var m:rows) {
                 long observedAt=clock.millis();var sample=observer.metrics(m.nodeId,observedAt);m.account(sample,observedAt,p.resetDay,p.direction);
                 var node=nodes.selectById(m.nodeId);
@@ -254,7 +273,14 @@ public class TrafficPoolService {
                     boolean bound=addresses.contains(h.getKey());
                     // Unknown probes are not failures; known offline/stale reporting is a failure even without a probe result.
                     if(p.probePort>0 && bound && reported && !probes.containsKey(h.getKey()))continue;
-                    boolean ok=bound && reported && (ready || h.getValue().eligible) && Boolean.TRUE.equals(probes.get(h.getKey()));
+                    var probe=bound?probes.get(h.getKey()):null;
+                    if (probe!=null) {
+                        h.getValue().tcpResult=probe.result();
+                        h.getValue().tcpElapsedMs=probe.elapsedMs();
+                        h.getValue().tcpCheckedAt=now;
+                        h.getValue().tcpPort=p.probePort;
+                    }
+                    boolean ok=bound && reported && (ready || h.getValue().eligible) && probe!=null && probe.reachable();
                     if(now-startedAt<120000 && !ok && h.getValue().eligible)continue;
                     h.getValue().observe(ok,now,p.failureThreshold,p.recoveryThreshold);
                 }
@@ -301,9 +327,7 @@ public class TrafficPoolService {
     boolean rulesReady(TrafficPoolState p,long node) {
         // No tunnel means explicitly selected probe-only pool; bound pools require a real post-sync Agent inventory.
         if(p.tunnelIds.isEmpty())return true;
-        var names=TrafficPoolInventory.names(node,clock.millis());if(names==null)return false;
-        for(Long tunnel:p.tunnelIds)for(var f:forwards.selectList(new QueryWrapper<Forward>().eq("tunnel_id",tunnel).eq("status",1)))
-            if(names.stream().noneMatch(n->n.startsWith(f.getId()+"_") && n.endsWith("_tcp")) || names.stream().noneMatch(n->n.startsWith(f.getId()+"_") && n.endsWith("_udp")))return false;
-        return true;
+        var status=ruleStatus(activeRules(p),node,clock.millis());
+        return status.reportedAt()!=null && status.tcp()==status.expected() && status.udp()==status.expected();
     }
 }
